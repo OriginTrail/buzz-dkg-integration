@@ -39,7 +39,6 @@ export class RelayClient {
   #subs = new Map<string, unknown[]>();
   #backoffMs = 1000;
   #closed = false;
-  #lastAuthTs = 0;
   #opts: RelayClientOptions;
 
   constructor(opts: RelayClientOptions) {
@@ -58,16 +57,18 @@ export class RelayClient {
   }
 
   /**
-   * NIP-98 auth header with strictly monotonic created_at — the relay keeps a
-   * replay cache of auth-event ids, and two identical same-second requests
-   * would collide (observed live in Gate B).
+   * NIP-98 auth header. The relay keeps a replay cache of auth-event ids, and
+   * two identical same-second requests collide (observed live in Gate B); a
+   * random nonce tag makes every auth event unique WITHOUT skewing
+   * created_at — a monotonic bump drifts out of the relay's ±60s freshness
+   * window under bursts (observed live in the Gate C acceptance run).
    */
   authHeader(url: string, method: string, payload?: unknown): string {
     const now = Math.floor(Date.now() / 1000);
-    this.#lastAuthTs = Math.max(now, this.#lastAuthTs + 1);
     const tags: string[][] = [
       ['u', url],
       ['method', method.toUpperCase()],
+      ['nonce', createHash('sha256').update(`${Math.random()}${process.hrtime.bigint()}`).digest('hex').slice(0, 16)],
     ];
     if (payload !== undefined) {
       tags.push([
@@ -76,7 +77,7 @@ export class RelayClient {
       ]);
     }
     const event = finalizeEvent(
-      { kind: 27235, created_at: this.#lastAuthTs, tags, content: '' },
+      { kind: 27235, created_at: now, tags, content: '' },
       this.#sk,
     );
     return `Nostr ${Buffer.from(JSON.stringify(event), 'utf8').toString('base64')}`;

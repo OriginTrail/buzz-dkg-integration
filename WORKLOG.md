@@ -30,3 +30,10 @@
 - Full loop proven end-to-end incl. devnet VM publish: UAL did:dkg:evm:31337/0x71cfc9b0…/3, tx 0x88965ebb…, 3 StorageACKs; scoped SWM/VM read-backs; in-thread receipts; replay dedup.
 - Live findings → Gate C: as-of-trigger snapshot excluding service events (dedup bug observed + fixed), RELAY_URL community seeding, BUZZ_AUTO_MIGRATE, NIP-98 replay guard, descriptor ?contextGraphId + reservedUal, storage-ack quorum failure mode.
 - Fixed relay-image OOM (2 GB Docker VM) by native host build; minimal Dockerfile kept for container deployments.
+
+### Gate C — complete (2026-07-26)
+- Daemon built per §9 (TypeScript strict, node:sqlite registry/state machine, WS NIP-42 + NIP-98 HTTP relay client, deterministic distiller behind provider seam, §6 invariants + §7 grounding in code, NIP-OA verify-only identity).
+- publishMode disabled|devnet only; mainnet unimplemented until D-stages; devnet double-checks chain evm:31337.
+- 48 tests green (unit + integration with mocks); acceptance demo with ZERO mocks against live isolated stacks: SWM receipt, restart dedup, §6 approve→devnet publish (UAL did:dkg:evm:31337/0x71cf…/7), unauthorized approval rejected, cited answer, refusal, cursor proof. docs/acceptance-transcript.md.
+- Live defects found+fixed: kind-7 live fan-out needs #h-scoped subscription; NIP-98 nonce tag instead of monotonic timestamps.
+- lint/typecheck/format/secret-scan clean. STOP per spec: no production connection; awaiting operator acceptance for D1.

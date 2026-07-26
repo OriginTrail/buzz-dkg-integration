@@ -1,0 +1,38 @@
+# Deployment compose for the integration daemon.
+#
+# The daemon is a plain Node ≥22.5 process with no native deps; this file runs
+# it containerized next to an operator-provided Buzz relay and DKG node. It
+# does NOT start a relay or a node — those are external, per SPEC §4.1/§4.2.
+#
+#   BDI_SERVICE_KEY   hex Nostr secret key of the service member
+#   BDI_DKG_TOKEN     DKG daemon bearer token
+#   bindings.json     channel↔context-graph map (mounted read-only)
+#
+# host.docker.internal targets stacks running on the host; replace with real
+# hostnames in an actual deployment.
+name: buzz-dkg-integration
+
+services:
+  daemon:
+    image: node:25-bookworm-slim
+    working_dir: /app
+    command: ["node", "--experimental-strip-types", "src/index.ts"]
+    volumes:
+      - ..:/app:ro
+      - daemon-data:/data
+      - ./bindings.json:/config/bindings.json:ro
+    environment:
+      BDI_BUZZ_HTTP: ${BDI_BUZZ_HTTP:-http://host.docker.internal:9440}
+      BDI_BUZZ_WS: ${BDI_BUZZ_WS:-ws://host.docker.internal:9440}
+      BDI_SERVICE_KEY: ${BDI_SERVICE_KEY:?set the service member secret key}
+      BDI_MENTION_HANDLE: ${BDI_MENTION_HANDLE:-dkg}
+      BDI_DKG_API: ${BDI_DKG_API:-http://host.docker.internal:9420}
+      BDI_DKG_TOKEN: ${BDI_DKG_TOKEN:?set the DKG bearer token}
+      BDI_BINDINGS_PATH: /config/bindings.json
+      BDI_PUBLISH_MODE: ${BDI_PUBLISH_MODE:-disabled}
+      BDI_DB_PATH: /data/daemon.db
+      BDI_LOG_LEVEL: ${BDI_LOG_LEVEL:-info}
+    restart: unless-stopped
+
+volumes:
+  daemon-data:

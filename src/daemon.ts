@@ -101,9 +101,12 @@ export class Daemon {
     const channels = this.config.bindings.map((b) => b.channelId);
     const since = Math.max(0, this.registry.cursor - CATCHUP_OVERLAP_S);
     this.relay.subscribe('bdi-msgs', [{ kinds: [9, 40002, 40004], '#h': channels, since }]);
-    // Reactions carry no h tag as signed by clients; subscribe by kind and
-    // correlate via our own receipt records (relay-style target derivation).
-    this.relay.subscribe('bdi-reactions', [{ kinds: [7], since }]);
+    // Reactions carry no h tag as signed, but the relay derives their channel
+    // from the target and its #h filter matching falls back to that stored
+    // channel (buzz-core filter.rs) — AND live fan-out only consults
+    // channel-scoped subscription indexes, so a kinds-only sub never sees
+    // reactions (observed live in the Gate C acceptance run). #h is required.
+    this.relay.subscribe('bdi-reactions', [{ kinds: [7], '#h': channels, since }]);
   }
 
   /** Replays stored events missed while offline; dedup makes replay safe. */
@@ -112,7 +115,7 @@ export class Daemon {
     const channels = this.config.bindings.map((b) => b.channelId);
     const stored = await this.relay.query([
       { kinds: [9, 40002, 40004], '#h': channels, since },
-      { kinds: [7], since },
+      { kinds: [7], '#h': channels, since },
     ]);
     stored.sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
     logger.info('catch-up', { since, events: stored.length });

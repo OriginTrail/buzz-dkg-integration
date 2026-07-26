@@ -5,3 +5,6 @@ dist/
 .upstream/
 phase0/.env.spike
 phase0/bridge/node_modules/
+phase0/bridge/state.json
+demo-acceptance/
+data/

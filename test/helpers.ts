@@ -64,13 +64,25 @@ export class MockRelay {
         if (f.ids && !f.ids.includes(e.id)) continue;
         if (f.kinds && !f.kinds.includes(e.kind)) continue;
         if (f.authors && !f.authors.includes(e.pubkey)) continue;
-        if (f['#h'] && !e.tags.some((t) => t[0] === 'h' && f['#h'].includes(t[1]))) continue;
+        if (f['#h'] && !this.matchesChannel(e, f['#h'])) continue;
         if (f['#e'] && !e.tags.some((t) => t[0] === 'e' && f['#e'].includes(t[1]))) continue;
         if (f.since && e.created_at < f.since) continue;
         if (!out.includes(e)) out.push(e);
       }
     }
     return out;
+  }
+
+  /** Mirrors buzz-core filter.rs: reactions/deletions match #h via the channel derived from their target. */
+  matchesChannel(e: NostrEvent, channels: string[]): boolean {
+    if (e.tags.some((t) => t[0] === 'h' && channels.includes(t[1]!))) return true;
+    if (e.kind === 7 || e.kind === 5) {
+      const target = [...e.tags].reverse().find((t) => t[0] === 'e')?.[1];
+      const targetEvent = this.events.find((x) => x.id === target);
+      const ch = targetEvent?.tags.find((t) => t[0] === 'h')?.[1];
+      return !!ch && channels.includes(ch);
+    }
+    return false;
   }
 
   async fetchThread(channelId: string, rootId: string): Promise<NostrEvent[]> {

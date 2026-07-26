@@ -18,21 +18,18 @@ export class BuzzClient {
     return finalizeEvent({ created_at: Math.floor(Date.now() / 1000), ...tmpl }, this.sk);
   }
 
-  // NIP-98 auth event, built manually so created_at is strictly monotonic per
-  // client — two same-second identical requests would otherwise produce the
-  // same event id and trip the relay's replay guard (nip98_replay).
-  #lastAuthTs = 0;
+  // NIP-98 auth event, built manually (see nonce note below).
   async #authHeader(url, method, payload) {
+    // Random nonce tag = unique auth event per request without skewing
+    // created_at (a monotonic bump drifts out of the relay's ±60s window
+    // under bursts — observed live).
     const now = Math.floor(Date.now() / 1000);
-    this.#lastAuthTs = Math.max(now, this.#lastAuthTs + 1);
-    const tags = [['u', url], ['method', method.toUpperCase()]];
+    const nonce = createHash('sha256').update(String(Math.random()) + String(process.hrtime.bigint())).digest('hex').slice(0, 16);
+    const tags = [['u', url], ['method', method.toUpperCase()], ['nonce', nonce]];
     if (payload !== undefined) {
       tags.push(['payload', createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex')]);
     }
-    const event = finalizeEvent(
-      { kind: 27235, created_at: this.#lastAuthTs, tags, content: '' },
-      this.sk,
-    );
+    const event = finalizeEvent({ kind: 27235, created_at: now, tags, content: '' }, this.sk);
     return `Nostr ${Buffer.from(JSON.stringify(event), 'utf8').toString('base64')}`;
   }
 
