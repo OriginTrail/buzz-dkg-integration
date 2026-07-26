@@ -151,6 +151,9 @@ export class MockDkg {
   async listContextGraphs() {
     return { contextGraphs: this.contextGraphs.map((id) => ({ id })) };
   }
+  async contextGraphExists(id: string) {
+    return { exists: this.contextGraphs.includes(id) };
+  }
   #ka(name: string): KaState {
     let ka = this.kas.get(name);
     if (!ka) {
@@ -248,6 +251,18 @@ export class MockDkg {
           (ka) => ka.state !== 'created' && ka.quads.some((q) => q.subject === s),
         );
       return { result: { bindings: known ? [{ ask: { value: 'true' } }] : [] } };
+    }
+    // subject-scoped read-back SELECT: return the KA quads for that subject
+    const subj = opts.sparql.match(/SELECT \?p \?o WHERE \{ <([^>]+)> \?p \?o \}/)?.[1];
+    if (subj) {
+      const rows: any[] = [];
+      for (const ka of this.kas.values()) {
+        if (ka.state === 'created') continue;
+        for (const q of ka.quads) {
+          if (q.subject === subj) rows.push({ p: { value: q.predicate }, o: { value: q.object } });
+        }
+      }
+      return { result: { bindings: rows } };
     }
     // evidence SELECT
     const bindings = this.evidence.map((e) => ({

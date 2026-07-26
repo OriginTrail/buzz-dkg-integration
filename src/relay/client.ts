@@ -224,7 +224,10 @@ export class RelayClient {
     const delay = this.#backoffMs;
     this.#backoffMs = Math.min(this.#backoffMs * 2, 30_000);
     logger.warn('relay ws disconnected; reconnecting', { why, delayMs: delay });
-    setTimeout(() => this.connect(), delay).unref();
+    // Deliberately NOT unref'd: during relay downtime this timer can be the
+    // process's only active handle — an unref'd timer let Node exit cleanly
+    // mid-outage (observed live: daemon silently gone after a relay restart).
+    setTimeout(() => this.connect(), delay);
   }
 
   close(): void {

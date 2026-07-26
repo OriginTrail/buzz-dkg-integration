@@ -32,13 +32,15 @@
 <header>
   <div class="dot"></div>
   <h1 id="title">#channel</h1>
-  <div class="sub">isolated stack · relay 127.0.0.1:9440 · DKG devnet chain evm:31337 · live</div>
+  <div class="sub" id="sub">relay 127.0.0.1:9440 · live</div>
 </header>
 <div id="feed"><div class="empty">waiting for events…</div></div>
 <script>
 const channel = new URLSearchParams(location.search).get('id');
 const chName = new URLSearchParams(location.search).get('name') || 'dkg-live-demo';
 document.getElementById('title').textContent = '#' + chName;
+const sub = new URLSearchParams(location.search).get('sub');
+if (sub) document.getElementById('sub').textContent = sub;
 const esc = (s) => s.replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 let lastRender = '';
 async function tick() {

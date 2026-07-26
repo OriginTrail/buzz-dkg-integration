@@ -81,9 +81,13 @@ export class Daemon {
       );
     }
     // Verify every bound context graph exists before serving (§7.2 fail early).
-    const cgs = new Set((await this.dkg.listContextGraphs()).contextGraphs.map((c) => c.id));
+    // Narrow per-CG probe — the broad list route 500s on scan budget for
+    // large production nodes (observed live in Gate D2 preflight).
     for (const b of this.config.bindings) {
-      if (!cgs.has(b.contextGraphId)) {
+      const ex = await this.dkg
+        .contextGraphExists(b.contextGraphId)
+        .catch(() => ({ exists: false }));
+      if (!ex.exists) {
         throw new Error(`bound context graph '${b.contextGraphId}' not present on the DKG node`);
       }
     }
@@ -263,16 +267,36 @@ export class Daemon {
       }
 
       if (op.state === 'shared') {
-        // Scoped read-back proof before receipting (§4.6).
-        const q = await this.dkg.query({
-          sparql: `ASK { <${op.rootUri}> <https://w3id.org/buzz-dkg/buzz#sourceSetDigest> "${op.digest}" }`,
-          contextGraphId: op.contextGraphId,
-          view: 'shared-working-memory',
-        });
-        const b = q.result?.bindings ?? [];
-        const ok =
-          b.length > 0 &&
-          Object.values(b[0] ?? {}).some((v: any) => String(v?.value ?? v) === 'true');
+        // Scoped read-back proof before receipting (§4.6). Subject-scoped
+        // SELECT with client-side digest match: a constant
+        // buzz#sourceSetDigest predicate in the SWM view tripped a node-side
+        // "fetch failed" 500 on production (observed live). Read-only, so a
+        // bounded retry is safe — the store can transiently 500 under
+        // durable-sync load.
+        let rows: any[] = [];
+        for (let attempt = 1; ; attempt++) {
+          try {
+            const q = await this.dkg.query({
+              sparql: `SELECT ?p ?o WHERE { <${op.rootUri}> ?p ?o }`,
+              contextGraphId: op.contextGraphId,
+              view: 'shared-working-memory',
+            });
+            rows = q.result?.bindings ?? [];
+            break;
+          } catch (err) {
+            if (attempt >= 4) throw err;
+            logger.warn('SWM read-back query flaked; retrying', {
+              opId: op.id,
+              attempt,
+              err: String(err).slice(0, 120),
+            });
+            await new Promise((r) => setTimeout(r, attempt * 3000));
+          }
+        }
+        const val = (x: any): string => String(typeof x === 'string' ? x : (x?.value ?? ''));
+        const ok = rows.some(
+          (r: any) => val(r.p).includes('sourceSetDigest') && val(r.o).includes(op.digest),
+        );
         if (!ok) throw new Error('SWM read-back did not confirm the shared digest');
 
         const receiptId =

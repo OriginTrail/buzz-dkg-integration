@@ -79,3 +79,7 @@
 
 ### Gate E — COMPLETE (2026-07-26)
 - Secret scan clean → repo published: github.com/Zigoljube/buzz-dkg-integration (full history). Registry PR: OriginTrail/dkg-integrations#20 (entry validated with upstream CI scripts: 0 errors; expected Round-1 VM warning justified). No npm publish (install.kind manual). ALL SPEC STAGES DONE.
+
+### FIFA production demo + recording (2026-07-26 evening)
+- Channel fifa-worldcup-chat bound to the PRODUCTION FIFA CG; daemon in publishMode=disabled (SWM-only). Live capture: buzz-dkg-4e1b84a2b4f4 shared into the real FIFA graph; asks answered from real on-chain data (Result: Argentina 2-0 Austria ← urn:wc2026:result:537399; Norway top-scorer ← urn:wc2026:player:38101); wifi question refused. Recorded both surfaces → docs/media/fifa-buzz-dkg-integration-demo.gif (34 frames).
+- Production-hardening fixes shipped: CG-exists narrow probe at startup (broad list 500s), reconnect timer no longer unref'd (daemon silently exited during relay outage), SWM read-back = subject-scoped SELECT + bounded retry (constant custom predicate in SWM view 500s "fetch failed" on prod; store flaky under sync). Relay Redis-pool flap fixed by relay restart; NIP-09 delete used to clean a duplicate from a rate-limited retry. 48 tests green.

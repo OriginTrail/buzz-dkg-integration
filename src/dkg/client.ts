@@ -75,6 +75,11 @@ export class DkgClient {
     return this.request('GET', '/api/context-graph/list');
   }
 
+  /** Narrow existence probe — the broad list route has a scan budget and can 500 on large nodes. */
+  contextGraphExists(id: string): Promise<{ exists: boolean }> {
+    return this.request('GET', `/api/context-graph/exists?id=${encodeURIComponent(id)}`);
+  }
+
   createKa(
     name: string,
     contextGraphId: string,
