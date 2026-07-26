@@ -45,8 +45,9 @@ export class DkgClient {
   publish(name, contextGraphId, opts = {}) {
     return this.#req('POST', `/api/knowledge-assets/${encodeURIComponent(name)}/vm/publish`, { contextGraphId, ...opts });
   }
-  descriptor(name) {
-    return this.#req('GET', `/api/knowledge-assets/${encodeURIComponent(name)}`);
+  descriptor(name, contextGraphId) {
+    const q = contextGraphId ? `?contextGraphId=${encodeURIComponent(contextGraphId)}` : '';
+    return this.#req('GET', `/api/knowledge-assets/${encodeURIComponent(name)}${q}`);
   }
   wmQuads(name, contextGraphId) {
     return this.#req('GET', `/api/knowledge-assets/${encodeURIComponent(name)}/wm/quads?contextGraphId=${encodeURIComponent(contextGraphId)}`);

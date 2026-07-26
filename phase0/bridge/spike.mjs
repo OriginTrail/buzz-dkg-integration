@@ -114,10 +114,14 @@ async function processPin(pin) {
   section('Service: pin detected → snapshot → deterministic distillation');
   const target = pin.tags.find((t) => t[0] === 'e')?.[1];
   log(`pin ${pin.id} by ${pin.pubkey.slice(0, 12)}… targets ${target}`);
-  const events = await service.fetchThread(state.channelId, target);
-  log(`thread snapshot: ${events.length} events (ids ${events.map((e) => e.id.slice(0, 8)).join(', ')})`);
+  // Source set = the thread AS OF the trigger, excluding the service's own
+  // messages. Without both filters a replayed trigger sees its own receipt,
+  // the digest shifts, and dedup breaks (observed live — see GATE_B_REPORT).
+  const thread = await service.fetchThread(state.channelId, target);
+  const events = thread.filter((e) => e.created_at <= pin.created_at && e.pubkey !== service.pubkey);
+  log(`thread snapshot: ${events.length}/${thread.length} events as-of trigger (ids ${events.map((e) => e.id.slice(0, 8)).join(', ')})`);
   const digest = sourceSetDigest(events);
-  const dedupKey = `${pin.id}:${digest}`;
+  const dedupKey = pin.id; // one trigger event → at most one KA + receipt
   if (state.processedPins[dedupKey]) {
     log(`DEDUP: pin+digest already processed → no new KA, no new receipt (receipt=${state.processedPins[dedupKey].receiptId})`);
     return { deduped: true, ...state.processedPins[dedupKey] };
@@ -194,14 +198,14 @@ async function approvalFlow(record) {
   const checks = [];
   const check = (name, ok, detail = '') => { checks.push([name, ok]); log(`- [${ok ? 'PASS' : 'FAIL'}] ${name}${detail ? ` — ${detail}` : ''}`); return ok; };
   const target = approval.tags.find((t) => t[0] === 'e')?.[1];
-  const desc = await dkg.descriptor(record.kaName).catch((e) => ({ error: String(e) }));
+  const desc = await dkg.descriptor(record.kaName, CG).catch((e) => ({ error: String(e) }));
   const descState = desc.state ?? desc.descriptor?.state;
   let ok = true;
   ok &= check('1. reactor is configured authorized promoter', AUTHORIZED_PROMOTERS.includes(approval.pubkey), approval.pubkey.slice(0, 12) + '…');
   ok &= check('2. reaction targets service-authored receipt', target === record.receiptId && !!state.receipts[target]);
   ok &= check('3. receipt identifies pending KA + immutable digest', !!record.kaName && !!record.digest);
   ok &= check('4. channel maps to same context graph', CG === (process.env.BDI_CG || 'devnet-test'));
-  ok &= check('5. finalized SWM KA matches approved digest', record.kaName === `buzz-spike-${record.digest.slice(0, 12)}` && ['promoted', 'shared'].includes(descState) || descState === 'promoted', `descriptor.state=${descState}`);
+  ok &= check('5. finalized SWM KA matches approved digest', record.kaName === `buzz-spike-${record.digest.slice(0, 12)}` && descState === 'promoted' && desc.memoryLayer === 'SWM', `state=${descState} layer=${desc.memoryLayer} swmAssertion=${String(desc.swmCurrentAssertion).slice(0, 12)}…`);
   ok &= check('6. approval event not already consumed', !state.consumedApprovals[approval.id]);
   ok &= check('7. KA not already published', !state.published[record.kaName] && descState !== 'published' && descState !== 'finalized');
   ok &= check('8. environment permits publication', ALLOW_TEST_PUBLISH, `BDI_ALLOW_TEST_PUBLISH=${process.env.BDI_ALLOW_TEST_PUBLISH ?? 'unset'}`);
@@ -221,7 +225,7 @@ async function publishFlow(record, approval) {
   saveState();
 
   section('UAL + VM verification');
-  const desc = await dkg.descriptor(record.kaName);
+  const desc = await dkg.descriptor(record.kaName, CG);
   log(`descriptor state=${desc.state ?? desc.descriptor?.state} events=${(desc.events ?? desc.descriptor?.events ?? []).length}`);
   const vmq = await dkg.query({
     sparql: `SELECT ?p ?o WHERE { <${record.rootUri}> ?p ?o } LIMIT 5`,

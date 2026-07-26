@@ -24,3 +24,9 @@
 - All three audits done and folded into INTERFACES.md; GATE_A_REPORT.md written with capability verdicts (read thread GO, WM write GO → self-advance to B per spec exit rule).
 - SPEC §12 deviations table populated (13 verified corrections/confirmations).
 - Container images: `buzz-cli:dd222a5` build running; `buzz-relay:dd222a5` build running (needed brew docker-buildx install — host-level, reversible).
+
+### Gate B — complete (2026-07-26)
+- Isolated stacks: bdi-spike (postgres/redis/minio containers + native pinned buzz-relay on 127.0.0.1:9440) and 6-node devnet (9420-9425, hardhat 8655/31337, fresh blazegraph on 19999). ISOLATION.md proves disjointness; production re-verified untouched at exit.
+- Full loop proven end-to-end incl. devnet VM publish: UAL did:dkg:evm:31337/0x71cfc9b0…/3, tx 0x88965ebb…, 3 StorageACKs; scoped SWM/VM read-backs; in-thread receipts; replay dedup.
+- Live findings → Gate C: as-of-trigger snapshot excluding service events (dedup bug observed + fixed), RELAY_URL community seeding, BUZZ_AUTO_MIGRATE, NIP-98 replay guard, descriptor ?contextGraphId + reservedUal, storage-ack quorum failure mode.
+- Fixed relay-image OOM (2 GB Docker VM) by native host build; minimal Dockerfile kept for container deployments.

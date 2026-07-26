@@ -3,7 +3,7 @@
 //  - HTTP bridge POST /events | /query with NIP-98 auth (buzz-cli's transport)
 //  - raw Nostr event construction per NOSTR.md recipes @ dd222a5
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
-import { getToken } from 'nostr-tools/nip98';
+import { createHash } from 'node:crypto';
 
 const hexToBytes = (hex) => Uint8Array.from(Buffer.from(hex, 'hex'));
 
@@ -18,8 +18,22 @@ export class BuzzClient {
     return finalizeEvent({ created_at: Math.floor(Date.now() / 1000), ...tmpl }, this.sk);
   }
 
+  // NIP-98 auth event, built manually so created_at is strictly monotonic per
+  // client — two same-second identical requests would otherwise produce the
+  // same event id and trip the relay's replay guard (nip98_replay).
+  #lastAuthTs = 0;
   async #authHeader(url, method, payload) {
-    return getToken(url, method, (e) => finalizeEvent(e, this.sk), true, payload);
+    const now = Math.floor(Date.now() / 1000);
+    this.#lastAuthTs = Math.max(now, this.#lastAuthTs + 1);
+    const tags = [['u', url], ['method', method.toUpperCase()]];
+    if (payload !== undefined) {
+      tags.push(['payload', createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex')]);
+    }
+    const event = finalizeEvent(
+      { kind: 27235, created_at: this.#lastAuthTs, tags, content: '' },
+      this.sk,
+    );
+    return `Nostr ${Buffer.from(JSON.stringify(event), 'utf8').toString('base64')}`;
   }
 
   async #post(path, body) {
