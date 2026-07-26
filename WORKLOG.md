@@ -64,3 +64,7 @@
 - Operator approved (receipt posting included). Preflight all-green (narrow CG routes after broad-list 500; payload hash serialization equivalence proven via git before proceeding — first run correctly NO-GO'd).
 - One lifecycle executed on production: buzz-dkg-8a4599b36c1d → 37 quads → finalize (merkle 0x1a87d6c0…) → full SWM share into FIFA CG (shareOp ms1vxxmo-1lfilj, publishReady). Verified: descriptor promoted/SWM, scoped SWM query shows root+digest+prov chain, NO VM UAL.
 - Receipt posted in dkg-test: b02446d7…. D3 identifier block recorded in GATE_D2_REPORT.md. Stopped per spec.
+
+### D3 preparation (2026-07-26)
+- Live read-only cost quote: avgAsk 8e14, est publicByteSize 7,641 B → 0.0716 TRAC @ 12 epochs; gas ≈ 0.0000072 ETH (6e6 wei gasPrice). Balances 113 TRAC / 0.0033 ETH → ample.
+- Promoter ✅ posted on D2 receipt: event bf724457… by fc11ee86…. Full D3 block proposed to operator; awaiting explicit approval (spend ceilings) before the single publish attempt.
