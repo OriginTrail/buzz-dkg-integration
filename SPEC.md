@@ -12,8 +12,8 @@ Single canonical document: product specification and all stage prompts. Supersed
 ## §0 Authorization pointer (operator-edited)
 
 ```yaml
-authorized_stage: "ABC"        # one of: ABC | D1 | D2 | D3 | E | NONE
-prior_gate_accepted: "—"       # operator note, e.g. "Gate C accepted 2026-07-27"
+authorized_stage: "D1"         # one of: ABC | D1 | D2 | D3 | E | NONE
+prior_gate_accepted: "Gate C accepted 2026-07-26 (operator, in session); designated test channel: dkg-test on the local relay 127.0.0.1:9440 (the only Buzz relay in this deployment)"
 ```
 
 Claude Code executes only the stage named here, through that stage's section below. This document as a whole is reference context, never blanket execution permission. Earlier reports are evidence, not authority for later side effects. If a stage section conflicts with a locked principle, follow the safer constraint and stop for operator review.

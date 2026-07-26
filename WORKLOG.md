@@ -42,3 +42,9 @@
 - Live run on channel dkg-live-demo (daemon in devnet publish mode): pin→SWM receipt→✅→VM publish (UAL …/8)→ask answered with citation→refusal. Recorded to docs/media/buzz-dkg-live-loop.gif (channel viewer) + buzz-dkg-node-ui.gif (DKG node UI: pipeline, DecisionCluster KA, provenance trail).
 - Demo tooling added: scripts/viewer (read-only live channel page + NIP-98 proxy), scripts/live-demo-steps.mjs.
 - Fixes found via live run: (1) evidence retrieval now spans VM+SWM views — published KAs migrate out of the SWM view (observed live); citations validate in their own view; (2) §7.5 support gate accepts one highly-specific term (≥7 chars) — no stemmer, so morphology (retention/retain) must not starve supported answers. 48 tests green.
+
+### Gate D1 — partial (2026-07-26)
+- Operator accepted Gate C in session; SPEC §0 → D1, test channel dkg-test.
+- Authorized write done: channel dkg-test (56059d1d-77bb-4d94-af79-97bb30547ac8) created on local relay, service is owner-member; zero other Buzz events.
+- Production recheck + FIFA dry run NO-GO: okf-mainnet still stopped (verified live, read-only); not started per §4.10/D1 authority. Ready-to-run recheck command list + proposed KA (digest plan) in GATE_D1_REPORT.md.
+- D2 NO-GO pending node up + FIFA CG designation; D3 NO-GO (publisher identity) unchanged.
