@@ -56,3 +56,6 @@
 - Dry run (no-post): 2 FIFA answers with resolved VM citations (Result: Argentina 2-0 Austria ← urn:wc2026:result:537399), 1 refusal; 9/9 queries scoped to the one CG. Retriever generalized: optional description w/ name fallback, two-pass conjunctive retrieval, unquoting (48 tests green).
 - dkg-test: author+promoter members added; 2-message test thread posted (root 60fe7bc1…); concrete D2 payload (37 quads) in docs/gates/d2-proposed-payload.json; digest 8a4599b3…, payload sha bdba3972….
 - D2 GO pending operator approval reference. Stopped per spec.
+
+### Publisher identity (2026-07-26, operator-ordered)
+- createProfile via node's own adapter (stakeAmount 0): tx 0x8fe764cf…, block 49142839, success; ambiguous receipt recovered by read-back. identityId 65; daemon wired via /api/identity/ensure → hasIdentity true. D3 identity blocker cleared.
