@@ -1,0 +1,18 @@
+{
+  "operator_approval_reference": "operator \"continue\" 2026-07-26 on presented D3 block (receipt included)",
+  "authorized_buzz_approval_event_id": "bf724457b3da34b9615e0cb77c5eff4b72f5b296e7c39aa0a306f9f6006d0c12",
+  "authorized_promoter_npub": "fc11ee8605a0bca53185867f1982334c61dd9249c752ab2532c07312acc294d6",
+  "context_graph_id": "0x633E5a7C5e612d9981538F60D824cC03be97e2Ab/fifa-world-cup-2026",
+  "knowledge_asset_name": "buzz-dkg-8a4599b36c1d",
+  "root_entity_uri": "urn:buzz-dkg:decision:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+  "source_set_digest": "8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+  "finalized_merkle_root": "0x1a87d6c07b95ac0a406c6462b9f49cff875031db5693ee24603c2b464e3f65e3",
+  "swm_receipt_event_id": "b02446d78c594a25403d6d0bdf0de53dd59fb4b616e4d836b873b218ecbd0b06",
+  "buzz_channel_id": "56059d1d-77bb-4d94-af79-97bb30547ac8",
+  "thread_root": "60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff",
+  "target_chain_id": "base:8453",
+  "publish_epochs": 12,
+  "max_trac_cost": 0.5,
+  "max_eth_cost": 0.0005,
+  "intentPersistedAt": "2026-07-26T14:30:35.851Z"
+}

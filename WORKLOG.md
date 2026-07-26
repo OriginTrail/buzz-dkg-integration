@@ -68,3 +68,7 @@
 ### D3 preparation (2026-07-26)
 - Live read-only cost quote: avgAsk 8e14, est publicByteSize 7,641 B → 0.0716 TRAC @ 12 epochs; gas ≈ 0.0000072 ETH (6e6 wei gasPrice). Balances 113 TRAC / 0.0033 ETH → ample.
 - Promoter ✅ posted on D2 receipt: event bf724457… by fc11ee86…. Full D3 block proposed to operator; awaiting explicit approval (spend ceilings) before the single publish attempt.
+
+### D3 attempt #1 — FAILED cleanly (2026-07-26)
+- All 9 §6 invariants PASS; single vm/publish attempt refused server-side: LU-5 access-policy UNKNOWN (liveness probe timeout, 2.5s budget, node mid sync-storm + proxy contention). No spend, no publication, approval unconsumed.
+- Verified on-chain directly: slot 7 nameHash matches FIFA CG (binding valid), accessPolicy public/open; TRAC 113.24 intact (daemon balances glitch showed 0). Diagnosis in d3-transcript.md. Awaiting operator decision on a fresh single attempt.
