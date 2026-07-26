@@ -72,3 +72,7 @@
 ### D3 attempt #1 — FAILED cleanly (2026-07-26)
 - All 9 §6 invariants PASS; single vm/publish attempt refused server-side: LU-5 access-policy UNKNOWN (liveness probe timeout, 2.5s budget, node mid sync-storm + proxy contention). No spend, no publication, approval unconsumed.
 - Verified on-chain directly: slot 7 nameHash matches FIFA CG (binding valid), accessPolicy public/open; TRAC 113.24 intact (daemon balances glitch showed 0). Diagnosis in d3-transcript.md. Awaiting operator decision on a fresh single attempt.
+
+### Gate D3 — CONFIRMED (2026-07-26)
+- Operator-authorized retry succeeded: UAL did:dkg:base:8453/0x633e…/2201, tx 0x6daf3e0b… (block 49145748, status 1), KA NFT minted. Spend 0.00000465 ETH / 0 TRAC (both far under ceilings; only Transfer in tx is the NFT mint). Approval bf724457… consumed. Descriptor state=published/VM; scoped VM query returns root content. VM receipt f713ee3e… posted in dkg-test.
+- Full production loop closed: Buzz thread → SWM (D2) → ✅ → VM publish with UAL (D3) + receipts. Stage E awaits separate authorization.
