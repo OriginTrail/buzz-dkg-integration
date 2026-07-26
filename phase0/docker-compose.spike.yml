@@ -1,0 +1,50 @@
+# Phase 0 isolated Buzz stack — project `bdi-spike`.
+# Images are built locally from the pinned block/buzz checkout (dd222a5).
+# Postgres/Redis have NO host ports; only the relay is published, on 127.0.0.1:9440.
+name: bdi-spike
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: buzz
+      POSTGRES_PASSWORD: bdi_spike_pg
+      POSTGRES_DB: buzz
+    volumes:
+      - bdi-spike-pg:/var/lib/postgresql/data
+    networks: [bdi-spike-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U buzz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    networks: [bdi-spike-net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  relay:
+    image: buzz-relay:dd222a5
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://buzz:bdi_spike_pg@postgres:5432/buzz
+      REDIS_URL: redis://redis:6379
+      BUZZ_BIND_ADDR: 0.0.0.0:3000
+      # Throwaway key, generated for this spike only (see phase0/README.md).
+      BUZZ_RELAY_PRIVATE_KEY: ${BDI_SPIKE_RELAY_KEY}
+    ports:
+      - "127.0.0.1:9440:3000"
+    networks: [bdi-spike-net]
+
+networks:
+  bdi-spike-net:
+
+volumes:
+  bdi-spike-pg:

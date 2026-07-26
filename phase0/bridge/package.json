@@ -1,0 +1,10 @@
+{
+  "name": "bdi-phase0-bridge",
+  "private": true,
+  "type": "module",
+  "description": "Phase 0 spike bridge: Buzz thread -> deterministic distillation -> DKG WM/SWM (isolated stack only)",
+  "dependencies": {
+    "nostr-tools": "^2.10.0",
+    "ws": "^8.18.0"
+  }
+}

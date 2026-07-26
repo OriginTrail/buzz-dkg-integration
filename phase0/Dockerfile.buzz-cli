@@ -1,0 +1,11 @@
+# Builds buzz-cli from the pinned block/buzz checkout (dd222a5).
+# Kept outside the upstream repo so the pinned clone stays unmodified.
+FROM rust:1.95-bookworm AS builder
+WORKDIR /build
+COPY . .
+RUN cargo build --release --locked -p buzz-cli --bin buzz
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates jq curl && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/target/release/buzz /usr/local/bin/buzz
+ENTRYPOINT ["/usr/local/bin/buzz"]

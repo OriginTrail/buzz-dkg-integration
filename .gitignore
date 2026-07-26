@@ -3,3 +3,5 @@ dist/
 .env
 *.log
 .upstream/
+phase0/.env.spike
+phase0/bridge/node_modules/
