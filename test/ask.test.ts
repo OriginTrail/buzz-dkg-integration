@@ -74,7 +74,7 @@ describe('grounded answering (§7)', () => {
       'devnet-test',
       'what store for the staging cluster?',
     );
-    expect(selects).toBe(1);
+    expect(selects).toBe(2); // VM + SWM retrieval passes
     expect(res.kind).toBe('refusal');
   });
 
@@ -87,7 +87,7 @@ describe('grounded answering (§7)', () => {
     expect(dkg.queryLog.length).toBeGreaterThan(0);
     for (const q of dkg.queryLog) {
       expect(q.contextGraphId).toBe('devnet-test');
-      expect(q.view).toBe('shared-working-memory');
+      expect(['verifiable-memory', 'shared-working-memory']).toContain(q.view);
     }
   });
 
@@ -102,6 +102,14 @@ describe('grounded answering (§7)', () => {
     const dkg = new MockDkg();
     dkg.evidence = [{ rootUri: 'urn:x', name: 'n', description: 'd', digest: 'b'.repeat(64) }];
     const ev = await retrieveEvidence(dkg.asDkg(), 'devnet-test', 'anything relevant');
-    expect(ev).toEqual([{ rootUri: 'urn:x', name: 'n', description: 'd', digest: 'b'.repeat(64) }]);
+    expect(ev).toEqual([
+      {
+        rootUri: 'urn:x',
+        name: 'n',
+        description: 'd',
+        digest: 'b'.repeat(64),
+        view: 'verifiable-memory',
+      },
+    ]);
   });
 });

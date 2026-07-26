@@ -37,3 +37,8 @@
 - 48 tests green (unit + integration with mocks); acceptance demo with ZERO mocks against live isolated stacks: SWM receipt, restart dedup, §6 approve→devnet publish (UAL did:dkg:evm:31337/0x71cf…/7), unauthorized approval rejected, cited answer, refusal, cursor proof. docs/acceptance-transcript.md.
 - Live defects found+fixed: kind-7 live fan-out needs #h-scoped subscription; NIP-98 nonce tag instead of monotonic timestamps.
 - lint/typecheck/format/secret-scan clean. STOP per spec: no production connection; awaiting operator acceptance for D1.
+
+### Post-Gate-C live demo + recordings (2026-07-26)
+- Live run on channel dkg-live-demo (daemon in devnet publish mode): pin→SWM receipt→✅→VM publish (UAL …/8)→ask answered with citation→refusal. Recorded to docs/media/buzz-dkg-live-loop.gif (channel viewer) + buzz-dkg-node-ui.gif (DKG node UI: pipeline, DecisionCluster KA, provenance trail).
+- Demo tooling added: scripts/viewer (read-only live channel page + NIP-98 proxy), scripts/live-demo-steps.mjs.
+- Fixes found via live run: (1) evidence retrieval now spans VM+SWM views — published KAs migrate out of the SWM view (observed live); citations validate in their own view; (2) §7.5 support gate accepts one highly-specific term (≥7 chars) — no stemmer, so morphology (retention/retain) must not starve supported answers. 48 tests green.

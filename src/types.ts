@@ -67,6 +67,8 @@ export interface EvidenceRecord {
   name: string;
   description: string;
   digest: string | null;
+  /** scoped view the record was retrieved from (citations validate in the same view) */
+  view?: 'verifiable-memory' | 'shared-working-memory';
 }
 
 export type PublishMode = 'disabled' | 'devnet';

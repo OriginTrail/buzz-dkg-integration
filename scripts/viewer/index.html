@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Buzz × DKG — live channel</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #16161e; color: #c0caf5; font: 15px/1.5 -apple-system, 'SF Pro Text', sans-serif; }
+  header { padding: 14px 22px; background: #1a1b26; border-bottom: 1px solid #2a2b3d; display: flex; align-items: center; gap: 12px; }
+  header .dot { width: 10px; height: 10px; border-radius: 50%; background: #9ece6a; box-shadow: 0 0 8px #9ece6a; }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .sub { color: #565f89; font-size: 12.5px; }
+  #feed { padding: 18px 22px 60px; max-width: 860px; margin: 0 auto; }
+  .msg { display: flex; gap: 12px; margin: 14px 0; animation: pop .25s ease; }
+  @keyframes pop { from { opacity: 0; transform: translateY(6px); } }
+  .avatar { width: 36px; height: 36px; border-radius: 10px; flex: none; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; color: #16161e; }
+  .body { min-width: 0; }
+  .meta { font-size: 12.5px; color: #565f89; margin-bottom: 2px; }
+  .meta b { font-size: 13.5px; }
+  .bubble { background: #1f2335; border: 1px solid #2a2b3d; border-radius: 12px; padding: 10px 14px; white-space: pre-wrap; word-break: break-word; }
+  .bot .bubble { background: #1e1a2e; border-color: #4b3a6b; }
+  .receipt .bubble { border-left: 3px solid #bb9af7; font-family: ui-monospace, 'SF Mono', monospace; font-size: 12.5px; }
+  .vm .bubble { border-left-color: #9ece6a; }
+  .pin { background: #2a2416; border: 1px solid #5a4a1f; color: #e0af68; border-radius: 10px; padding: 7px 14px; font-size: 13px; margin: 12px 0 12px 48px; animation: pop .25s ease; }
+  .badges { margin-top: 5px; display: flex; gap: 6px; }
+  .badge { background: #24283b; border: 1px solid #3b4261; border-radius: 20px; padding: 2px 10px; font-size: 13px; animation: pop .25s ease; }
+  .empty { color: #565f89; text-align: center; margin-top: 120px; font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="dot"></div>
+  <h1 id="title">#channel</h1>
+  <div class="sub">isolated stack · relay 127.0.0.1:9440 · DKG devnet chain evm:31337 · live</div>
+</header>
+<div id="feed"><div class="empty">waiting for events…</div></div>
+<script>
+const channel = new URLSearchParams(location.search).get('id');
+const chName = new URLSearchParams(location.search).get('name') || 'dkg-live-demo';
+document.getElementById('title').textContent = '#' + chName;
+const esc = (s) => s.replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let lastRender = '';
+async function tick() {
+  try {
+    const r = await fetch(`/api/channel?id=${channel}`);
+    const { events, names } = await r.json();
+    const msgs = events.filter((e) => [9, 40002].includes(e.kind)).sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+    const pins = events.filter((e) => e.kind === 40004);
+    const reactions = events.filter((e) => e.kind === 7);
+    const who = (pk) => names[pk] || { name: pk.slice(0, 10) + '…', color: '#565f89' };
+    let out = '';
+    for (const m of msgs) {
+      const w = who(m.pubkey);
+      const isBot = w.name.startsWith('@dkg');
+      const isReceipt = isBot && /assertion:|UAL:/.test(m.content);
+      const isVm = /^Published to Verifiable Memory/.test(m.content);
+      out += `<div class="msg ${isBot ? 'bot' : ''} ${isReceipt ? 'receipt' : ''} ${isVm ? 'vm' : ''}">
+        <div class="avatar" style="background:${w.color}">${esc(w.name[0] === '@' ? '⛓' : w.name[0])}</div>
+        <div class="body"><div class="meta"><b style="color:${w.color}">${esc(w.name)}</b> · ${new Date(m.created_at * 1000).toLocaleTimeString()}</div>
+        <div class="bubble">${esc(m.content)}</div>`;
+      const rs = reactions.filter((x) => x.tags.some((t) => t[0] === 'e' && t[1] === m.id));
+      if (rs.length) out += `<div class="badges">${rs.map((x) => `<span class="badge">${esc(x.content)} ${esc(who(x.pubkey).name.split(' ')[0])}</span>`).join('')}</div>`;
+      out += `</div></div>`;
+      for (const p of pins.filter((x) => x.tags.some((t) => t[0] === 'e' && t[1] === m.id))) {
+        out += `<div class="pin">📌 ${esc(who(p.pubkey).name)} pinned this thread — capture trigger for the DKG daemon</div>`;
+      }
+    }
+    if (out && out !== lastRender) {
+      lastRender = out;
+      document.getElementById('feed').innerHTML = out;
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+  } catch (e) { /* transient */ }
+}
+setInterval(tick, 900);
+tick();
+</script>
+</body>
+</html>

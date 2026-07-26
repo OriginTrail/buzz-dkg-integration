@@ -40,6 +40,14 @@ export function questionTerms(question: string): string[] {
   ];
 }
 
+export type EvidenceView = 'verifiable-memory' | 'shared-working-memory';
+
+/**
+ * Published KAs migrate from the SWM view to the VM view (observed live: a
+ * decision vanished from shared-working-memory after its VM publish), so
+ * evidence spans both layers of the SAME context graph — VM first, matching
+ * the protocol's trust gradient. Never any other graph.
+ */
 export async function retrieveEvidence(
   dkg: DkgClient,
   contextGraphId: string,
@@ -58,24 +66,30 @@ export async function retrieveEvidence(
       OPTIONAL { ?root <${BUZZ}sourceSetDigest> ?digest }
       FILTER(${filters})
     } LIMIT ${limit}`;
-  const res = await dkg.query({ sparql, contextGraphId, view: 'shared-working-memory' });
   const out: EvidenceRecord[] = [];
-  for (const b of res.result?.bindings ?? []) {
-    const rootUri = bindingValue(b.root as never);
-    const name = bindingValue(b.name as never);
-    const description = bindingValue(b.desc as never);
-    if (!rootUri || !description) continue;
-    out.push({
-      rootUri,
-      name: name ?? '',
-      description,
-      digest: bindingValue(b.digest as never) ?? null,
-    });
+  const seen = new Set<string>();
+  for (const view of ['verifiable-memory', 'shared-working-memory'] as const) {
+    const res = await dkg.query({ sparql, contextGraphId, view });
+    for (const b of res.result?.bindings ?? []) {
+      const rootUri = bindingValue(b.root as never);
+      const name = bindingValue(b.name as never);
+      const description = bindingValue(b.desc as never);
+      if (!rootUri || !description || seen.has(rootUri)) continue;
+      seen.add(rootUri);
+      out.push({
+        rootUri,
+        name: name ?? '',
+        description,
+        digest: bindingValue(b.digest as never) ?? null,
+        view,
+      });
+    }
+    if (out.length >= limit) break;
   }
-  return out;
+  return out.slice(0, limit);
 }
 
-/** §7.8: every citation must resolve in the SAME scoped view before posting. */
+/** §7.8: every citation must resolve in the SAME scoped view it was retrieved from. */
 export async function validateCitations(
   dkg: DkgClient,
   contextGraphId: string,
@@ -85,7 +99,7 @@ export async function validateCitations(
     const res = await dkg.query({
       sparql: `ASK { <${e.rootUri}> ?p ?o }`,
       contextGraphId,
-      view: 'shared-working-memory',
+      view: e.view ?? 'shared-working-memory',
     });
     const b = res.result?.bindings ?? [];
     const truthy =
@@ -117,14 +131,22 @@ export async function answerGrounded(
   if (!evidence.length) return { kind: 'refusal', text: '', evidence: [] };
 
   const terms = questionTerms(question);
-  const score = (e: EvidenceRecord): number =>
-    terms.filter((t) => e.description.toLowerCase().includes(t)).length;
+  const matched = (e: EvidenceRecord): string[] =>
+    terms.filter((t) => e.description.toLowerCase().includes(t));
+  const score = (e: EvidenceRecord): number => matched(e).length;
+  // Insufficient-support gate (§7.5), deterministic: either two independent
+  // term hits, or one highly specific term (≥7 chars — e.g. "telemetry");
+  // plain substring matching has no stemmer, so "retention"/"retain" style
+  // morphology must not silently starve well-supported answers.
+  const sufficient = (e: EvidenceRecord): boolean => {
+    const m = matched(e);
+    return m.length >= 2 || m.some((t) => t.length >= 7);
+  };
   const ranked = [...evidence].sort((a, b) => score(b) - score(a));
   const best = ranked[0]!;
-  // Insufficient-support gate (§7.5): at least two independent term hits.
-  if (score(best) < 2) return { kind: 'refusal', text: '', evidence: [] };
+  if (!sufficient(best)) return { kind: 'refusal', text: '', evidence: [] };
 
-  const cited = ranked.filter((e) => score(e) >= 2).slice(0, 3);
+  const cited = ranked.filter(sufficient).slice(0, 3);
   if (!(await validateCitations(dkg, contextGraphId, cited))) {
     return { kind: 'refusal', text: '', evidence: [] };
   }

@@ -68,7 +68,13 @@ export class RelayClient {
     const tags: string[][] = [
       ['u', url],
       ['method', method.toUpperCase()],
-      ['nonce', createHash('sha256').update(`${Math.random()}${process.hrtime.bigint()}`).digest('hex').slice(0, 16)],
+      [
+        'nonce',
+        createHash('sha256')
+          .update(`${Math.random()}${process.hrtime.bigint()}`)
+          .digest('hex')
+          .slice(0, 16),
+      ],
     ];
     if (payload !== undefined) {
       tags.push([
@@ -76,10 +82,7 @@ export class RelayClient {
         createHash('sha256').update(JSON.stringify(payload), 'utf8').digest('hex'),
       ]);
     }
-    const event = finalizeEvent(
-      { kind: 27235, created_at: now, tags, content: '' },
-      this.#sk,
-    );
+    const event = finalizeEvent({ kind: 27235, created_at: now, tags, content: '' }, this.#sk);
     return `Nostr ${Buffer.from(JSON.stringify(event), 'utf8').toString('base64')}`;
   }
 
