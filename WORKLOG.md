@@ -19,3 +19,8 @@
 
 ### Gate A — interface audits
 - Three parallel audit agents launched over the pinned clones; reports land in `docs/audit/{buzz,dkg,integrations}-audit.md`.
+
+### Gate A — complete
+- All three audits done and folded into INTERFACES.md; GATE_A_REPORT.md written with capability verdicts (read thread GO, WM write GO → self-advance to B per spec exit rule).
+- SPEC §12 deviations table populated (13 verified corrections/confirmations).
+- Container images: `buzz-cli:dd222a5` build running; `buzz-relay:dd222a5` build running (needed brew docker-buildx install — host-level, reversible).

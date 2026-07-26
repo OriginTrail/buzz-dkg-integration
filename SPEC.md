@@ -257,7 +257,19 @@ Requires: operator authorization in §0, naming exactly which of the following a
 
 | Assumption | Verified reality | Adaptation | Evidence (path:lines @ SHA) |
 |---|---|---|---|
-| Pending Stage A | — | — | — |
+| Lifecycle `WM draft → write/import → finalize/seal → full SWM share → VM publish` (hypothesis, §3) | Confirmed as official vocabulary; verbs are `create → write → finalize → share → publish`; states `created → promoted → published → finalized` | Use these exact verbs/routes | `packages/core/src/memory-model.ts:13-17,65-87 @ bf919a0`; `docs/how-dkg-works/memory-layers.md @ bf919a0` |
+| "`assertion promote` may not exist" (§3) | `share` is the WM→SWM verb; `assertion promote` survives only as a compat alias | Never use the alias | `packages/cli/src/commands/knowledge-asset.ts:142-167 @ bf919a0` |
+| "finalize/seal verbs may not exist" (§3) | `finalize` exists and is the seal (merkle root + EIP-712 author attestation) | Use it | `routes/knowledge-assets.ts:1205-1228 @ bf919a0` |
+| "subgraphs may not exist" (§3) | Sub-graphs are first-class within CGs | Optional; not needed for one-root KAs | `routes/context-graph.ts:835,883 @ bf919a0` |
+| "Oxigraph store may not exist" (§3) | `oxigraph-server` is the default store backend | n/a (never touched directly; public API only) | `scripts/devnet.sh:558-566 @ bf919a0` |
+| "`publish_epochs` may not exist" (§3) | `epochs` exists in v10 publish (default 12); cost = avgAsk × bytes × epochs / 1024 | D3 block's `publication_parameters` = `publishEpochs` | `packages/publisher/src/publisher.ts:6 @ bf919a0`; `packages/chain/src/chain-adapter.ts:602-694 @ bf919a0` |
+| Append-only hypothesis (§2) | Buzz: NOT append-only — NIP-09 kind-5 + admin kind-9005 soft-deletes hide events from all reads | Snapshot full source events + digest at capture time; never rely on re-fetch | `crates/buzz-db/src/event.rs:739-797 @ dd222a5` |
+| Custom receipt/metadata kinds on Buzz | Relay rejects all unregistered kinds (`restricted: unknown event kind`) | Receipts = ordinary kind-9 thread replies with structured tags | `crates/buzz-relay/src/handlers/ingest.rs:195-303 @ dd222a5` |
+| "Pin reaction" trigger (§4.4) | Pin is first-class kind 40004, distinct from kind-7 reactions | Pin trigger subscribes to kind 40004; distill mention stays kind 9 `p`-tag | `crates/buzz-core/src/kind.rs:421-433 @ dd222a5` |
+| Reaction workflow trigger must be verified (§6) | `buzz-workflow` `ReactionAdded` trigger exists (emoji compared literally vs content); its `add_reaction` action is dead code | Daemon subscribes to kind 7 itself; §6 invariants enforced in our code, not in buzz-workflow | `crates/buzz-workflow/src/schema.rs:46-50 @ dd222a5`; `lib.rs:811-824 @ dd222a5`; `executor.rs:886-892` vs `router.rs:55-140 @ dd222a5` |
+| UAL format unknown | 3-part `did:dkg:{chainId}/{contract-or-author}/{kaId}` (e.g. `did:dkg:base:8453/0x…/N`) | Receipts carry this form | `packages/chain/src/chain-adapter.ts:161-168 @ bf919a0` |
+| SWM share granularity | Full-KA atomic only; subsets rejected 400 `KA_ATOMIC_SHARE_REQUIRED` | Matches §4.4 exactly; nothing to design around | `routes/knowledge-assets.ts:1278-1301 @ bf919a0` |
+| Registry submission shape (§Stage E) | One schema-validated metadata JSON in `integrations/`; code lives in own repo + npm; Round 1 CI hard-flags VM write routes out-of-scope | Stage E prepares metadata JSON; bounty tag `cfi-dkgv10-r1` | `schema/integration.schema.json:8-24 @ c944c9c`; `scripts/validate.mjs:136-143 @ c944c9c` |
 
 ## §13 Change log
 
