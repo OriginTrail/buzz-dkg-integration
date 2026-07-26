@@ -16,6 +16,10 @@ import type { EvidenceRecord } from '../types.ts';
  *     other graph or global index (no code path exists for it).
  */
 
+/** Strip the outer quotes some servers keep on literal binding values. */
+const unquote = (v: string | undefined): string | undefined =>
+  v === undefined ? undefined : v.replace(/^"(.*)"$/s, '$1');
+
 const escapeForRegex = (s: string): string =>
   s
     .replace(/[\\"']/g, ' ')
@@ -52,39 +56,57 @@ export async function retrieveEvidence(
   dkg: DkgClient,
   contextGraphId: string,
   question: string,
-  limit = 5,
+  limit = 12,
 ): Promise<EvidenceRecord[]> {
   const terms = questionTerms(question);
   if (!terms.length) return [];
-  const filters = terms
-    .map((t) => `CONTAINS(LCASE(STR(?desc)), "${escapeForRegex(t)}")`)
-    .join(' || ');
-  const sparql = `
+  const has = (t: string): string => `CONTAINS(LCASE(STR(?text)), "${escapeForRegex(t)}")`;
+  // Two-pass retrieval: conjunctive term-pairs first (multi-term-supported
+  // records), single-term disjunction as fallback — the store returns an
+  // arbitrary LIMIT subset, so a lone OR-filter can drown specific records
+  // (e.g. "Result: Argentina 2-0 Austria") in single-term matches.
+  const passes: string[] = [];
+  if (terms.length >= 2) {
+    const pairs: string[] = [];
+    for (let i = 0; i < terms.length; i++)
+      for (let j = i + 1; j < terms.length; j++)
+        pairs.push(`(${has(terms[i]!)} && ${has(terms[j]!)})`);
+    passes.push(pairs.join(' || '));
+  }
+  passes.push(terms.map(has).join(' || '));
+  // description is OPTIONAL: domain data (e.g. IPTC sport entities) often
+  // carries only schema:name — the same name-or-description surface the
+  // node's own /api/memory/search indexes. Text = COALESCE(desc, name).
+  const sparqlFor = (filters: string): string => `
     SELECT ?root ?name ?desc ?digest WHERE {
-      ?root <${SCHEMA}name> ?name ;
-            <${SCHEMA}description> ?desc .
+      ?root <${SCHEMA}name> ?name .
+      OPTIONAL { ?root <${SCHEMA}description> ?desc }
       OPTIONAL { ?root <${BUZZ}sourceSetDigest> ?digest }
+      BIND(COALESCE(?desc, ?name) AS ?text)
       FILTER(${filters})
     } LIMIT ${limit}`;
   const out: EvidenceRecord[] = [];
   const seen = new Set<string>();
-  for (const view of ['verifiable-memory', 'shared-working-memory'] as const) {
-    const res = await dkg.query({ sparql, contextGraphId, view });
-    for (const b of res.result?.bindings ?? []) {
-      const rootUri = bindingValue(b.root as never);
-      const name = bindingValue(b.name as never);
-      const description = bindingValue(b.desc as never);
-      if (!rootUri || !description || seen.has(rootUri)) continue;
-      seen.add(rootUri);
-      out.push({
-        rootUri,
-        name: name ?? '',
-        description,
-        digest: bindingValue(b.digest as never) ?? null,
-        view,
-      });
+  for (const filters of passes) {
+    for (const view of ['verifiable-memory', 'shared-working-memory'] as const) {
+      const res = await dkg.query({ sparql: sparqlFor(filters), contextGraphId, view });
+      for (const b of res.result?.bindings ?? []) {
+        const rootUri = bindingValue(b.root as never);
+        const name = unquote(bindingValue(b.name as never));
+        const description = unquote(bindingValue(b.desc as never)) || name;
+        if (!rootUri || !description || seen.has(rootUri)) continue;
+        seen.add(rootUri);
+        out.push({
+          rootUri,
+          name: name ?? '',
+          description,
+          digest: unquote(bindingValue(b.digest as never)) ?? null,
+          view,
+        });
+      }
+      if (out.length >= limit) break;
     }
-    if (out.length >= limit) break;
+    if (out.length) break; // a stricter pass produced evidence; no fallback needed
   }
   return out.slice(0, limit);
 }

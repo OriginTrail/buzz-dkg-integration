@@ -1,0 +1,197 @@
+{
+  "channelId": "56059d1d-77bb-4d94-af79-97bb30547ac8",
+  "sourceEventIds": [
+    "60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff",
+    "fb88df35fbe4761a49f13733fe407dfe72706fce9b243e438e5a269b327898b1"
+  ],
+  "sourceSetDigest": "8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+  "kaName": "buzz-dkg-8a4599b36c1d",
+  "rootUri": "urn:buzz-dkg:decision:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+  "quads": [
+    {
+      "subject": "urn:buzz-dkg:decision:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+      "object": "http://www.w3.org/ns/prov#Entity"
+    },
+    {
+      "subject": "urn:buzz-dkg:decision:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+      "object": "https://w3id.org/buzz-dkg/buzz#DecisionCluster"
+    },
+    {
+      "subject": "urn:buzz-dkg:decision:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://schema.org/name",
+      "object": "\"DECISION: buzz-dkg-integration D2 test payload — confirm one KA reaches Shared Working Memory with full provenance, t...\""
+    },
+    {
+      "subject": "urn:buzz-dkg:decision:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://schema.org/description",
+      "object": "\"DECISION: buzz-dkg-integration D2 test payload — confirm one KA reaches Shared Working Memory with full provenance, then stop.\""
+    },
+    {
+      "subject": "urn:buzz-dkg:decision:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "https://w3id.org/buzz-dkg/buzz#channel",
+      "object": "urn:buzz:channel:56059d1d-77bb-4d94-af79-97bb30547ac8"
+    },
+    {
+      "subject": "urn:buzz-dkg:decision:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "https://w3id.org/buzz-dkg/buzz#sourceSetDigest",
+      "object": "\"8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00\""
+    },
+    {
+      "subject": "urn:buzz-dkg:decision:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "https://w3id.org/buzz-dkg/buzz#sourceEventCount",
+      "object": "\"2\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+    },
+    {
+      "subject": "urn:buzz-dkg:decision:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://www.w3.org/ns/prov#wasGeneratedBy",
+      "object": "urn:buzz-dkg:distillation:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00"
+    },
+    {
+      "subject": "urn:buzz-dkg:decision:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://www.w3.org/ns/prov#wasDerivedFrom",
+      "object": "urn:nostr:event:60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff"
+    },
+    {
+      "subject": "urn:buzz-dkg:decision:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://www.w3.org/ns/prov#wasDerivedFrom",
+      "object": "urn:nostr:event:fb88df35fbe4761a49f13733fe407dfe72706fce9b243e438e5a269b327898b1"
+    },
+    {
+      "subject": "urn:buzz-dkg:distillation:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+      "object": "http://www.w3.org/ns/prov#Activity"
+    },
+    {
+      "subject": "urn:buzz-dkg:distillation:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+      "object": "https://w3id.org/buzz-dkg/buzz#Distillation"
+    },
+    {
+      "subject": "urn:buzz-dkg:distillation:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://www.w3.org/ns/prov#wasAssociatedWith",
+      "object": "urn:nostr:pubkey:181e08ed958919ec4732d0fa4e7daad8f4860bc25986f6db78f28735fec1bab1"
+    },
+    {
+      "subject": "urn:buzz-dkg:distillation:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://www.w3.org/ns/prov#startedAtTime",
+      "object": "\"2026-07-26T10:55:23.000Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"
+    },
+    {
+      "subject": "urn:buzz-dkg:distillation:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://www.w3.org/ns/prov#endedAtTime",
+      "object": "\"2026-07-26T10:55:24.000Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"
+    },
+    {
+      "subject": "urn:buzz-dkg:distillation:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://www.w3.org/ns/prov#used",
+      "object": "urn:nostr:event:60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff"
+    },
+    {
+      "subject": "urn:buzz-dkg:distillation:8a4599b36c1d845301edbf0cfb66fc598c998caa3d781ffcb53b1c3135194c00",
+      "predicate": "http://www.w3.org/ns/prov#used",
+      "object": "urn:nostr:event:fb88df35fbe4761a49f13733fe407dfe72706fce9b243e438e5a269b327898b1"
+    },
+    {
+      "subject": "urn:nostr:event:60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff",
+      "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+      "object": "https://w3id.org/buzz-dkg/nostr#Event"
+    },
+    {
+      "subject": "urn:nostr:event:60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff",
+      "predicate": "https://w3id.org/buzz-dkg/nostr#kind",
+      "object": "\"9\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+    },
+    {
+      "subject": "urn:nostr:event:60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff",
+      "predicate": "https://w3id.org/buzz-dkg/nostr#createdAt",
+      "object": "\"2026-07-26T10:55:23.000Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"
+    },
+    {
+      "subject": "urn:nostr:event:60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff",
+      "predicate": "https://w3id.org/buzz-dkg/nostr#content",
+      "object": "\"D2 test capture: verifying the Buzz→DKG SWM path on the production context graph. This thread is integration test data.\""
+    },
+    {
+      "subject": "urn:nostr:event:60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff",
+      "predicate": "https://w3id.org/buzz-dkg/nostr#sig",
+      "object": "\"f8036a410a38d472f0933d16a9b15165f96643a5652b70c63a571edc4c998f51b56b69a91eb504a6edfed14356ec7911146c1449194044a4d92307cade6cf366\""
+    },
+    {
+      "subject": "urn:nostr:event:60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff",
+      "predicate": "https://w3id.org/buzz-dkg/nostr#tags",
+      "object": "\"[[\\\"h\\\",\\\"56059d1d-77bb-4d94-af79-97bb30547ac8\\\"]]\""
+    },
+    {
+      "subject": "urn:nostr:event:60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff",
+      "predicate": "https://w3id.org/buzz-dkg/nostr#threadIndex",
+      "object": "\"0\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+    },
+    {
+      "subject": "urn:nostr:event:60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff",
+      "predicate": "http://www.w3.org/ns/prov#wasAttributedTo",
+      "object": "urn:nostr:pubkey:7b20d5265af65543cbe6192e1665f8f0730004622c111c381d163cde53ae5bc5"
+    },
+    {
+      "subject": "urn:nostr:event:fb88df35fbe4761a49f13733fe407dfe72706fce9b243e438e5a269b327898b1",
+      "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+      "object": "https://w3id.org/buzz-dkg/nostr#Event"
+    },
+    {
+      "subject": "urn:nostr:event:fb88df35fbe4761a49f13733fe407dfe72706fce9b243e438e5a269b327898b1",
+      "predicate": "https://w3id.org/buzz-dkg/nostr#kind",
+      "object": "\"9\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+    },
+    {
+      "subject": "urn:nostr:event:fb88df35fbe4761a49f13733fe407dfe72706fce9b243e438e5a269b327898b1",
+      "predicate": "https://w3id.org/buzz-dkg/nostr#createdAt",
+      "object": "\"2026-07-26T10:55:24.000Z\"^^<http://www.w3.org/2001/XMLSchema#dateTime>"
+    },
+    {
+      "subject": "urn:nostr:event:fb88df35fbe4761a49f13733fe407dfe72706fce9b243e438e5a269b327898b1",
+      "predicate": "https://w3id.org/buzz-dkg/nostr#content",
+      "object": "\"DECISION: buzz-dkg-integration D2 test payload — confirm one KA reaches Shared Working Memory with full provenance, then stop.\""
+    },
+    {
+      "subject": "urn:nostr:event:fb88df35fbe4761a49f13733fe407dfe72706fce9b243e438e5a269b327898b1",
+      "predicate": "https://w3id.org/buzz-dkg/nostr#sig",
+      "object": "\"b87316ff406e0ad98f57fbc3126d5eef94a25538fb6f01cb0036a4f40ae4f4a8e3c76ee83d4c71cb980e796ad3033d4f28961ee8ee8b1b88f56919af1815265e\""
+    },
+    {
+      "subject": "urn:nostr:event:fb88df35fbe4761a49f13733fe407dfe72706fce9b243e438e5a269b327898b1",
+      "predicate": "https://w3id.org/buzz-dkg/nostr#tags",
+      "object": "\"[[\\\"h\\\",\\\"56059d1d-77bb-4d94-af79-97bb30547ac8\\\"],[\\\"e\\\",\\\"60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff\\\",\\\"\\\",\\\"reply\\\"]]\""
+    },
+    {
+      "subject": "urn:nostr:event:fb88df35fbe4761a49f13733fe407dfe72706fce9b243e438e5a269b327898b1",
+      "predicate": "https://w3id.org/buzz-dkg/nostr#threadIndex",
+      "object": "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>"
+    },
+    {
+      "subject": "urn:nostr:event:fb88df35fbe4761a49f13733fe407dfe72706fce9b243e438e5a269b327898b1",
+      "predicate": "http://www.w3.org/ns/prov#wasAttributedTo",
+      "object": "urn:nostr:pubkey:7b20d5265af65543cbe6192e1665f8f0730004622c111c381d163cde53ae5bc5"
+    },
+    {
+      "subject": "urn:nostr:event:fb88df35fbe4761a49f13733fe407dfe72706fce9b243e438e5a269b327898b1",
+      "predicate": "https://w3id.org/buzz-dkg/buzz#inThreadOf",
+      "object": "urn:nostr:event:60fe7bc1f5263b06480101d567f06b74518fc69258f3712dfd46ddef6743e5ff"
+    },
+    {
+      "subject": "urn:nostr:pubkey:7b20d5265af65543cbe6192e1665f8f0730004622c111c381d163cde53ae5bc5",
+      "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+      "object": "http://www.w3.org/ns/prov#Agent"
+    },
+    {
+      "subject": "urn:nostr:pubkey:7b20d5265af65543cbe6192e1665f8f0730004622c111c381d163cde53ae5bc5",
+      "predicate": "https://w3id.org/buzz-dkg/nostr#pubkeyHex",
+      "object": "\"7b20d5265af65543cbe6192e1665f8f0730004622c111c381d163cde53ae5bc5\""
+    },
+    {
+      "subject": "urn:nostr:pubkey:181e08ed958919ec4732d0fa4e7daad8f4860bc25986f6db78f28735fec1bab1",
+      "predicate": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+      "object": "http://www.w3.org/ns/prov#SoftwareAgent"
+    }
+  ]
+}

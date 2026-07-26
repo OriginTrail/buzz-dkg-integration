@@ -48,3 +48,11 @@
 - Authorized write done: channel dkg-test (56059d1d-77bb-4d94-af79-97bb30547ac8) created on local relay, service is owner-member; zero other Buzz events.
 - Production recheck + FIFA dry run NO-GO: okf-mainnet still stopped (verified live, read-only); not started per §4.10/D1 authority. Ready-to-run recheck command list + proposed KA (digest plan) in GATE_D1_REPORT.md.
 - D2 NO-GO pending node up + FIFA CG designation; D3 NO-GO (publisher identity) unchanged.
+
+### Gate D1 — COMPLETE (2026-07-26)
+- Operator authorized node start + delegated FIFA designation + discretionary thread/promoter. okf-mainnet resumed per documented recipe (proxy-first held), healthy: v10.0.8, base:8453, 5 peers.
+- §8 recheck confirmed live: hasIdentity=false, publisher disabled (D3 NO-GO stands); wallets read (0x633E… 0.0035 ETH / 113 TRAC).
+- FIFA CG unambiguous among 494: 0x633E…e2Ab/fifa-world-cup-2026, onChainId 7 (matches Gate A "cg 7"), public, synced, caller=curator+allowed → designated.
+- Dry run (no-post): 2 FIFA answers with resolved VM citations (Result: Argentina 2-0 Austria ← urn:wc2026:result:537399), 1 refusal; 9/9 queries scoped to the one CG. Retriever generalized: optional description w/ name fallback, two-pass conjunctive retrieval, unquoting (48 tests green).
+- dkg-test: author+promoter members added; 2-message test thread posted (root 60fe7bc1…); concrete D2 payload (37 quads) in docs/gates/d2-proposed-payload.json; digest 8a4599b3…, payload sha bdba3972….
+- D2 GO pending operator approval reference. Stopped per spec.
