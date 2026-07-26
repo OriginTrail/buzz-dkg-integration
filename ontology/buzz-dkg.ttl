@@ -1,0 +1,76 @@
+@prefix rdf:    <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:   <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:    <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
+@prefix prov:   <http://www.w3.org/ns/prov#> .
+@prefix schema: <http://schema.org/> .
+@prefix buzz:   <https://w3id.org/buzz-dkg/buzz#> .
+@prefix nostr:  <https://w3id.org/buzz-dkg/nostr#> .
+
+# ── Buzz × DKG integration — minimal ontology (SPEC §4.9, §5) ────────────────
+# PROV-O plus a thin buzz:/nostr: vocabulary. One root decision/claim cluster
+# per Knowledge Asset (single root subject URI of type buzz:DecisionCluster).
+#
+# Resource URI forms (chosen because raw hex event ids / pubkeys are not valid
+# IRIs on their own — SPEC §5):
+#   Nostr event   urn:nostr:event:<64-hex-event-id>
+#   Nostr pubkey  urn:nostr:pubkey:<64-hex-pubkey>
+#   Buzz channel  urn:buzz:channel:<uuid>
+#   KA root       urn:buzz-dkg:decision:<source-set-sha256>
+#   Activity      urn:buzz-dkg:distillation:<source-set-sha256>
+
+<https://w3id.org/buzz-dkg> a owl:Ontology ;
+    rdfs:label "Buzz–DKG integration vocabulary" ;
+    rdfs:comment "Thin vocabulary mapping signed Buzz (Nostr/NIP-29) room conversations to OriginTrail DKG knowledge assets with PROV-O provenance." .
+
+# ── Classes ──────────────────────────────────────────────────────────────────
+
+buzz:DecisionCluster a owl:Class ;
+    rdfs:subClassOf prov:Entity ;
+    rdfs:label "Decision cluster" ;
+    rdfs:comment "The single root subject of one KA: a decision or claim cluster distilled from a Buzz thread." .
+
+buzz:Distillation a owl:Class ;
+    rdfs:subClassOf prov:Activity ;
+    rdfs:label "Distillation" ;
+    rdfs:comment "The activity that turned a set of signed source events into a decision cluster (prov:used each source; prov:wasAssociatedWith the service identity)." .
+
+nostr:Event a owl:Class ;
+    rdfs:label "Nostr event" ;
+    rdfs:comment "Snapshot of one signed Nostr event. Buzz is not append-only (NIP-09/9005 soft deletes — SPEC §12), so the KA carries the full signed material: kind, created_at, content, tags, sig." .
+
+# ── Properties on the decision cluster ───────────────────────────────────────
+
+buzz:channel a owl:ObjectProperty ;
+    rdfs:domain buzz:DecisionCluster ;
+    rdfs:comment "The Buzz channel (urn:buzz:channel:<uuid>) the source thread lives in." .
+
+buzz:sourceSetDigest a owl:DatatypeProperty ;
+    rdfs:domain buzz:DecisionCluster ; rdfs:range xsd:string ;
+    rdfs:comment "sha256 (hex) over the canonical serialization of the exact source-event set, sorted by event id. Deterministic: same sources ⇒ same digest ⇒ same KA root URI." .
+
+buzz:sourceEventCount a owl:DatatypeProperty ;
+    rdfs:domain buzz:DecisionCluster ; rdfs:range xsd:integer .
+
+buzz:inThreadOf a owl:ObjectProperty ;
+    rdfs:domain nostr:Event ; rdfs:range nostr:Event ;
+    rdfs:comment "Links a reply snapshot to its thread root snapshot." .
+
+# ── Properties on event snapshots ────────────────────────────────────────────
+
+nostr:kind        a owl:DatatypeProperty ; rdfs:domain nostr:Event ; rdfs:range xsd:integer .
+nostr:createdAt   a owl:DatatypeProperty ; rdfs:domain nostr:Event ; rdfs:range xsd:dateTime .
+nostr:content     a owl:DatatypeProperty ; rdfs:domain nostr:Event ; rdfs:range xsd:string .
+nostr:sig         a owl:DatatypeProperty ; rdfs:domain nostr:Event ; rdfs:range xsd:string ;
+    rdfs:comment "BIP-340 Schnorr signature over the canonical event form; verifiable against the author pubkey independent of the relay." .
+nostr:tags        a owl:DatatypeProperty ; rdfs:domain nostr:Event ; rdfs:range xsd:string ;
+    rdfs:comment "JSON-serialized tag array, preserved verbatim for signature re-verification." .
+nostr:threadIndex a owl:DatatypeProperty ; rdfs:domain nostr:Event ; rdfs:range xsd:integer ;
+    rdfs:comment "0-based position in deterministic thread order (created_at, then event id)." .
+nostr:pubkeyHex   a owl:DatatypeProperty ; rdfs:range xsd:string .
+
+# Reused external terms (no redefinition): prov:wasDerivedFrom, prov:used,
+# prov:wasGeneratedBy, prov:wasAssociatedWith, prov:wasAttributedTo,
+# prov:startedAtTime, prov:endedAtTime, schema:name, schema:description
+# (schema:name/description double as the daemon's semantic-search surface —
+# /api/memory/search indexes them).
