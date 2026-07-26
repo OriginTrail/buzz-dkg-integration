@@ -59,3 +59,8 @@
 
 ### Publisher identity (2026-07-26, operator-ordered)
 - createProfile via node's own adapter (stakeAmount 0): tx 0x8fe764cf…, block 49142839, success; ambiguous receipt recovered by read-back. identityId 65; daemon wired via /api/identity/ensure → hasIdentity true. D3 identity blocker cleared.
+
+### Gate D2 — COMPLETE (2026-07-26)
+- Operator approved (receipt posting included). Preflight all-green (narrow CG routes after broad-list 500; payload hash serialization equivalence proven via git before proceeding — first run correctly NO-GO'd).
+- One lifecycle executed on production: buzz-dkg-8a4599b36c1d → 37 quads → finalize (merkle 0x1a87d6c0…) → full SWM share into FIFA CG (shareOp ms1vxxmo-1lfilj, publishReady). Verified: descriptor promoted/SWM, scoped SWM query shows root+digest+prov chain, NO VM UAL.
+- Receipt posted in dkg-test: b02446d7…. D3 identifier block recorded in GATE_D2_REPORT.md. Stopped per spec.
