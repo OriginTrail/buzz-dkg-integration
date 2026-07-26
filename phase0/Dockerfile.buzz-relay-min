@@ -1,0 +1,17 @@
+# Minimal buzz-relay image from the pinned block/buzz checkout (dd222a5).
+# The upstream Dockerfile builds relay+admin+pair-relay in parallel and OOMs
+# in a 2 GB Docker VM; this builds only buzz-relay, single-job.
+# No web bundle (/ui) — the spike drives the relay over Nostr/HTTP only.
+FROM rust:1.95-bookworm AS builder
+WORKDIR /build
+COPY . .
+ENV CARGO_BUILD_JOBS=1
+RUN cargo build --release --locked -p buzz-relay --bin buzz-relay \
+    && strip target/release/buzz-relay
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/target/release/buzz-relay /usr/local/bin/buzz-relay
+EXPOSE 3000
+ENTRYPOINT ["/usr/local/bin/buzz-relay"]

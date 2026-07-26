@@ -32,7 +32,8 @@ const CHANNEL_NAME = process.env.BDI_CHANNEL || 'dkg-spike';
 const ALLOW_TEST_PUBLISH = process.env.BDI_ALLOW_TEST_PUBLISH === '1';
 const APPROVAL_EMOJI = '✅'; // ✅
 
-const dkgToken = readFileSync(DKG_TOKEN_PATH, 'utf8').trim();
+const dkgToken = readFileSync(DKG_TOKEN_PATH, 'utf8')
+  .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')).pop();
 const author = new BuzzClient({ baseUrl: BUZZ_HTTP, secretKeyHex: env.BDI_SPIKE_AUTHOR_KEY });
 const member = new BuzzClient({ baseUrl: BUZZ_HTTP, secretKeyHex: env.BDI_SPIKE_MEMBER_KEY });
 const service = new BuzzClient({ baseUrl: BUZZ_HTTP, secretKeyHex: env.BDI_SPIKE_SERVICE_KEY });

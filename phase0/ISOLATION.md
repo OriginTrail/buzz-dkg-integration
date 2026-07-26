@@ -41,7 +41,8 @@ Date: 2026-07-26. Requirement: SPEC.md Stage B — prove the test stack shares n
 | Compose project/network | `bdi-spike` / `bdi-spike-net` (fresh bridge network) |
 | Postgres | postgres:17-alpine, **no host port**, fresh named volume `bdi-spike-pg` |
 | Redis | redis:7-alpine, **no host port** |
-| Relay | `buzz-relay:dd222a5`, host `127.0.0.1:9440 → 3000`; health/metrics unpublished |
+| Relay | `buzz-relay` built from the pinned checkout. Two equivalent variants: container `buzz-relay:dd222a5` (`127.0.0.1:9440 → 3000`) or host process (`run-relay-host.sh`: bind 127.0.0.1:9440, health 9442, metrics 9443, DB/Redis via loopback 15442/15443). The host variant exists because the 2 GB Docker VM OOMs on the upstream multi-binary image build. |
+| Postgres/Redis loopback publish (host-relay variant) | `127.0.0.1:15442 → 5432`, `127.0.0.1:15443 → 6379` (both in the verified-free set) |
 | Relay key | fixed throwaway `BUZZ_RELAY_PRIVATE_KEY` (generated for the spike, never reused, committed nowhere) |
 | Buzz identities | fresh throwaway Nostr keypairs for: human author, second member, service bot, authorized promoter — generated for the spike only |
 

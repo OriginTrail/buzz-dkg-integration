@@ -12,6 +12,10 @@ services:
       POSTGRES_DB: buzz
     volumes:
       - bdi-spike-pg:/var/lib/postgresql/data
+    # Published on loopback for the host-process relay variant (see README);
+    # 15442 is in the ISOLATION.md reserved-free set.
+    ports:
+      - "127.0.0.1:15442:5432"
     networks: [bdi-spike-net]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U buzz"]
@@ -21,6 +25,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    ports:
+      - "127.0.0.1:15443:6379"
     networks: [bdi-spike-net]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

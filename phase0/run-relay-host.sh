@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Host-process variant of the spike relay (see ISOLATION.md; container variant
+# in docker-compose.spike.yml). Binary: pinned checkout target/release/buzz-relay.
+set -euo pipefail
+PHASE0="$(cd "$(dirname "$0")" && pwd)"
+set -a; source "$PHASE0/.env.spike"; set +a
+export DATABASE_URL="postgres://buzz:bdi_spike_pg@127.0.0.1:15442/buzz"
+export REDIS_URL="redis://127.0.0.1:15443"
+export BUZZ_BIND_ADDR="127.0.0.1:9440"
+export BUZZ_HEALTH_PORT="9442"
+export BUZZ_METRICS_PORT="9443"
+export BUZZ_RELAY_PRIVATE_KEY="$BDI_SPIKE_RELAY_KEY"
+exec "$HOME/code/upstream-pins/buzz/target/release/buzz-relay"
