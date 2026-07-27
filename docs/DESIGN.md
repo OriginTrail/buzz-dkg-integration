@@ -67,9 +67,14 @@ service-authored receipt (op lookup by receipt id) · 3 receipt carries
 KA+digest (parsed back and compared) · 4 channel↔CG unchanged · 5 descriptor
 `promoted`/SWM · 6 approval consumed exactly once (SQL UNIQUE claim) ·
 7 not already published (op state + descriptor) · 8 `publishMode` gate ·
-9 stage authority: only `disabled|devnet` exist in code; a mainnet mode is
-deliberately unimplemented until SPEC §0 D3 grants it. `devnet` additionally
-hard-requires the node to report chain `evm:31337` at startup AND at publish.
+9 stage authority: `publishMode` ∈ `disabled|devnet|mainnet`. `disabled`
+(default) refuses all publication; `devnet` requires chain `evm:31337`;
+`mainnet` requires chain `base:8453` AND stays under a rolling-24h publication
+budget (`maxPublishesPerDay`). The mode↔chain agreement is checked at startup
+AND again in the approval gate. `mainnet` was enabled after the D-gates proved
+the on-chain path end-to-end (real UAL) and the operator granted standing
+authority (2026-07-27); it is the single-node production posture, so the
+devnet scaffolding was retired.
 
 ## §7 grounded answering — where each clause lives
 

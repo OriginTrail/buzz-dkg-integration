@@ -216,6 +216,16 @@ export class Registry {
     this.db.prepare(`UPDATE ops SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
   }
 
+  /** Publications whose op reached published/vm_receipted within the window (mainnet budget). */
+  countRecentPublishes(windowMs: number): number {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM ops WHERE state IN ('published', 'vm_receipted') AND updated_at > ?",
+      )
+      .get(Date.now() - windowMs) as { n: number };
+    return row.n;
+  }
+
   pendingOps(): OpRecord[] {
     const rows = this.db
       .prepare("SELECT * FROM ops WHERE state NOT IN ('receipted', 'vm_receipted', 'failed')")

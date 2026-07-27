@@ -23,6 +23,7 @@ function setup(overrides: Partial<DaemonConfig> = {}) {
     dkgToken: 'mock',
     approvalEmoji: '✅',
     publishMode: 'devnet',
+    maxPublishesPerDay: 5,
     dbPath: ':memory:',
     bindings: [{ channelId: 'chan', contextGraphId: 'devnet-test', promoters: [promoter] }],
     ...overrides,
@@ -173,7 +174,7 @@ describe('daemon crash recovery (§9)', () => {
 });
 
 describe('daemon approval flow (§6)', () => {
-  async function captured(publishMode: 'devnet' | 'disabled' = 'devnet') {
+  async function captured(publishMode: 'devnet' | 'disabled' | 'mainnet' = 'devnet') {
     const ctx = setup({ publishMode });
     const { pin, digest } = pinnedThread(ctx.relay);
     await ctx.daemon.start(); // uses mocks; also validates CG existence
@@ -236,6 +237,49 @@ describe('daemon approval flow (§6)', () => {
     relay.ingest(thumbs, wrongTarget);
     await process(daemon, thumbs, wrongTarget);
     expect([...dkg.kas.values()].every((k) => k.publishes === 0)).toBe(true);
+  });
+
+  it('publishMode=mainnet publishes on base:8453 within the daily budget', async () => {
+    const ctx = setup({ publishMode: 'mainnet' });
+    ctx.dkg.chainId = 'base:8453';
+    const { pin } = pinnedThread(ctx.relay);
+    await ctx.daemon.start();
+    await process(ctx.daemon, pin);
+    const receiptId = ctx.relay.sent[0]!.eventId;
+    const approval = makeEvent({
+      kind: 7,
+      pubkey: promoter,
+      content: '✅',
+      tags: [['e', receiptId]],
+    });
+    ctx.relay.ingest(approval);
+    await process(ctx.daemon, approval);
+    expect([...ctx.dkg.kas.values()].some((k) => k.publishes === 1)).toBe(true);
+    expect(ctx.relay.sent[1]!.content).toContain('UAL:');
+  });
+
+  it('publishMode=mainnet refuses when the rolling 24h budget is exhausted', async () => {
+    const ctx = setup({ publishMode: 'mainnet', maxPublishesPerDay: 0 });
+    ctx.dkg.chainId = 'base:8453';
+    const { pin } = pinnedThread(ctx.relay);
+    await ctx.daemon.start();
+    await process(ctx.daemon, pin);
+    const receiptId = ctx.relay.sent[0]!.eventId;
+    const approval = makeEvent({
+      kind: 7,
+      pubkey: promoter,
+      content: '✅',
+      tags: [['e', receiptId]],
+    });
+    ctx.relay.ingest(approval);
+    await process(ctx.daemon, approval);
+    expect([...ctx.dkg.kas.values()].every((k) => k.publishes === 0)).toBe(true);
+    expect(ctx.daemon.registry.approvalOutcome(approval.id)?.outcome).toBe('rejected');
+  });
+
+  it('publishMode=mainnet refuses to start on a non-mainnet chain', async () => {
+    const ctx = setup({ publishMode: 'mainnet' }); // MockDkg default chain is evm:31337
+    await expect(ctx.daemon.start()).rejects.toThrow(/refusing to start/);
   });
 
   it('publishMode=disabled recognizes the approval but refuses publication (§6.8)', async () => {

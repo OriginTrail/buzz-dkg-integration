@@ -44,9 +44,10 @@ export function parseBindings(raw: string): ChannelBinding[] {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
   const publishMode = (env.BDI_PUBLISH_MODE ?? 'disabled') as PublishMode;
-  if (!['disabled', 'devnet'].includes(publishMode)) {
-    // 'mainnet' is not a valid value on purpose — that authority arrives with SPEC §0 D3.
-    throw new Error(`BDI_PUBLISH_MODE must be 'disabled' or 'devnet', got '${publishMode}'`);
+  if (!['disabled', 'devnet', 'mainnet'].includes(publishMode)) {
+    throw new Error(
+      `BDI_PUBLISH_MODE must be 'disabled', 'devnet' or 'mainnet', got '${publishMode}'`,
+    );
   }
   const dkgToken =
     env.BDI_DKG_TOKEN ?? parseTokenFile(readFileSync(required('BDI_DKG_TOKEN_PATH'), 'utf8'));
@@ -60,6 +61,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     dkgToken,
     approvalEmoji: env.BDI_APPROVAL_EMOJI ?? '✅',
     publishMode,
+    maxPublishesPerDay: Number(env.BDI_MAX_PUBLISHES_PER_DAY ?? 5),
     dbPath: env.BDI_DB_PATH ?? './data/daemon.db',
     bindings: parseBindings(readFileSync(required('BDI_BINDINGS_PATH'), 'utf8')),
   };

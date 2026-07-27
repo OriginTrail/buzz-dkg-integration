@@ -71,7 +71,7 @@ export interface EvidenceRecord {
   view?: 'verifiable-memory' | 'shared-working-memory';
 }
 
-export type PublishMode = 'disabled' | 'devnet';
+export type PublishMode = 'disabled' | 'devnet' | 'mainnet';
 
 export interface DaemonConfig {
   relayHttpUrl: string;
@@ -83,12 +83,15 @@ export interface DaemonConfig {
   approvalEmoji: string;
   /**
    * VM publication authority. 'disabled' (default): approvals are recognized,
-   * §6 invariants evaluated, but publication is refused — production posture
-   * for stage ABC. 'devnet': publication allowed ONLY when the connected node
-   * reports the local devnet chain (evm:31337). A 'mainnet' mode is
-   * deliberately NOT implemented — that authority arrives with SPEC §0 D3.
+   * §6 invariants evaluated, but publication is refused. 'devnet': publication
+   * only when the node reports the local devnet chain (evm:31337). 'mainnet':
+   * publication only when the node reports base:8453, additionally bounded by
+   * maxPublishesPerDay — operator-enabled post-D3 (D-gates proved the path;
+   * the operator granted standing mainnet authority on 2026-07-27).
    */
   publishMode: PublishMode;
+  /** mainnet guardrail: max daemon-initiated publications per rolling 24 h. */
+  maxPublishesPerDay: number;
   dbPath: string;
   bindings: ChannelBinding[];
 }

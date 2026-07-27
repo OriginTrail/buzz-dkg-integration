@@ -22,6 +22,7 @@ import type { DaemonConfig, NostrEvent, OpRecord } from './types.ts';
 
 const CATCHUP_OVERLAP_S = 60;
 const DEVNET_CHAIN = 'evm:31337';
+const MAINNET_CHAIN = 'base:8453';
 
 export class Daemon {
   readonly config: DaemonConfig;
@@ -78,6 +79,11 @@ export class Daemon {
     if (this.config.publishMode === 'devnet' && this.#chainId !== DEVNET_CHAIN) {
       throw new Error(
         `publishMode=devnet requires chain ${DEVNET_CHAIN}, node reports '${this.#chainId}' — refusing to start`,
+      );
+    }
+    if (this.config.publishMode === 'mainnet' && this.#chainId !== MAINNET_CHAIN) {
+      throw new Error(
+        `publishMode=mainnet requires chain ${MAINNET_CHAIN}, node reports '${this.#chainId}' — refusing to start`,
       );
     }
     // Verify every bound context graph exists before serving (§7.2 fail early).
@@ -377,17 +383,27 @@ export class Daemon {
     // §6.7 not already published
     if (op.state !== 'receipted' || op.ual)
       return reject('KA already published or in publish flow');
-    // §6.8 environment permits publication
-    if (this.config.publishMode !== 'devnet') {
+    // §6.8 environment permits publication: mode ↔ chain must agree.
+    if (this.config.publishMode === 'disabled') {
+      return reject(`publication disabled (publishMode=disabled)`);
+    }
+    const requiredChain = this.config.publishMode === 'mainnet' ? MAINNET_CHAIN : DEVNET_CHAIN;
+    if (this.#chainId !== requiredChain) {
       return reject(
-        `publication disabled (publishMode=${this.config.publishMode}; SPEC stage ABC)`,
+        `connected chain '${this.#chainId}' does not match publishMode=${this.config.publishMode} (requires ${requiredChain})`,
       );
     }
-    if (this.#chainId !== DEVNET_CHAIN) {
-      return reject(`connected chain '${this.#chainId}' is not the devnet chain`);
+    // Mainnet guardrail: rolling 24 h publication budget (operator-set).
+    if (this.config.publishMode === 'mainnet') {
+      const recent = this.registry.countRecentPublishes(24 * 60 * 60 * 1000);
+      if (recent >= this.config.maxPublishesPerDay) {
+        return reject(
+          `mainnet publish budget exhausted (${recent}/${this.config.maxPublishesPerDay} in 24h)`,
+        );
+      }
     }
-    // §6.9 stage authorization is the publishMode gate itself: only 'devnet'
-    // exists in this codebase; mainnet authority arrives with SPEC §0 D3.
+    // §6.9 stage authorization is the publishMode gate: 'mainnet' exists only
+    // because the operator granted standing authority post-D3 (2026-07-27).
 
     // §6.6 consume exactly once — the INSERT is the atomic claim.
     if (!this.registry.recordApproval(event.id, op.id, 'consumed')) {
