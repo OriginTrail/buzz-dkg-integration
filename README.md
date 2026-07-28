@@ -141,16 +141,16 @@ alongside them.
    free and touches no chain:
 
    ```bash
-   dkg context-graph create fifa-world-cup-2026
+   dkg context-graph create my-room        # any name you like
    ```
 
-   A bare slug is auto-prefixed with your node's agent address, so the printed
-   `ID:` line is the production form `0x<CuratorAddress>/<name>` — e.g.
-   `0x633E5a7C5e612d9981538F60D824cC03be97e2Ab/fifa-world-cup-2026`. Copy that
-   line **verbatim** into `bindings.json`: the id is matched as an exact IRI, so
-   the checksummed casing and the full address both matter. `dkg context-graph
-   list` reprints it. (The `devnet-test` example below is only valid on the
-   isolated devnet.)
+   The graph is created under **your own** node's agent address: a bare slug is
+   auto-prefixed, so the printed `ID:` line comes back as
+   `0x<YourAgentAddress>/my-room`. Copy **that** line into `bindings.json` — the
+   id is matched as an exact IRI, so the checksummed casing and your full
+   address both matter, and an address copied from anywhere else will fail the
+   startup probe. `dkg context-graph list` reprints it. (The `devnet-test`
+   example below is only valid on the isolated devnet.)
 
 5. **Provide the DKG token.** The node generates a bearer token on first start
    and writes it to `~/.dkg/auth.token` — a comment header plus the token on the
