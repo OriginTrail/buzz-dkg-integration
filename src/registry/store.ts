@@ -205,7 +205,9 @@ export class Registry {
     const row = this.db.prepare('SELECT state FROM ops WHERE id = ?').get(opId) as
       { state: OpState } | undefined;
     if (!row) throw new Error(`op ${opId} not found`);
-    if (to !== 'failed') {
+    // 'failed' and 'publish_unconfirmed' are terminal off-track states reachable
+    // from any non-terminal state; everything else must move strictly forward.
+    if (to !== 'failed' && to !== 'publish_unconfirmed') {
       const from = orderIdx.indexOf(row.state);
       const target = orderIdx.indexOf(to);
       if (from === -1 || target <= from) {
@@ -224,14 +226,16 @@ export class Registry {
 
   /**
    * Publications counting against the rolling mainnet budget. Includes
-   * 'publishing' — the intent persisted BEFORE the on-chain call — so spend is
-   * reserved rather than recorded after the fact. A crash between publish and
-   * persist otherwise strands a paid publish outside the ceiling (§ review #11).
+   * 'publishing' (intent reserved BEFORE the on-chain call) and
+   * 'publish_unconfirmed' (an attempt whose confirmation is unknown — gas may
+   * already have been spent), so a stranded or ambiguous publish still consumes
+   * the ceiling rather than reading as 0 (§ review #11 + the 502 budget-release
+   * follow-up).
    */
   countRecentPublishes(windowMs: number): number {
     const row = this.db
       .prepare(
-        "SELECT COUNT(*) AS n FROM ops WHERE state IN ('publishing', 'published', 'vm_receipted') AND updated_at > ?",
+        "SELECT COUNT(*) AS n FROM ops WHERE state IN ('publishing', 'published', 'vm_receipted', 'publish_unconfirmed') AND updated_at > ?",
       )
       .get(Date.now() - windowMs) as { n: number };
     return row.n;
@@ -239,7 +243,9 @@ export class Registry {
 
   pendingOps(): OpRecord[] {
     const rows = this.db
-      .prepare("SELECT * FROM ops WHERE state NOT IN ('receipted', 'vm_receipted', 'failed')")
+      .prepare(
+        "SELECT * FROM ops WHERE state NOT IN ('receipted', 'vm_receipted', 'failed', 'publish_unconfirmed')",
+      )
       .all();
     return rows.map((r) => toOp(r as Record<string, unknown>));
   }

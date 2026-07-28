@@ -1,0 +1,6 @@
+# Keep LF in the repo so `prettier --check` (endOfLine: lf) passes on a Windows
+# clone with core.autocrlf=true.
+* text=auto eol=lf
+*.png binary
+*.gif binary
+*.jpg binary

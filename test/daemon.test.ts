@@ -296,9 +296,12 @@ describe('daemon approval flow (§6)', () => {
     expect(daemon.registry.approvalOutcome(approval.id)?.outcome).toBe('rejected');
   });
 
-  it('recovers a lost publish response via descriptor read-back, never retries blindly', async () => {
+  it('an ambiguous publish (lost/errored response) is recorded unconfirmed, never announced', async () => {
+    // The descriptor cannot distinguish a confirmed tx from a tentative one, so
+    // a response we can't read as confirmed must NOT be announced as anchored
+    // and must NOT be retried blindly (review R1) — it is terminal + budget-counted.
     const { daemon, relay, dkg, receiptId, digest } = await captured();
-    dkg.failPublishButSucceed = true; // publish lands but the response is lost
+    dkg.failPublishButSucceed = true; // publish() throws; confirmation unknown
     const approval = makeEvent({
       kind: 7,
       pubkey: promoter,
@@ -308,12 +311,14 @@ describe('daemon approval flow (§6)', () => {
     relay.ingest(approval);
     await process(daemon, approval);
     const kaName = kaNameForDigest(digest);
-    expect(dkg.kas.get(kaName)!.publishes).toBe(1); // exactly one attempt
+    expect(dkg.kas.get(kaName)!.publishes).toBe(1); // exactly one attempt, never retried
+    const op = daemon.registry.opByTrigger(daemon.registry.opByReceipt(receiptId)!.triggerEventId)!;
+    expect(op.state).toBe('publish_unconfirmed');
+    expect(op.ual).toBeNull();
     expect(relay.sent).toHaveLength(2);
-    expect(relay.sent[1]!.content).toContain('UAL: did:dkg:evm:31337/0xmock/');
-    expect(
-      daemon.registry.opByTrigger(daemon.registry.opByReceipt(receiptId)!.triggerEventId)!.state,
-    ).toBe('vm_receipted');
+    expect(relay.sent[1]!.content).not.toContain('UAL:');
+    expect(relay.sent[1]!.content).toMatch(/did not return a confirmed result/);
+    expect(daemon.registry.countRecentPublishes(24 * 60 * 60 * 1000)).toBe(1); // counts toward budget
   });
 });
 

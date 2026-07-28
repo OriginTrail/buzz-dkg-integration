@@ -165,8 +165,8 @@ describe('daemon ask replay-safety (review #6)', () => {
   });
 });
 
-describe('daemon publish crash-window recovery (review #11)', () => {
-  it('resumes a "publishing" op via descriptor read-back without re-publishing', async () => {
+describe('daemon publish-path regressions (review R1/R2)', () => {
+  it('recovery of an in-flight "publishing" op never re-publishes and never announces a UAL', async () => {
     const { daemon, relay, dkg } = setup();
     const { pin, digest } = pinnedThread(relay);
     await daemon.start();
@@ -175,8 +175,9 @@ describe('daemon publish crash-window recovery (review #11)', () => {
     const kaName = kaNameForDigest(digest);
     const op = daemon.registry.opByReceipt(receiptId)!;
 
-    // Simulate: publish() succeeded on the node, then the process died BEFORE
-    // persisting 'published'. Reserve intent + stamp the node as published.
+    // Crash left the op reserved. The node even stamped state='published' — as
+    // it does for a TENTATIVE tx too — so a descriptor read would falsely
+    // "confirm" it (R1), and re-publishing would bypass every §6 gate (R2).
     const approval = makeEvent({
       kind: 7,
       pubkey: promoter,
@@ -190,10 +191,146 @@ describe('daemon publish crash-window recovery (review #11)', () => {
     const sentBefore = relay.sent.length;
     await daemon.recover();
 
-    expect(dkg.kas.get(kaName)!.publishes).toBe(0); // never re-published
+    expect(dkg.kas.get(kaName)!.publishes).toBe(0); // R2: never re-published on boot
+    const fresh = daemon.registry.opByTrigger(pin.id)!;
+    expect(fresh.state).toBe('publish_unconfirmed'); // R1: not announced from descriptor
+    expect(fresh.ual).toBeNull();
+    expect(relay.sent.length).toBe(sentBefore + 1);
+    expect(relay.sent.at(-1)!.content).not.toContain('UAL:');
+  });
+
+  it('a tentative (HTTP 502) publish is never announced, has no dead-end instruction, counts to budget', async () => {
+    const { daemon, relay, dkg } = setup({ publishMode: 'mainnet', maxPublishesPerDay: 5 });
+    dkg.chainId = 'base:8453';
+    const { pin } = pinnedThread(relay);
+    await daemon.start();
+    await run(daemon, pin);
+    const receiptId = relay.sent[0]!.eventId;
+    // Node maps a tentative publish to HTTP 502 to avoid a silent downgrade.
+    dkg.publish = (async () => {
+      const e = new Error('tentative') as Error & { status?: number };
+      e.status = 502;
+      throw e;
+    }) as never;
+    const approval = makeEvent({
+      kind: 7,
+      pubkey: promoter,
+      content: '✅',
+      tags: [['e', receiptId]],
+    });
+    relay.ingest(approval);
+    await run(daemon, approval);
+
+    const op = daemon.registry.opByTrigger(pin.id)!;
+    expect(op.state).toBe('publish_unconfirmed');
+    expect(op.ual).toBeNull();
+    expect(relay.sent.at(-1)!.content).not.toContain('UAL:');
+    expect(relay.sent.at(-1)!.content).not.toMatch(/re-add/i); // the dead-end instruction is gone
+    expect(daemon.registry.countRecentPublishes(24 * 60 * 60 * 1000)).toBe(1); // gas may have been spent
+  });
+
+  it('a confirmed publish that failed to receipt is resumed (published -> vm_receipted)', async () => {
+    const { daemon, relay } = setup();
+    const { pin, digest } = pinnedThread(relay);
+    await daemon.start();
+    await run(daemon, pin);
+    const op = daemon.registry.opByReceipt(relay.sent[0]!.eventId)!;
+    // Confirmed publish persisted, but the VM-receipt send crashed.
+    daemon.registry.transition(op.id, 'publishing', {});
+    daemon.registry.transition(op.id, 'published', {
+      ual: `did:dkg:evm:31337/0xmock/${kaNameForDigest(digest)}`,
+    });
+    const sentBefore = relay.sent.length;
+    await daemon.recover();
     expect(daemon.registry.opByTrigger(pin.id)!.state).toBe('vm_receipted');
-    expect(relay.sent.length).toBe(sentBefore + 1); // one VM receipt
+    expect(relay.sent.length).toBe(sentBefore + 1);
     expect(relay.sent.at(-1)!.content).toContain('UAL:');
+  });
+});
+
+describe('daemon budget accounting (review #11 + 502 follow-up)', () => {
+  it('counts both a reserved (publishing) and an unconfirmed publish toward the ceiling', async () => {
+    const { daemon, relay } = setup();
+    const { pin } = pinnedThread(relay);
+    await daemon.start();
+    await run(daemon, pin);
+    const op = daemon.registry.opByReceipt(relay.sent[0]!.eventId)!;
+    daemon.registry.transition(op.id, 'publishing', {});
+    expect(daemon.registry.countRecentPublishes(24 * 60 * 60 * 1000)).toBe(1);
+    daemon.registry.transition(op.id, 'publish_unconfirmed', {});
+    expect(daemon.registry.countRecentPublishes(24 * 60 * 60 * 1000)).toBe(1);
+  });
+});
+
+describe('daemon start fail-closed (review R3)', () => {
+  it('refuses to start when the CG presence probe errors, not just when the CG is absent', async () => {
+    const { daemon, dkg } = setup();
+    dkg.contextGraphExists = (async () => {
+      throw new Error('503 scan-budget');
+    }) as never;
+    await expect(daemon.start()).rejects.toThrow(/refusing to start/);
+  });
+});
+
+describe('daemon §6 invariant coverage (review #13)', () => {
+  async function captured() {
+    const ctx = setup();
+    const { pin, digest } = pinnedThread(ctx.relay);
+    await ctx.daemon.start();
+    await run(ctx.daemon, pin);
+    return { ...ctx, pin, digest, receiptId: ctx.relay.sent[0]!.eventId };
+  }
+  const approve = (receiptId: string) =>
+    makeEvent({ kind: 7, pubkey: promoter, content: '✅', tags: [['e', receiptId]] });
+
+  it('§6.3 rejects when the receipt content no longer matches the recorded KA/digest', async () => {
+    const { daemon, relay, dkg, receiptId } = await captured();
+    const receiptEv = relay.events.find((e) => e.id === receiptId)!;
+    receiptEv.content = receiptEv.content.replace(
+      /source-digest: sha256:[0-9a-f]{64}/,
+      `source-digest: sha256:${'0'.repeat(64)}`,
+    );
+    const a = approve(receiptId);
+    relay.ingest(a);
+    await run(daemon, a);
+    expect([...dkg.kas.values()].every((k) => k.publishes === 0)).toBe(true);
+    expect(daemon.registry.approvalOutcome(a.id)?.outcome).toBe('rejected');
+  });
+
+  it('§6.4 rejects when the channel is re-bound to a different context graph', async () => {
+    const { daemon, relay, dkg, receiptId } = await captured();
+    daemon.registry.loadBindings([
+      { channelId: 'chan', contextGraphId: 'different-cg', promoters: [promoter] },
+    ]);
+    const a = approve(receiptId);
+    relay.ingest(a);
+    await run(daemon, a);
+    expect([...dkg.kas.values()].every((k) => k.publishes === 0)).toBe(true);
+    expect(daemon.registry.approvalOutcome(a.id)?.outcome).toBe('rejected');
+  });
+
+  it('§6.5 rejects when the descriptor is not in finalized+shared SWM state', async () => {
+    const { daemon, relay, dkg, receiptId, digest } = await captured();
+    dkg.kas.get(kaNameForDigest(digest))!.state = 'created';
+    const a = approve(receiptId);
+    relay.ingest(a);
+    await run(daemon, a);
+    expect([...dkg.kas.values()].every((k) => k.publishes === 0)).toBe(true);
+    expect(daemon.registry.approvalOutcome(a.id)?.outcome).toBe('rejected');
+  });
+
+  it('§6.7 rejects a ✅ once the op is already past receipted (guards the double-publish window)', async () => {
+    const { daemon, relay, dkg, receiptId } = await captured();
+    const op = daemon.registry.opByReceipt(receiptId)!;
+    // Op recorded as published while the mock KA stays 'promoted', so §6.5 passes
+    // and §6.7 is the gate that must reject.
+    daemon.registry.transition(op.id, 'publishing', {});
+    daemon.registry.transition(op.id, 'published', { ual: 'did:dkg:evm:31337/0xmock/x' });
+    const a = approve(receiptId);
+    relay.ingest(a);
+    await run(daemon, a);
+    expect([...dkg.kas.values()].every((k) => k.publishes === 0)).toBe(true);
+    expect(daemon.registry.approvalOutcome(a.id)?.outcome).toBe('rejected');
   });
 });
 

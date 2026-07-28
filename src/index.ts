@@ -14,6 +14,12 @@ async function shutdown(sig: string): Promise<void> {
 }
 
 daemon.start().catch((err) => {
-  logger.error('daemon failed to start', { err: String(err) });
+  // `fetch failed` hides the real cause; surface err.cause.code (e.g.
+  // ECONNREFUSED for a wrong BDI_DKG_API port) so the log matches the docs.
+  const cause = (err as { cause?: { code?: string; message?: string } }).cause;
+  logger.error('daemon failed to start', {
+    err: String(err),
+    cause: cause?.code ?? cause?.message,
+  });
   process.exit(1);
 });

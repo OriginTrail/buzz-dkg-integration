@@ -6,7 +6,7 @@
   "description": "Reference integration: Buzz (block/buzz) rooms -> OriginTrail DKG v10 layered memory (WM->SWM->VM) with graph-scoped grounded answering",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=22.9"
+    "node": ">=22.13"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

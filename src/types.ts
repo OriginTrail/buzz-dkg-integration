@@ -35,6 +35,7 @@ export type OpState =
   | 'publishing' // vm/publish intent persisted + budget reserved, BEFORE the call
   | 'published' // VM publish confirmed (devnet only in stage ABC)
   | 'vm_receipted' // VM receipt posted (terminal)
+  | 'publish_unconfirmed' // vm/publish outcome not a confirmed response — terminal, counts toward budget (gas may have been spent), never auto-re-published
   | 'failed';
 
 export interface OpRecord {

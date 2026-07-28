@@ -10,7 +10,7 @@ Canonical specification: [SPEC.md](SPEC.md) · Design: [docs/DESIGN.md](docs/DES
 Verified interfaces: [INTERFACES.md](INTERFACES.md) · Gate reports: `docs/gates/`.
 
 **Status: all stages executed (A–E), 2026-07-26.** Source audit → isolated
-spike → daemon (51 tests, zero-mock acceptance demo) → production validation →
+spike → daemon (61 tests, zero-mock acceptance demo) → production validation →
 one operator-approved SWM share → one operator-approved on-chain publication.
 
 ## Live evidence (Base mainnet)
@@ -59,9 +59,9 @@ one operator-approved SWM share → one operator-approved on-chain publication.
 ## Deploy against an existing relay + node
 
 This is the deployment the integration advertises: you already run (or can
-reach) a Buzz NIP-29 relay and a DKG v10 edge node. Prereqs: **Node ≥ 22.9**
-(the daemon uses `--experimental-strip-types`, a 22.6+ feature, and
-`--env-file-if-exists`, 22.9+).
+reach) a Buzz NIP-29 relay and a DKG v10 edge node. Prereqs: **Node ≥ 22.13**
+(the daemon relies on `node:sqlite`, unflagged in 22.13, plus
+`--experimental-strip-types` (22.6) and `--env-file-if-exists` (22.9)).
 
 1. **Install and configure**
 
@@ -114,7 +114,7 @@ reach) a Buzz NIP-29 relay and a DKG v10 edge node. Prereqs: **Node ≥ 22.9**
 ## Run (isolated stack) — ~10 minutes
 
 Reproduces the full demo end-to-end with no external dependencies.
-Prereqs: Node ≥ 22.9, Docker, pnpm, Rust (for the relay binary).
+Prereqs: Node ≥ 22.13, Docker, pnpm, Rust (for the relay binary).
 
 ```bash
 # 1. Isolated stacks (full details + port map: phase0/ISOLATION.md, phase0/README.md)
@@ -150,7 +150,7 @@ node scripts/acceptance.mjs    # writes docs/acceptance-transcript.md
 ## Development
 
 ```bash
-npm run typecheck && npm run lint && npm test    # 51 tests, no network
+npm run typecheck && npm run lint && npm test    # 61 tests, no network
 npm run format
 ```
 

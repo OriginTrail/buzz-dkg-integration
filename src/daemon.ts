@@ -91,18 +91,19 @@ export class Daemon {
     // Narrow per-CG probe — the broad list route 500s on scan budget for
     // large production nodes (observed live in Gate D2 preflight).
     for (const b of this.config.bindings) {
-      // A probe FAILURE (node registry endpoint 400/500/timeout under sync load)
-      // must not be conflated with a genuine "absent" — only a definitive
-      // {exists:false} response blocks startup. (Demo workaround: the node's
-      // /context-graph/exists route degrades under heavy sync; the CG's per-KA
-      // op endpoints remain healthy.)
-      const ex = await this.dkg.contextGraphExists(b.contextGraphId).catch((err) => {
-        logger.warn('CG presence probe failed; proceeding (endpoint degraded)', {
-          contextGraphId: b.contextGraphId,
-          err: String(err),
-        });
-        return { exists: true };
-      });
+      // Fail closed: a probe FAILURE and a definitive "absent" both block
+      // startup, but with distinct messages so the operator isn't sent after the
+      // wrong problem. (Proceeding on a probe error would defeat the fail-early
+      // binding check entirely — review R3.)
+      let ex: { exists: boolean };
+      try {
+        ex = await this.dkg.contextGraphExists(b.contextGraphId);
+      } catch (err) {
+        throw new Error(
+          `could not verify bound context graph '${b.contextGraphId}' on the DKG node ` +
+            `(presence probe errored: ${String(err).slice(0, 160)}) — refusing to start`,
+        );
+      }
       if (!ex.exists) {
         throw new Error(`bound context graph '${b.contextGraphId}' not present on the DKG node`);
       }
@@ -251,9 +252,18 @@ export class Daemon {
    * 'promoted', and receipts are searched for on the relay before re-posting.
    */
   async executeOp(op: OpRecord, snapshot?: NostrEvent[]): Promise<void> {
-    // A crash can leave an op mid-publish (spend reserved, not yet persisted).
-    // Resume it via the descriptor read-back rather than the capture pipeline.
-    if (op.state === 'publishing') return this.completePublish(op.id);
+    // A crash left this op reserved-but-not-resolved around the on-chain call.
+    // We cannot know whether the tx confirmed (the descriptor can't tell us), and
+    // must NOT re-publish without a fresh human ✅ (that bypasses every §6 gate).
+    // Record it honestly and leave retrying to a new capture (review R1 + R2).
+    if (op.state === 'publishing') {
+      return this.markUnconfirmed(op, 'the process restarted while a publish was in flight');
+    }
+    // Publish confirmed but the VM receipt never posted (crash in between) —
+    // safe to resume: re-post the receipt (read-back guards against a double).
+    if (op.state === 'published') {
+      return this.postVmReceipt(op.id, await this.approverPubkeyFor(op));
+    }
     let events = snapshot;
     const ensureSnapshot = async (): Promise<NostrEvent[]> => {
       if (events) return events;
@@ -485,7 +495,7 @@ export class Daemon {
     // (counted toward the 24h budget, included in pendingOps) so a crash between
     // publish() and persist can't strand a paid publish outside all accounting.
     this.registry.transition(op.id, 'publishing', { consumed_approval_id: event.id });
-    await this.completePublish(op.id, event.pubkey);
+    await this.performPublish(op.id, event.pubkey);
   }
 
   /**
@@ -506,88 +516,96 @@ export class Daemon {
   }
 
   /**
-   * Carry a reserved ('publishing') op through the on-chain publish and VM
-   * receipt. Idempotent + resumable: called both from handleApproval and, on a
-   * restart, from executeOp for any op left in 'publishing' by a crash.
-   *  - a confirmed publish already stamped on the node (descriptor 'published'
-   *    + reservedUal) is completed WITHOUT re-publishing — the crash-window fix;
-   *  - a tentative/unconfirmed publish (node signals HTTP 502) is NEVER
-   *    announced as an on-chain anchoring: the op fails with an honest note.
+   * Call vm/publish for a reserved ('publishing') op and announce the UAL — but
+   * ONLY on a confirmed publish() response (one that carries a txHash).
+   *
+   * Critically it does NOT read the descriptor back to decide success: the node
+   * stamps state='published' (and a reservedUal) for a TENTATIVE tx too, with no
+   * confirmed/tentative discriminator, so a descriptor read would announce an
+   * unconfirmed publish as anchored (review R1). Anything that isn't a confirmed
+   * response — a 502 tentative, any error, or a response with no txHash — is
+   * terminal 'publish_unconfirmed' via markUnconfirmed(): honest note, counted
+   * toward the budget (gas may already have been spent), never auto-re-published.
+   *
+   * Only ever called from handleApproval, i.e. AFTER a human ✅ cleared every §6
+   * invariant — never from the boot/recovery path, which must not re-publish
+   * without re-attestation (review R2).
    */
-  async completePublish(opId: number, approverPubkeyHint?: string): Promise<void> {
+  async performPublish(opId: number, approverPubkeyHint?: string): Promise<void> {
     const op = this.registry.opById(opId);
     if (!op || op.state !== 'publishing') return;
 
-    // Already confirmed on-chain (e.g. crashed after publish, before persist)?
-    const pre = await this.dkg.descriptor(op.kaName, op.contextGraphId).catch(() => null);
-    let ual: string | undefined;
-    let txHash: string | undefined;
-    if (pre && (pre.state === 'published' || pre.state === 'finalized') && pre.reservedUal) {
-      ual = pre.reservedUal;
-      logger.warn('publishing op already confirmed on node; completing without re-publish', {
-        opId: op.id,
-        ual,
-      });
-    } else {
-      try {
-        const pub = await this.dkg.publish(op.kaName, op.contextGraphId);
-        ual = pub.ual;
-        txHash = pub.txHash;
-      } catch (err) {
-        const status = (err as { status?: number }).status;
-        if (status === 502) {
-          // The node maps a tentative (unconfirmed) publish to 502 precisely to
-          // avoid a silent downgrade — honour that. Do NOT read the descriptor
-          // back to "published" and announce a UAL for a tx that didn't confirm.
-          this.registry.transition(op.id, 'failed', {
-            error: 'vm publish unconfirmed (tentative)',
-          });
-          await this.relay
-            .sendMessage(
-              op.channelId,
-              'VM publish did not confirm on-chain (node reported tentative); no UAL recorded. Re-add ✅ once the node confirms.',
-              { replyTo: op.receiptEventId ?? op.rootEventId },
-            )
-            .catch(() => {});
-          logger.error('publish tentative; not announced', { opId: op.id });
-          return;
-        }
-        // Genuine lost-response ambiguity (no 502): read back before failing.
-        const after = await this.dkg.descriptor(op.kaName, op.contextGraphId).catch(() => null);
-        if (
-          after &&
-          (after.state === 'published' || after.state === 'finalized') &&
-          after.reservedUal
-        ) {
-          ual = after.reservedUal;
-          logger.warn('publish response lost; recovered via descriptor read-back', {
-            opId: op.id,
-            ual,
-          });
-        } else {
-          // Leave the op in 'publishing' so recovery retries (budget stays
-          // reserved). The node dedups a re-publish of an already-published KA.
-          logger.error('publish failed; will retry on next recovery', {
-            opId: op.id,
-            err: String(err),
-          });
-          return;
-        }
-      }
+    let pub: { ual: string; txHash: string } | undefined;
+    try {
+      pub = await this.dkg.publish(op.kaName, op.contextGraphId);
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      return this.markUnconfirmed(
+        op,
+        status === 502
+          ? 'node reported the transaction as tentative'
+          : `publish call failed (${String(err).slice(0, 120)})`,
+      );
+    }
+    // A 200 with no confirmed txHash is not a confirmation — never announce it.
+    if (!pub?.txHash) {
+      return this.markUnconfirmed(op, 'publish response carried no confirmed transaction hash');
     }
 
-    this.registry.transition(op.id, 'published', { ual });
-    const updated = this.registry.opById(op.id)!;
+    this.registry.transition(op.id, 'published', { ual: pub.ual });
     const approverPubkey = approverPubkeyHint ?? (await this.approverPubkeyFor(op));
-    const vmReceiptId = (
-      await this.relay.sendMessage(
+    await this.postVmReceipt(op.id, approverPubkey);
+    logger.info('VM publish complete', { opId: op.id, ual: pub.ual, txHash: pub.txHash });
+  }
+
+  /**
+   * Terminal, honest handling of a publish whose confirmation is unknown. No
+   * UAL is announced, the op is counted toward the budget (a tx may have cost
+   * real gas), and it is NEVER re-published automatically — retrying requires a
+   * fresh human capture + approval, so the message says exactly that (the old
+   * "re-add ✅" text pointed at a route the state machine forbids — review's
+   * dead-end finding).
+   */
+  async markUnconfirmed(op: OpRecord, reason: string): Promise<void> {
+    this.registry.transition(op.id, 'publish_unconfirmed', {
+      error: `vm publish unconfirmed: ${reason}`,
+    });
+    await this.relay
+      .sendMessage(
         op.channelId,
-        vmReceipt(updated, op.consumedApprovalId ?? '', approverPubkey),
-        { replyTo: op.rootEventId },
+        `VM publish did not return a confirmed result (${reason}); no UAL is being recorded and a transaction may already have been submitted — verify on-chain before relying on it. To retry, re-capture the thread (a new pin or @dkg distill).`,
+        { replyTo: op.receiptEventId ?? op.rootEventId },
       )
-    ).eventId;
+      .catch(() => {});
+    logger.error('vm publish unconfirmed; not announced', { opId: op.id, reason });
+  }
+
+  /** Post the VM receipt for a published op and mark it vm_receipted (idempotent on the relay). */
+  async postVmReceipt(opId: number, approverPubkey: string): Promise<void> {
+    const op = this.registry.opById(opId);
+    if (!op || op.state !== 'published') return;
+    const existing = await this.findExistingVmReceipt(op);
+    const vmReceiptId =
+      existing ??
+      (
+        await this.relay.sendMessage(
+          op.channelId,
+          vmReceipt(op, op.consumedApprovalId ?? '', approverPubkey),
+          { replyTo: op.rootEventId },
+        )
+      ).eventId;
     this.registry.transition(op.id, 'vm_receipted', { vm_receipt_event_id: vmReceiptId });
-    logger.info('VM publish complete', { opId: op.id, ual, txHash, vmReceiptId });
+  }
+
+  /** Read-back before re-posting a VM receipt (§9): find one we may have posted pre-crash. */
+  async findExistingVmReceipt(op: OpRecord): Promise<string | null> {
+    if (!op.ual) return null;
+    const mine = await this.relay
+      .query([
+        { kinds: [9], '#h': [op.channelId], '#e': [op.rootEventId], authors: [this.relay.pubkey] },
+      ])
+      .catch(() => []);
+    return mine.find((m) => m.content.includes(`UAL: ${op.ual}`))?.id ?? null;
   }
 
   /** Best-effort approver pubkey for a receipt on recovery (from the stored approval event). */

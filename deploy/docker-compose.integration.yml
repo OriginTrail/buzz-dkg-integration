@@ -26,7 +26,7 @@ services:
       BDI_BUZZ_WS: ${BDI_BUZZ_WS:-ws://host.docker.internal:9440}
       BDI_SERVICE_KEY: ${BDI_SERVICE_KEY:?set the service member secret key}
       BDI_MENTION_HANDLE: ${BDI_MENTION_HANDLE:-dkg}
-      BDI_DKG_API: ${BDI_DKG_API:-http://host.docker.internal:9420}
+      BDI_DKG_API: ${BDI_DKG_API:-http://host.docker.internal:9200}
       BDI_DKG_TOKEN: ${BDI_DKG_TOKEN:?set the DKG bearer token}
       BDI_BINDINGS_PATH: /config/bindings.json
       BDI_PUBLISH_MODE: ${BDI_PUBLISH_MODE:-disabled}
