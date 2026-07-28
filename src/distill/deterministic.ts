@@ -35,9 +35,12 @@ export function snapshotSourceSet(
  * Nostr canonical form plus signature. Any change to any source event or to
  * set membership changes the digest.
  */
+/** Codepoint order — locale-independent, so a third party recomputes the same digest. */
+const byCodepoint = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 export function sourceSetDigest(events: NostrEvent[]): string {
   const canon = [...events]
-    .sort((a, b) => a.id.localeCompare(b.id))
+    .sort((a, b) => byCodepoint(a.id, b.id))
     .map((e) => JSON.stringify([0, e.pubkey, e.created_at, e.kind, e.tags, e.content, e.sig ?? '']))
     .join('\n');
   return createHash('sha256').update(canon, 'utf8').digest('hex');

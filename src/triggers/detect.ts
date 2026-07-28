@@ -18,6 +18,14 @@ const mentionsPubkey = (e: NostrEvent, pubkey: string): boolean =>
   e.tags.some((t) => t[0] === 'p' && t[1] === pubkey);
 
 /**
+ * Hard cap on question length. Retrieval builds O(n²) term pairs and
+ * interpolates them into a SPARQL FILTER (see grounded.ts), so an unbounded
+ * question is a DoS vector; capping at the trigger keeps it from ever reaching
+ * the retriever. Generous for a natural-language question.
+ */
+export const MAX_QUESTION_CHARS = 512;
+
+/**
  * Classify an incoming relay event against the trigger grammar (SPEC §4.4/§6):
  *  - kind 40004 pin  → capture trigger (target from e tag, channel from h tag)
  *  - kind 9 "@<handle> distill" mentioning the service → capture trigger for
@@ -55,17 +63,20 @@ export function classify(
     if (!m) return null;
     const verb = m[1]!.toLowerCase();
     if (verb === 'distill') {
-      // Distill the thread this message belongs to: NIP-10 root marker if
-      // present, else the replied-to event, else the mention itself is root.
+      // Distill the thread this message references: NIP-10 root marker if
+      // present, else the replied-to event, else any e tag. A bare `@dkg
+      // distill` with NO referenced event is a no-op — falling back to the
+      // command message itself would distill and SWM-share the literal text
+      // "@dkg distill" as a decision.
       const root =
         event.tags.find((t) => t[0] === 'e' && t[3] === 'root')?.[1] ??
         event.tags.find((t) => t[0] === 'e' && t[3] === 'reply')?.[1] ??
-        event.tags.find((t) => t[0] === 'e')?.[1] ??
-        event.id;
+        event.tags.find((t) => t[0] === 'e')?.[1];
+      if (!root) return null;
       return { type: 'distill', event, channelId, targetEventId: root };
     }
     const question = (m[2] ?? '').trim();
-    if (!question) return null;
+    if (!question || question.length > MAX_QUESTION_CHARS) return null;
     return { type: 'ask', event, channelId, question };
   }
 

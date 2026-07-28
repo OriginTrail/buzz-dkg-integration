@@ -185,6 +185,11 @@ export class Registry {
     return row ? toOp(row as Record<string, unknown>) : null;
   }
 
+  opById(opId: number): OpRecord | null {
+    const row = this.db.prepare('SELECT * FROM ops WHERE id = ?').get(opId);
+    return row ? toOp(row as Record<string, unknown>) : null;
+  }
+
   /** Forward-only transition; refuses to move backwards or from terminal failure. */
   transition(opId: number, to: OpState, extra: Partial<Record<string, string | null>> = {}): void {
     const orderIdx: OpState[] = [
@@ -193,6 +198,7 @@ export class Registry {
       'finalized',
       'shared',
       'receipted',
+      'publishing',
       'published',
       'vm_receipted',
     ];
@@ -216,11 +222,16 @@ export class Registry {
     this.db.prepare(`UPDATE ops SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
   }
 
-  /** Publications whose op reached published/vm_receipted within the window (mainnet budget). */
+  /**
+   * Publications counting against the rolling mainnet budget. Includes
+   * 'publishing' — the intent persisted BEFORE the on-chain call — so spend is
+   * reserved rather than recorded after the fact. A crash between publish and
+   * persist otherwise strands a paid publish outside the ceiling (§ review #11).
+   */
   countRecentPublishes(windowMs: number): number {
     const row = this.db
       .prepare(
-        "SELECT COUNT(*) AS n FROM ops WHERE state IN ('published', 'vm_receipted') AND updated_at > ?",
+        "SELECT COUNT(*) AS n FROM ops WHERE state IN ('publishing', 'published', 'vm_receipted') AND updated_at > ?",
       )
       .get(Date.now() - windowMs) as { n: number };
     return row.n;

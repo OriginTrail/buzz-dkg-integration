@@ -32,6 +32,7 @@ export type OpState =
   | 'finalized' // sealed
   | 'shared' // full SWM share confirmed
   | 'receipted' // in-thread receipt posted (terminal for SWM flow)
+  | 'publishing' // vm/publish intent persisted + budget reserved, BEFORE the call
   | 'published' // VM publish confirmed (devnet only in stage ABC)
   | 'vm_receipted' // VM receipt posted (terminal)
   | 'failed';

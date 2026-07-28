@@ -9,3 +9,9 @@ phase0/bridge/state.json
 demo-acceptance/
 data/
 demo-live/
+# Live SQLite runtime state (WAL/SHM are per-process; the .db carries the
+# author's catch-up cursor) — never a committed artifact.
+demo-fifa/*.db
+demo-fifa/*.db-shm
+demo-fifa/*.db-wal
+repos/.pack-cache/

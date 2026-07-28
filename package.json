@@ -6,17 +6,16 @@
   "description": "Reference integration: Buzz (block/buzz) rooms -> OriginTrail DKG v10 layered memory (WM->SWM->VM) with graph-scoped grounded answering",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=22.5"
+    "node": ">=22.9"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src test",
-    "format": "prettier --write 'src/**/*.ts' 'test/**/*.ts'",
-    "format:check": "prettier --check 'src/**/*.ts' 'test/**/*.ts'",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
     "test": "vitest run",
-    "test:live": "BDI_LIVE=1 vitest run test/live",
-    "start": "node --experimental-strip-types src/index.ts"
+    "start": "node --env-file-if-exists=.env --experimental-strip-types src/index.ts"
   },
   "dependencies": {
     "@noble/curves": "^1.9.7",

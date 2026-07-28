@@ -21,6 +21,7 @@ import { logger } from './log.ts';
 import type { DaemonConfig, NostrEvent, OpRecord } from './types.ts';
 
 const CATCHUP_OVERLAP_S = 60;
+const CURSOR_SKEW_S = 300;
 const DEVNET_CHAIN = 'evm:31337';
 const MAINNET_CHAIN = 'base:8453';
 
@@ -90,15 +91,33 @@ export class Daemon {
     // Narrow per-CG probe — the broad list route 500s on scan budget for
     // large production nodes (observed live in Gate D2 preflight).
     for (const b of this.config.bindings) {
-      const ex = await this.dkg
-        .contextGraphExists(b.contextGraphId)
-        .catch(() => ({ exists: false }));
+      // A probe FAILURE (node registry endpoint 400/500/timeout under sync load)
+      // must not be conflated with a genuine "absent" — only a definitive
+      // {exists:false} response blocks startup. (Demo workaround: the node's
+      // /context-graph/exists route degrades under heavy sync; the CG's per-KA
+      // op endpoints remain healthy.)
+      const ex = await this.dkg.contextGraphExists(b.contextGraphId).catch((err) => {
+        logger.warn('CG presence probe failed; proceeding (endpoint degraded)', {
+          contextGraphId: b.contextGraphId,
+          err: String(err),
+        });
+        return { exists: true };
+      });
       if (!ex.exists) {
         throw new Error(`bound context graph '${b.contextGraphId}' not present on the DKG node`);
       }
     }
     await this.recover();
-    await this.catchUp();
+    // Startup catch-up is an optimization, not a hard requirement: a transient
+    // relay hiccup (rate-limit / replay-check / reconnect) must not abort start,
+    // since the live WS subscription and reconnect-time replay backfill the gap.
+    try {
+      await this.catchUp();
+    } catch (err) {
+      logger.warn('startup catch-up failed; continuing on live subscription', {
+        err: String(err),
+      });
+    }
     this.subscribe();
     this.relay.connect();
     logger.info('daemon started', {
@@ -151,7 +170,10 @@ export class Daemon {
           mentionHandle: this.config.mentionHandle,
         });
         if (trigger?.type === 'ask')
-          await this.executeAsk(trigger.event, trigger.channelId, trigger.question, true);
+          await this.executeAsk(trigger.event, trigger.channelId, trigger.question, true).catch(
+            (err) =>
+              logger.error('ask recovery failed', { askEventId: ask.askEventId, err: String(err) }),
+          );
       }
     }
   }
@@ -161,7 +183,11 @@ export class Daemon {
       servicePubkey: this.relay.pubkey,
       mentionHandle: this.config.mentionHandle,
     });
-    this.registry.advanceCursor(event.created_at);
+    // `created_at` is client-set; a single event dated far in the future would
+    // otherwise pin the MAX-cursor forever, so every subsequent `since` filters
+    // in the future and silently matches nothing. Clamp to a small skew window.
+    const nowS = Math.floor(Date.now() / 1000);
+    this.registry.advanceCursor(Math.min(event.created_at, nowS + CURSOR_SKEW_S));
     if (!trigger) return;
     switch (trigger.type) {
       case 'pin':
@@ -225,6 +251,9 @@ export class Daemon {
    * 'promoted', and receipts are searched for on the relay before re-posting.
    */
   async executeOp(op: OpRecord, snapshot?: NostrEvent[]): Promise<void> {
+    // A crash can leave an op mid-publish (spend reserved, not yet persisted).
+    // Resume it via the descriptor read-back rather than the capture pipeline.
+    if (op.state === 'publishing') return this.completePublish(op.id);
     let events = snapshot;
     const ensureSnapshot = async (): Promise<NostrEvent[]> => {
       if (events) return events;
@@ -350,35 +379,76 @@ export class Daemon {
       return;
     }
 
-    const reject = (reason: string): void => {
-      this.registry.recordApproval(event.id, op.id, 'rejected', reason);
-      logger.warn('approval rejected', { approvalEventId: event.id, opId: op.id, reason });
+    // A promoter reacts ✅ and otherwise cannot tell "accepted" from "not
+    // authorised"/"budget exhausted"/"relay blip". Post the reason to the room.
+    // Transient reasons (a momentary unreadable receipt/descriptor) do NOT write
+    // a permanent 'rejected' row, so a retry — the same reaction re-delivered on
+    // reconnect, or a fresh ✅ — can still succeed once the blip clears.
+    const reject = async (
+      reason: string,
+      opts: { transient?: boolean; postToRoom?: boolean } = {},
+    ): Promise<void> => {
+      const { transient = false, postToRoom = true } = opts;
+      if (!transient) this.registry.recordApproval(event.id, op.id, 'rejected', reason);
+      logger.warn('approval rejected', {
+        approvalEventId: event.id,
+        opId: op.id,
+        reason,
+        transient,
+      });
+      if (postToRoom) {
+        await this.relay
+          .sendMessage(
+            op.channelId,
+            transient
+              ? `Couldn't process that ✅ right now (${reason}). Re-add the reaction to retry.`
+              : `Can't publish that: ${reason}.`,
+            { replyTo: op.receiptEventId ?? op.rootEventId },
+          )
+          .catch((err) =>
+            logger.warn('reject notice post failed', { opId: op.id, err: String(err) }),
+          );
+      }
     };
 
-    // §6.1 reactor authorized for that channel
+    // §6.1 reactor authorized for that channel — stay silent in-room so an
+    // unauthorized reactor can't make the bot chatter (no info leak either).
     if (!this.registry.promotersFor(op.channelId).includes(event.pubkey)) {
-      return reject('reactor is not an authorized promoter for this channel');
+      return reject('reactor is not an authorized promoter for this channel', {
+        postToRoom: false,
+      });
     }
     // §6.4 channel still maps to the same context graph
     if (this.registry.contextGraphFor(op.channelId) !== op.contextGraphId) {
       return reject('channel↔context-graph mapping changed since capture');
     }
     // §6.3 the receipt identifies the pending KA and digest
-    const receiptEvents = await this.relay.query([{ ids: [targetEventId] }]);
+    const receiptEvents = await this.relay.query([{ ids: [targetEventId] }]).catch(() => []);
     const receipt = receiptEvents[0];
-    if (!receipt) return reject('receipt event no longer readable');
+    if (!receipt) return reject('receipt event no longer readable', { transient: true });
     if (
       parseReceiptDigest(receipt.content) !== op.digest ||
       parseReceiptKaName(receipt.content) !== op.kaName
     ) {
       return reject('receipt content does not match recorded KA/digest');
     }
-    // §6.5 finalized SWM KA matches the approved digest
+    // §6.5 finalized SWM KA matches the approved digest. Descriptor state is
+    // necessary but NOT sufficient — re-read the shared graph and compare its
+    // sourceSetDigest to the approved digest, so approval anchors to the exact
+    // content, not just "some promoted SWM KA of this name".
     const desc = await this.dkg.descriptor(op.kaName, op.contextGraphId).catch(() => null);
-    if (!desc || desc.state !== 'promoted' || desc.memoryLayer !== 'SWM') {
-      return reject(
-        `KA is not in finalized+shared SWM state (state=${desc?.state ?? 'unreadable'})`,
-      );
+    if (!desc) return reject('KA descriptor unreadable', { transient: true });
+    if (desc.state !== 'promoted' || desc.memoryLayer !== 'SWM') {
+      return reject(`KA is not in finalized+shared SWM state (state=${desc.state})`);
+    }
+    let digestMatches: boolean;
+    try {
+      digestMatches = await this.swmShareMatchesDigest(op);
+    } catch {
+      return reject('could not verify the shared KA digest', { transient: true });
+    }
+    if (!digestMatches) {
+      return reject('shared SWM content does not match the approved source-set digest');
     }
     // §6.7 not already published
     if (op.state !== 'receipted' || op.ual)
@@ -411,40 +481,120 @@ export class Daemon {
       return;
     }
 
-    let ual: string;
+    // Reserve the spend BEFORE the on-chain call: persist a 'publishing' intent
+    // (counted toward the 24h budget, included in pendingOps) so a crash between
+    // publish() and persist can't strand a paid publish outside all accounting.
+    this.registry.transition(op.id, 'publishing', { consumed_approval_id: event.id });
+    await this.completePublish(op.id, event.pubkey);
+  }
+
+  /**
+   * Re-read the shared graph and confirm its sourceSetDigest matches the op's
+   * approved digest (§6.5). Uses the same subject-scoped SELECT shape as the
+   * capture read-back so the anchor is content, not just KA name + state.
+   */
+  async swmShareMatchesDigest(op: OpRecord): Promise<boolean> {
+    const q = await this.dkg.query({
+      sparql: `SELECT ?p ?o WHERE { <${op.rootUri}> ?p ?o }`,
+      contextGraphId: op.contextGraphId,
+      view: 'shared-working-memory',
+    });
+    const val = (x: any): string => String(typeof x === 'string' ? x : (x?.value ?? ''));
+    return (q.result?.bindings ?? []).some(
+      (r: any) => val(r.p).includes('sourceSetDigest') && val(r.o).includes(op.digest),
+    );
+  }
+
+  /**
+   * Carry a reserved ('publishing') op through the on-chain publish and VM
+   * receipt. Idempotent + resumable: called both from handleApproval and, on a
+   * restart, from executeOp for any op left in 'publishing' by a crash.
+   *  - a confirmed publish already stamped on the node (descriptor 'published'
+   *    + reservedUal) is completed WITHOUT re-publishing — the crash-window fix;
+   *  - a tentative/unconfirmed publish (node signals HTTP 502) is NEVER
+   *    announced as an on-chain anchoring: the op fails with an honest note.
+   */
+  async completePublish(opId: number, approverPubkeyHint?: string): Promise<void> {
+    const op = this.registry.opById(opId);
+    if (!op || op.state !== 'publishing') return;
+
+    // Already confirmed on-chain (e.g. crashed after publish, before persist)?
+    const pre = await this.dkg.descriptor(op.kaName, op.contextGraphId).catch(() => null);
+    let ual: string | undefined;
     let txHash: string | undefined;
-    try {
-      const pub = await this.dkg.publish(op.kaName, op.contextGraphId);
-      ual = pub.ual;
-      txHash = pub.txHash;
-    } catch (err) {
-      // Ambiguity recovery (§9): read back before treating as failure. Never retry blindly.
-      const after = await this.dkg.descriptor(op.kaName, op.contextGraphId).catch(() => null);
-      if (
-        after &&
-        (after.state === 'published' || after.state === 'finalized') &&
-        after.reservedUal
-      ) {
-        ual = after.reservedUal;
-        logger.warn('publish response lost; recovered via descriptor read-back', {
-          opId: op.id,
-          ual,
-        });
-      } else {
-        logger.error('publish failed', { opId: op.id, err: String(err) });
-        return;
+    if (pre && (pre.state === 'published' || pre.state === 'finalized') && pre.reservedUal) {
+      ual = pre.reservedUal;
+      logger.warn('publishing op already confirmed on node; completing without re-publish', {
+        opId: op.id,
+        ual,
+      });
+    } else {
+      try {
+        const pub = await this.dkg.publish(op.kaName, op.contextGraphId);
+        ual = pub.ual;
+        txHash = pub.txHash;
+      } catch (err) {
+        const status = (err as { status?: number }).status;
+        if (status === 502) {
+          // The node maps a tentative (unconfirmed) publish to 502 precisely to
+          // avoid a silent downgrade — honour that. Do NOT read the descriptor
+          // back to "published" and announce a UAL for a tx that didn't confirm.
+          this.registry.transition(op.id, 'failed', {
+            error: 'vm publish unconfirmed (tentative)',
+          });
+          await this.relay
+            .sendMessage(
+              op.channelId,
+              'VM publish did not confirm on-chain (node reported tentative); no UAL recorded. Re-add ✅ once the node confirms.',
+              { replyTo: op.receiptEventId ?? op.rootEventId },
+            )
+            .catch(() => {});
+          logger.error('publish tentative; not announced', { opId: op.id });
+          return;
+        }
+        // Genuine lost-response ambiguity (no 502): read back before failing.
+        const after = await this.dkg.descriptor(op.kaName, op.contextGraphId).catch(() => null);
+        if (
+          after &&
+          (after.state === 'published' || after.state === 'finalized') &&
+          after.reservedUal
+        ) {
+          ual = after.reservedUal;
+          logger.warn('publish response lost; recovered via descriptor read-back', {
+            opId: op.id,
+            ual,
+          });
+        } else {
+          // Leave the op in 'publishing' so recovery retries (budget stays
+          // reserved). The node dedups a re-publish of an already-published KA.
+          logger.error('publish failed; will retry on next recovery', {
+            opId: op.id,
+            err: String(err),
+          });
+          return;
+        }
       }
     }
-    this.registry.transition(op.id, 'published', { ual, consumed_approval_id: event.id });
 
-    const updated = this.registry.opByTrigger(op.triggerEventId)!;
+    this.registry.transition(op.id, 'published', { ual });
+    const updated = this.registry.opById(op.id)!;
+    const approverPubkey = approverPubkeyHint ?? (await this.approverPubkeyFor(op));
     const vmReceiptId = (
-      await this.relay.sendMessage(op.channelId, vmReceipt(updated, event.id, event.pubkey), {
-        replyTo: op.rootEventId,
-      })
+      await this.relay.sendMessage(
+        op.channelId,
+        vmReceipt(updated, op.consumedApprovalId ?? '', approverPubkey),
+        { replyTo: op.rootEventId },
+      )
     ).eventId;
     this.registry.transition(op.id, 'vm_receipted', { vm_receipt_event_id: vmReceiptId });
     logger.info('VM publish complete', { opId: op.id, ual, txHash, vmReceiptId });
+  }
+
+  /** Best-effort approver pubkey for a receipt on recovery (from the stored approval event). */
+  async approverPubkeyFor(op: OpRecord): Promise<string> {
+    if (!op.consumedApprovalId) return '';
+    const ev = await this.relay.query([{ ids: [op.consumedApprovalId] }]).catch(() => []);
+    return ev[0]?.pubkey ?? '';
   }
 
   // ── ask: §7 grounded answering ─────────────────────────────────────────────
@@ -459,36 +609,49 @@ export class Daemon {
       logger.info('ask dedup', { askEventId: event.id });
       return;
     }
-    const contextGraphId = this.registry.contextGraphFor(channelId);
-    if (!contextGraphId) {
+    // `claimAsk` persists a 'pending' row BEFORE any work, and `recover()` runs
+    // (before catchUp/subscribe) at every boot — so an unhandled throw here
+    // leaves the row pending, gets re-fetched, and re-throws on the next start,
+    // bricking the daemon. Resolve the ask on any failure so it never replays.
+    try {
+      const contextGraphId = this.registry.contextGraphFor(channelId);
+      if (!contextGraphId) {
+        const { eventId } = await this.relay.sendMessage(
+          channelId,
+          'This channel has no designated context graph; I cannot answer here.',
+          { replyTo: event.id },
+        );
+        this.registry.resolveAsk(event.id, 'refused', eventId);
+        return;
+      }
+      const result = await answerGrounded(this.dkg, contextGraphId, question);
+      if (result.kind === 'refusal') {
+        const { eventId } = await this.relay.sendMessage(
+          channelId,
+          refusalMessage(question, contextGraphId),
+          {
+            replyTo: event.id,
+          },
+        );
+        this.registry.resolveAsk(event.id, 'refused', eventId);
+        logger.info('ask refused (no supporting evidence)', { askEventId: event.id });
+        return;
+      }
       const { eventId } = await this.relay.sendMessage(
         channelId,
-        'This channel has no designated context graph; I cannot answer here.',
+        answerMessage(question, result.text, result.evidence),
         { replyTo: event.id },
       );
-      this.registry.resolveAsk(event.id, 'refused', eventId);
-      return;
+      this.registry.resolveAsk(event.id, 'answered', eventId);
+      logger.info('ask answered', { askEventId: event.id, citations: result.evidence.length });
+    } catch (err) {
+      // Resolve (not re-throw) so the pending row is cleared and never replayed.
+      this.registry.resolveAsk(event.id, 'refused');
+      logger.error('ask failed; resolved as refused to prevent replay', {
+        askEventId: event.id,
+        err: String(err),
+      });
     }
-    const result = await answerGrounded(this.dkg, contextGraphId, question);
-    if (result.kind === 'refusal') {
-      const { eventId } = await this.relay.sendMessage(
-        channelId,
-        refusalMessage(question, contextGraphId),
-        {
-          replyTo: event.id,
-        },
-      );
-      this.registry.resolveAsk(event.id, 'refused', eventId);
-      logger.info('ask refused (no supporting evidence)', { askEventId: event.id });
-      return;
-    }
-    const { eventId } = await this.relay.sendMessage(
-      channelId,
-      answerMessage(question, result.text, result.evidence),
-      { replyTo: event.id },
-    );
-    this.registry.resolveAsk(event.id, 'answered', eventId);
-    logger.info('ask answered', { askEventId: event.id, citations: result.evidence.length });
   }
 
   async stop(): Promise<void> {

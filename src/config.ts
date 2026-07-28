@@ -1,10 +1,32 @@
 import { readFileSync } from 'node:fs';
+import { nip19 } from 'nostr-tools';
 import type { ChannelBinding, DaemonConfig, PublishMode } from './types.ts';
 
-function required(name: string): string {
-  const v = process.env[name];
+function required(name: string, env: NodeJS.ProcessEnv = process.env): string {
+  const v = env[name];
   if (!v) throw new Error(`missing required env ${name}`);
   return v;
+}
+
+/**
+ * Promoter identities are stored and compared as 64-char lowercase hex pubkeys
+ * (that is the shape signed events carry). Buzz surfaces identities as `npub1…`,
+ * so we accept and decode that form too — a wrong-format promoter would
+ * otherwise start the daemon cleanly and silently ignore every approval (a
+ * `logger.warn` at best). Fail fast instead.
+ */
+export function normalizePubkey(raw: string, ctx: string): string {
+  const v = String(raw).trim();
+  if (/^[0-9a-f]{64}$/i.test(v)) return v.toLowerCase();
+  if (v.startsWith('npub1')) {
+    try {
+      const dec = nip19.decode(v);
+      if (dec.type === 'npub' && typeof dec.data === 'string') return dec.data.toLowerCase();
+    } catch {
+      /* fall through to the throw below */
+    }
+  }
+  throw new Error(`${ctx}: '${v.slice(0, 16)}…' is not a 64-hex pubkey or npub1… identity`);
 }
 
 /** Last non-comment line — DKG auth.token files carry a comment header. */
@@ -37,7 +59,11 @@ export function parseBindings(raw: string): ChannelBinding[] {
     return {
       channelId: String(b.channelId),
       contextGraphId: String(b.contextGraphId),
-      promoters: Array.isArray(b.promoters) ? b.promoters.map(String) : [],
+      promoters: Array.isArray(b.promoters)
+        ? b.promoters.map((p: unknown, j: number) =>
+            normalizePubkey(String(p), `bindings[${i}].promoters[${j}]`),
+          )
+        : [],
     };
   });
 }
@@ -50,19 +76,28 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     );
   }
   const dkgToken =
-    env.BDI_DKG_TOKEN ?? parseTokenFile(readFileSync(required('BDI_DKG_TOKEN_PATH'), 'utf8'));
+    env.BDI_DKG_TOKEN ?? parseTokenFile(readFileSync(required('BDI_DKG_TOKEN_PATH', env), 'utf8'));
+  // The publication budget is the only ceiling on real ETH spend. A bare
+  // Number('unlimited') is NaN, and `recent >= NaN` is always false — which
+  // would silently remove the ceiling. Fail closed, like publishMode does.
+  const maxPublishesPerDay = Number(env.BDI_MAX_PUBLISHES_PER_DAY ?? 5);
+  if (!Number.isFinite(maxPublishesPerDay) || maxPublishesPerDay < 0) {
+    throw new Error(
+      `BDI_MAX_PUBLISHES_PER_DAY must be a non-negative number, got '${env.BDI_MAX_PUBLISHES_PER_DAY}'`,
+    );
+  }
   return {
     relayHttpUrl: (env.BDI_BUZZ_HTTP ?? 'http://127.0.0.1:9440').replace(/\/$/, ''),
     relayWsUrl:
       env.BDI_BUZZ_WS ?? (env.BDI_BUZZ_HTTP ?? 'ws://127.0.0.1:9440').replace(/^http/, 'ws'),
-    serviceSecretKeyHex: required('BDI_SERVICE_KEY'),
+    serviceSecretKeyHex: required('BDI_SERVICE_KEY', env),
     mentionHandle: env.BDI_MENTION_HANDLE ?? 'dkg',
-    dkgApiUrl: (env.BDI_DKG_API ?? 'http://127.0.0.1:9420').replace(/\/$/, ''),
+    dkgApiUrl: (env.BDI_DKG_API ?? 'http://127.0.0.1:9200').replace(/\/$/, ''),
     dkgToken,
     approvalEmoji: env.BDI_APPROVAL_EMOJI ?? '✅',
     publishMode,
-    maxPublishesPerDay: Number(env.BDI_MAX_PUBLISHES_PER_DAY ?? 5),
+    maxPublishesPerDay,
     dbPath: env.BDI_DB_PATH ?? './data/daemon.db',
-    bindings: parseBindings(readFileSync(required('BDI_BINDINGS_PATH'), 'utf8')),
+    bindings: parseBindings(readFileSync(required('BDI_BINDINGS_PATH', env), 'utf8')),
   };
 }

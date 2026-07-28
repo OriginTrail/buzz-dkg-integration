@@ -16,17 +16,40 @@ import type { EvidenceRecord } from '../types.ts';
  *     other graph or global index (no code path exists for it).
  */
 
-/** Strip the outer quotes some servers keep on literal binding values. */
+/**
+ * Strip the outer quotes some servers keep on literal binding values, along
+ * with any RDF language tag (`"x"@en`) or datatype suffix (`"x"^^<…>`) — the
+ * retrieval surface deliberately targets third-party domain data, which is
+ * often typed/language-tagged.
+ */
 const unquote = (v: string | undefined): string | undefined =>
-  v === undefined ? undefined : v.replace(/^"(.*)"$/s, '$1');
+  v === undefined ? undefined : v.replace(/^"(.*)"(?:@[\w-]+|\^\^<[^>]*>)?$/s, '$1');
 
-const escapeForRegex = (s: string): string =>
-  s
+/**
+ * Reduce a term to a SPARQL-string-literal-safe token: no quotes, backslashes,
+ * or whitespace runs can survive. `questionTerms` already restricts input to
+ * `[a-z0-9-]`, so this is defence-in-depth — the assertion below guards against
+ * a future tokenizer change silently opening a literal-injection hole.
+ */
+const sparqlTermSafe = (s: string): string => {
+  const out = s
     .replace(/[\\"']/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  if (/["'\\\n\r]/.test(out)) throw new Error('sparqlTermSafe: unsanitized character survived');
+  return out;
+};
 
-/** Tokenize a question into content words for substring retrieval. */
+/**
+ * Upper bound on distinct terms. Retrieval builds every unordered term pair
+ * (O(n²)) and interpolates them into a SPARQL FILTER, so an unbounded question
+ * lets one `@dkg ask` materialise a multi-MiB filter (and, above the node's
+ * body limit, OOM the daemon). 12 terms bounds pairs at 66 — ample for a
+ * natural-language question, whose specific content words are few.
+ */
+export const MAX_TERMS = 12;
+
+/** Tokenize a question into content words for substring retrieval (bounded). */
 export function questionTerms(question: string): string[] {
   const stop = new Set(
     'a an and are be but did do does for from had has have how i in is it of on or that the this to was we what when where which who why will with you your'.split(
@@ -41,7 +64,7 @@ export function questionTerms(question: string): string[] {
         .split(/\s+/)
         .filter((w) => w.length >= 3 && !stop.has(w)),
     ),
-  ];
+  ].slice(0, MAX_TERMS);
 }
 
 export type EvidenceView = 'verifiable-memory' | 'shared-working-memory';
@@ -60,7 +83,7 @@ export async function retrieveEvidence(
 ): Promise<EvidenceRecord[]> {
   const terms = questionTerms(question);
   if (!terms.length) return [];
-  const has = (t: string): string => `CONTAINS(LCASE(STR(?text)), "${escapeForRegex(t)}")`;
+  const has = (t: string): string => `CONTAINS(LCASE(STR(?text)), "${sparqlTermSafe(t)}")`;
   // Two-pass retrieval: conjunctive term-pairs first (multi-term-supported
   // records), single-term disjunction as fallback — the store returns an
   // arbitrary LIMIT subset, so a lone OR-filter can drown specific records
@@ -172,6 +195,10 @@ export async function answerGrounded(
   if (!(await validateCitations(dkg, contextGraphId, cited))) {
     return { kind: 'refusal', text: '', evidence: [] };
   }
-  const text = `${best.description.trim()} [1]`;
+  // Frame the answer as a quotation of the best-supported record, not an
+  // assertion the daemon is making itself: retrieval is substring overlap with
+  // no semantic model, so "did we reject X?" against "we approved X" surfaces
+  // the approval — honest as a quote, misleading as a claim.
+  const text = `From this room's decisions: "${best.description.trim()}" [1]`;
   return { kind: 'answer', text, evidence: cited };
 }
