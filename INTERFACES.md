@@ -35,7 +35,7 @@ Detailed audits: `docs/audit/buzz-audit.md`, `docs/audit/dkg-audit.md`, `docs/au
 
 ## dkg-integrations / bounty (VERIFIED @ c944c9c — details in docs/audit/integrations-audit.md)
 
-- Registry is **metadata-only**: one JSON file `integrations/<slug>.json` per submission (schema-validated in CI); code/design/demo live in our own repo, published to npm (pinned version, provenance, no install scripts).
+- Registry is **metadata-only**: one JSON file `integrations/<slug>.json` per submission (schema-validated in CI); code/design/demo live in our own repo, pinned by commit SHA. (Package-based install kinds additionally pin an npm version with provenance; this entry is `install.kind: manual` and publishes no package.)
 - Required fields include `memoryLayers` (WM/SWM/VM), `v10PrimitivesUsed`, `publicInterfacesUsed` (http-api/cli/mcp only — matches §4.2), `security.networkEgress` + `security.writeAuthority`, `trustTier: community` on submit.
 - **Round 1 is WM/SWM-scoped in CI code**: validate.mjs hard-flags VM write routes (`/publish`, `/endorse`, `/verify`, `/update`) as out-of-scope; VM appears only as required `promotionPath` prose. Web-sourced (2026-07-26): 50k TRAC pool, ≤10k/submission, tag `cfi-dkgv10-r1`; "chat threads → Shared Memory" is an explicitly suggested build.
 - Nearest templates: `cursor-mcp-dkg.json`; pending PRs #9 (Telegram bot), #3 (dkg-wm-bridge). No Slack/Discord/Buzz entry exists or is pending.

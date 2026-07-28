@@ -2,7 +2,7 @@
 
 Reference integration between [Buzz](https://github.com/block/buzz) and
 [OriginTrail DKG v10](https://github.com/OriginTrail/dkg): a standalone daemon
-that joins Buzz rooms as an external member, turns explicitly signalled
+that joins a Buzz channel as an external member, turns explicitly signalled
 conversations into layered DKG memory (WM → SWM → VM), and answers in-room
 questions using evidence exclusively from the room's designated Context Graph.
 
@@ -10,7 +10,7 @@ Canonical specification: [SPEC.md](SPEC.md) · Design: [docs/DESIGN.md](docs/DES
 Verified interfaces: [INTERFACES.md](INTERFACES.md) · Gate reports: `docs/gates/`.
 
 **Status: all stages executed (A–E), 2026-07-26.** Source audit → isolated
-spike → daemon (61 tests, zero-mock acceptance demo) → production validation →
+spike → daemon (74 tests, zero-mock acceptance demo) → production validation →
 one operator-approved SWM share → one operator-approved on-chain publication.
 
 ## Live evidence (Base mainnet)
@@ -46,22 +46,68 @@ one operator-approved SWM share → one operator-approved on-chain publication.
     bounded by `BDI_MAX_PUBLISHES_PER_DAY` (a rolling-24h ceiling; a
     non-numeric value fails startup). **`mainnet` spends real ETH and writes
     irreversibly to Base** — measured cost per publish is recorded in
-    `docs/gates/GATE_D3_REPORT.md`.
+    `docs/gates/GATE_D3_REPORT.md`. It is the only mode with node-side
+    prerequisites beyond "the node is running": the node must have been set up
+    on Base (`dkg init --network mainnet-base` — the DKG default is
+    `mainnet-gnosis`, which reports `gnosis:100` and makes this daemon refuse to
+    start), and its operational wallet needs funding for gas.
 
   On success the UAL is posted as a second in-thread receipt. Every rejection
   posts its reason back into the room so a promoter can tell "accepted" from
-  "not authorised" / "budget exhausted" / "relay blip".
-- **Ask**: `@dkg ask <question>` retrieves only from the room's Context Graph
-  (server-enforced scoped SPARQL), answers extractively with validated
+  "not authorised" / "budget exhausted" / "relay blip". A publish whose outcome
+  the node cannot confirm is never announced as anchored: it lands in a terminal
+  `publish_unconfirmed` state with an honest in-room note, counts against the
+  24h ceiling (gas may already have been spent), and is never auto-retried.
+- **Ask**: `@dkg ask <question>` retrieves only from the channel's bound Context
+  Graph (server-enforced scoped SPARQL), answers extractively with validated
   citations, and refuses explicitly when evidence is insufficient — no model
-  required, no fallback to any other graph.
+  required, no fallback to any other graph. Note the scoping guarantees no
+  *other* graph is read, not that only channel-authored content is returned:
+  every member of a bound channel is effectively a reader of that Context Graph,
+  so bind only graphs whose contents the whole channel may see.
+
+## Prerequisites
+
+- **Node.js ≥ 22.13** for this daemon — it relies on `node:sqlite` (unflagged in
+  22.13), `--experimental-strip-types` (22.6) and `--env-file-if-exists` (22.9).
+- **A DKG v10 node, ≥ 10.0.8**, running and reachable over HTTP — the version
+  this integration is validated against (`docs/gates/GATE_D1_REPORT.md`).
+- **A Buzz NIP-29 relay** you can reach, or one built from the pinned checkout
+  (see **Run (isolated stack)** below).
+
+### Getting a DKG v10 node
+
+An **edge** node — the default role — is enough: no on-chain node profile, no
+staking. The live publication above was made from one.
+
+```bash
+npm install -g @origintrail-official/dkg
+dkg init      # interactive: network, node name, role, triple store, API port
+dkg start     # daemon on http://127.0.0.1:9200
+```
+
+`dkg init` defaults to API port **9200**, which is also what `BDI_DKG_API`
+defaults to. It also defaults to the **mainnet-gnosis** network — fine for
+everything this daemon does by default, but see the `mainnet` note under
+**What it does → Approval** before enabling on-chain publishing. To check what
+you actually have (public route, no token needed):
+
+```bash
+curl -s http://127.0.0.1:9200/api/status    # → version, chain.chainId, nodeRole
+```
+
+Wallets are generated during `dkg init` and only need funding for the Verifiable
+Memory publish path. Everything the daemon does by default — Working Memory
+writes, sealing, Shared Working Memory sharing, and the whole grounded-answering
+path — is off-chain and free.
+
+Node docs: [OriginTrail/dkg](https://github.com/OriginTrail/dkg).
 
 ## Deploy against an existing relay + node
 
-This is the deployment the integration advertises: you already run (or can
-reach) a Buzz NIP-29 relay and a DKG v10 edge node. Prereqs: **Node ≥ 22.13**
-(the daemon relies on `node:sqlite`, unflagged in 22.13, plus
-`--experimental-strip-types` (22.6) and `--env-file-if-exists` (22.9)).
+This is the deployment the integration advertises: a Buzz NIP-29 relay and a DKG
+v10 node you can already reach (see **Prerequisites**), with this daemon running
+alongside them.
 
 1. **Install and configure**
 
@@ -89,15 +135,35 @@ reach) a Buzz NIP-29 relay and a DKG v10 edge node. Prereqs: **Node ≥ 22.13**
    channel's NIP-29 group id (the `h` tag on its messages / the id in the Buzz
    channel URL).
 
-4. **Point at a Context Graph.** Create (or choose) a Context Graph on your DKG
-   node and note its production id form — `0x<CuratorAddress>/<name>`, e.g.
-   `0x633E…/fifa-world-cup-2026` (the `devnet-test` example below is only valid
-   on the isolated devnet). The node must already hold the graph; the daemon
-   verifies each bound graph exists at startup.
+4. **Point at a Context Graph.** Each channel binds to exactly one Context
+   Graph, which must already exist on the node — the daemon probes every bound
+   graph at startup and refuses to start if one is missing. Creating one is
+   free and touches no chain:
 
-5. **Provide the DKG token.** The node writes its bearer token to
-   `<DKG_HOME>/auth.token`; set `BDI_DKG_TOKEN_PATH` to it (the daemon reads the
-   last non-comment line) or paste the raw token as `BDI_DKG_TOKEN`.
+   ```bash
+   dkg context-graph create fifa-world-cup-2026
+   ```
+
+   A bare slug is auto-prefixed with your node's agent address, so the printed
+   `ID:` line is the production form `0x<CuratorAddress>/<name>` — e.g.
+   `0x633E5a7C5e612d9981538F60D824cC03be97e2Ab/fifa-world-cup-2026`. Copy that
+   line **verbatim** into `bindings.json`: the id is matched as an exact IRI, so
+   the checksummed casing and the full address both matter. `dkg context-graph
+   list` reprints it. (The `devnet-test` example below is only valid on the
+   isolated devnet.)
+
+5. **Provide the DKG token.** The node generates a bearer token on first start
+   and writes it to `~/.dkg/auth.token` — a comment header plus the token on the
+   last line, which is what `BDI_DKG_TOKEN_PATH` expects (the daemon reads the
+   last non-comment line). `dkg auth status` prints the path the node actually
+   resolved, which differs if you set `DKG_HOME` or run from a monorepo checkout:
+
+   ```bash
+   dkg auth status           # → Token file:     /home/you/.dkg/auth.token
+   ```
+
+   `BDI_DKG_TOKEN` takes a pasted token instead; prefer the path form so a token
+   rotation needs only a daemon restart, not a `.env` edit.
 
 6. **Bind and run.** Write `bindings.json` (see below) and start:
 
@@ -150,7 +216,7 @@ node scripts/acceptance.mjs    # writes docs/acceptance-transcript.md
 ## Development
 
 ```bash
-npm run typecheck && npm run lint && npm test    # 61 tests, no network
+npm run typecheck && npm run lint && npm test    # 74 tests, no network
 npm run format
 ```
 
