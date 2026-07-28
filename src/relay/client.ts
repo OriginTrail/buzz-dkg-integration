@@ -6,6 +6,9 @@ import type { NostrEvent } from '../types.ts';
 
 const hexToBytes = (hex: string): Uint8Array => Uint8Array.from(Buffer.from(hex, 'hex'));
 
+/** Per-request deadline for the relay HTTP bridge. */
+const RELAY_TIMEOUT_MS = 15_000;
+
 export interface RelayClientOptions {
   httpUrl: string;
   wsUrl: string;
@@ -88,14 +91,26 @@ export class RelayClient {
 
   async #post<T>(path: string, body: unknown): Promise<T> {
     const url = `${this.#http}${path}`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: this.authHeader(url, 'post', body),
-      },
-      body: JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: this.authHeader(url, 'post', body),
+        },
+        body: JSON.stringify(body),
+        // Bound every relay call: events are serialized through one queue, so a
+        // single hung socket would otherwise stall all channels for undici's
+        // ~300s default and head-of-line-block captures/approvals.
+        signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
+      });
+    } catch (err) {
+      if ((err as Error).name === 'TimeoutError') {
+        throw new Error(`buzz ${path} timed out after ${RELAY_TIMEOUT_MS}ms`);
+      }
+      throw err;
+    }
     const text = await res.text();
     let json: any;
     try {

@@ -24,6 +24,9 @@ const CATCHUP_OVERLAP_S = 60;
 const CURSOR_SKEW_S = 300;
 const DEVNET_CHAIN = 'evm:31337';
 const MAINNET_CHAIN = 'base:8453';
+/** Per-pubkey `@dkg ask` ceiling — defence-in-depth against one member fanning
+ * out expensive scoped SPARQL. Generous for humans; caps a runaway loop. */
+const ASK_RATE_LIMIT_PER_MIN = 12;
 
 export class Daemon {
   readonly config: DaemonConfig;
@@ -49,7 +52,7 @@ export class Daemon {
         secretKeyHex: config.serviceSecretKeyHex,
         onEvent: (e) => this.enqueue(e),
         onReconnect: () =>
-          void this.catchUp().catch((err) => logger.error('catch-up failed', { err: String(err) })),
+          void this.resync().catch((err) => logger.error('resync failed', { err: String(err) })),
       });
     this.dkg = deps?.dkg ?? new DkgClient({ baseUrl: config.dkgApiUrl, token: config.dkgToken });
     this.distiller = deps?.distiller ?? deterministicDistiller;
@@ -139,6 +142,26 @@ export class Daemon {
     this.relay.subscribe('bdi-reactions', [{ kinds: [7], '#h': channels, since }]);
   }
 
+  /**
+   * On reconnect: retry parked CAPTURE ops in-process (a transient relay 503
+   * otherwise leaves a pin with no receipt until an operator restarts — review
+   * #19), then replay missed events. Deliberately does NOT touch publish-stage
+   * ops ('publishing'/'published'): those spend real money and are resolved only
+   * by boot recovery or a fresh human ✅, never on this concurrent path.
+   */
+  async resync(): Promise<void> {
+    await this.drain(); // serialize behind any in-flight handler
+    const captureStates = new Set(['distilled', 'wm_written', 'finalized', 'shared']);
+    for (const op of this.registry.pendingOps()) {
+      if (!captureStates.has(op.state)) continue;
+      logger.info('reconnect: retrying parked capture', { opId: op.id, state: op.state });
+      await this.executeOp(op).catch((err) =>
+        logger.error('reconnect capture retry failed', { opId: op.id, err: String(err) }),
+      );
+    }
+    await this.catchUp();
+  }
+
   /** Replays stored events missed while offline; dedup makes replay safe. */
   async catchUp(): Promise<void> {
     const since = Math.max(0, this.registry.cursor - CATCHUP_OVERLAP_S);
@@ -223,7 +246,7 @@ export class Daemon {
       logger.warn('empty source snapshot; ignoring trigger', { triggerEventId: event.id });
       return;
     }
-    const { rootUri, digest } = this.distiller.distill({
+    const { rootUri, digest, title } = this.distiller.distill({
       channelId,
       events,
       servicePubkey: this.relay.pubkey,
@@ -237,6 +260,7 @@ export class Daemon {
       digest,
       kaName: kaNameForDigest(digest),
       rootUri,
+      title,
     });
     if (!op) {
       logger.info('trigger raced; already claimed', { triggerEventId: event.id });
@@ -552,7 +576,7 @@ export class Daemon {
       return this.markUnconfirmed(op, 'publish response carried no confirmed transaction hash');
     }
 
-    this.registry.transition(op.id, 'published', { ual: pub.ual });
+    this.registry.transition(op.id, 'published', { ual: pub.ual, tx_hash: pub.txHash });
     const approverPubkey = approverPubkeyHint ?? (await this.approverPubkeyFor(op));
     await this.postVmReceipt(op.id, approverPubkey);
     logger.info('VM publish complete', { opId: op.id, ual: pub.ual, txHash: pub.txHash });
@@ -623,7 +647,7 @@ export class Daemon {
     question: string,
     isRecovery: boolean,
   ): Promise<void> {
-    if (!isRecovery && !this.registry.claimAsk(event.id, channelId)) {
+    if (!isRecovery && !this.registry.claimAsk(event.id, channelId, event.pubkey)) {
       logger.info('ask dedup', { askEventId: event.id });
       return;
     }
@@ -632,6 +656,21 @@ export class Daemon {
     // leaves the row pending, gets re-fetched, and re-throws on the next start,
     // bricking the daemon. Resolve the ask on any failure so it never replays.
     try {
+      // Per-pubkey rate limit (defence-in-depth). The claim above already
+      // counted this ask, so the check is inclusive.
+      if (
+        !isRecovery &&
+        this.registry.recentAskCountByPubkey(event.pubkey, 60_000) > ASK_RATE_LIMIT_PER_MIN
+      ) {
+        const { eventId } = await this.relay.sendMessage(
+          channelId,
+          'Too many questions in a short window — please wait a moment before asking again.',
+          { replyTo: event.id },
+        );
+        this.registry.resolveAsk(event.id, 'refused', eventId);
+        logger.warn('ask rate-limited', { askEventId: event.id, pubkey: event.pubkey });
+        return;
+      }
       const contextGraphId = this.registry.contextGraphFor(channelId);
       if (!contextGraphId) {
         const { eventId } = await this.relay.sendMessage(

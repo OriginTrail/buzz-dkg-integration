@@ -348,3 +348,110 @@ describe('daemon cursor hardening (review #17)', () => {
     expect(daemon.registry.cursor).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 300);
   });
 });
+
+describe('deferred-item follow-ups (#19, ask rate-limit, #20b)', () => {
+  it('retries a parked capture on reconnect, without a restart (#19)', async () => {
+    const { daemon, relay, dkg } = setup();
+    const { pin } = pinnedThread(relay);
+    dkg.failWriteOnce = new Error('503 transient'); // parks the op at 'distilled'
+    await daemon.start();
+    expect(daemon.registry.opByTrigger(pin.id)?.state).toBe('distilled');
+    expect(relay.sent).toHaveLength(0);
+
+    await daemon.resync(); // what onReconnect drives
+    expect(daemon.registry.opByTrigger(pin.id)?.state).toBe('receipted');
+    expect(relay.sent).toHaveLength(1);
+  });
+
+  it('resync never re-publishes or resolves a money-sensitive publish op', async () => {
+    const { daemon, relay } = setup();
+    const { pin } = pinnedThread(relay);
+    await daemon.start();
+    await run(daemon, pin);
+    const op = daemon.registry.opByReceipt(relay.sent[0]!.eventId)!;
+    daemon.registry.transition(op.id, 'publishing', {}); // pretend a publish is in flight
+    await daemon.resync();
+    // resync skips publish-stage ops entirely — left untouched for boot recovery / a fresh ✅
+    expect(daemon.registry.opByTrigger(pin.id)!.state).toBe('publishing');
+  });
+
+  it('rate-limits a pubkey that floods @dkg ask', async () => {
+    const { daemon, relay } = setup();
+    await daemon.start();
+    const asker = hexId('flooder');
+    const asks = Array.from({ length: 13 }, (_, i) =>
+      makeEvent({
+        kind: 9,
+        pubkey: asker,
+        content: `@dkg ask question number ${i}?`,
+        tags: [
+          ['h', 'chan'],
+          ['p', servicePubkey],
+        ],
+      }),
+    );
+    for (const a of asks) relay.ingest(a);
+    await run(daemon, ...asks);
+    const last = relay.sent.at(-1)!;
+    expect(last.replyTo).toBe(asks[12]!.id);
+    expect(last.content).toMatch(/Too many questions/);
+  });
+
+  it('receipts carry a human summary line and the VM receipt carries the tx hash (#20b)', async () => {
+    const ctx = setup({ publishMode: 'mainnet', maxPublishesPerDay: 5 });
+    ctx.dkg.chainId = 'base:8453';
+    const { pin } = pinnedThread(ctx.relay);
+    await ctx.daemon.start();
+    await run(ctx.daemon, pin);
+    expect(ctx.relay.sent[0]!.content).toMatch(/^Captured .*Distilled to Shared Working Memory\./);
+
+    const approval = makeEvent({
+      kind: 7,
+      pubkey: promoter,
+      content: '✅',
+      tags: [['e', ctx.relay.sent[0]!.eventId]],
+    });
+    ctx.relay.ingest(approval);
+    await run(ctx.daemon, approval);
+    const vm = ctx.relay.sent[1]!.content;
+    expect(vm).toMatch(/^Published .*Published to Verifiable Memory\./);
+    expect(vm).toContain('tx: 0xtx');
+    expect(vm).toContain('UAL:');
+  });
+
+  it('an answer cites only [1] and lists the rest as "Also matched" (#20b)', async () => {
+    const { daemon, relay, dkg } = setup();
+    const { pin } = pinnedThread(relay);
+    await daemon.start();
+    await run(daemon, pin);
+    const ask = makeEvent({
+      kind: 9,
+      content: '@dkg ask store backend oxigraph decision?',
+      tags: [
+        ['h', 'chan'],
+        ['p', servicePubkey],
+      ],
+    });
+    relay.ingest(ask);
+    dkg.evidence = [
+      {
+        rootUri: 'urn:buzz-dkg:decision:a',
+        name: 'A',
+        description: 'DECISION: oxigraph-server is the store backend',
+        digest: 'aa'.repeat(32),
+      },
+      {
+        rootUri: 'urn:buzz-dkg:decision:b',
+        name: 'B',
+        description: 'oxigraph store backend benchmark notes',
+        digest: 'bb'.repeat(32),
+      },
+    ];
+    await run(daemon, ask);
+    const ans = relay.sent.find((s) => s.replyTo === ask.id)!.content;
+    expect(ans).toContain('[1]');
+    expect(ans).toContain('Also matched:');
+    expect(ans).not.toContain('[2]');
+    expect(ans).toContain('sha256:'); // citations are cross-referenceable to the receipt
+  });
+});

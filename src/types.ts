@@ -48,10 +48,13 @@ export interface OpRecord {
   digest: string;
   kaName: string;
   rootUri: string;
+  /** human-readable distilled title, for a leading line on receipts + citations */
+  title: string | null;
   assertionUri: string | null;
   state: OpState;
   receiptEventId: string | null;
   ual: string | null;
+  txHash: string | null;
   vmReceiptEventId: string | null;
   consumedApprovalId: string | null;
   error: string | null;

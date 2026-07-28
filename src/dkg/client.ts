@@ -23,6 +23,12 @@ export interface QueryResult {
   phases?: Record<string, unknown>;
 }
 
+/** Default per-request deadline. Every event is serialized through one queue,
+ * so an untimed hung socket stalls all channels for undici's ~300s default. */
+const DEFAULT_TIMEOUT_MS = 30_000;
+/** vm/publish is synchronous on-chain, so it needs a longer ceiling. */
+const PUBLISH_TIMEOUT_MS = 180_000;
+
 export class DkgClient {
   #base: string;
   #token: string;
@@ -32,15 +38,29 @@ export class DkgClient {
     this.#token = opts.token;
   }
 
-  async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await fetch(`${this.#base}${path}`, {
-      method,
-      headers: {
-        ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-        authorization: `Bearer ${this.#token}`,
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+  async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+  ): Promise<T> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.#base}${path}`, {
+        method,
+        headers: {
+          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+          authorization: `Bearer ${this.#token}`,
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (err) {
+      if ((err as Error).name === 'TimeoutError') {
+        throw new Error(`dkg ${method} ${path} timed out after ${timeoutMs}ms`);
+      }
+      throw err;
+    }
     const text = await res.text();
     let json: any;
     try {
@@ -121,9 +141,12 @@ export class DkgClient {
     name: string,
     contextGraphId: string,
   ): Promise<{ status: string; ual: string; txHash: string; kaId?: string; merkleRoot?: string }> {
-    return this.request('POST', `/api/knowledge-assets/${encodeURIComponent(name)}/vm/publish`, {
-      contextGraphId,
-    });
+    return this.request(
+      'POST',
+      `/api/knowledge-assets/${encodeURIComponent(name)}/vm/publish`,
+      { contextGraphId },
+      PUBLISH_TIMEOUT_MS,
+    );
   }
 
   descriptor(name: string, contextGraphId: string): Promise<DescriptorResponse> {

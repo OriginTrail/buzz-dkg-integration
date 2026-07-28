@@ -51,10 +51,12 @@ export class Registry {
         digest TEXT NOT NULL,
         ka_name TEXT NOT NULL,
         root_uri TEXT NOT NULL,
+        title TEXT,
         assertion_uri TEXT,
         state TEXT NOT NULL,
         receipt_event_id TEXT,
         ual TEXT,
+        tx_hash TEXT,
         vm_receipt_event_id TEXT,
         consumed_approval_id TEXT,
         error TEXT,
@@ -71,12 +73,26 @@ export class Registry {
       CREATE TABLE IF NOT EXISTS asks (
         ask_event_id TEXT PRIMARY KEY,
         channel_id TEXT NOT NULL,
+        author_pubkey TEXT,
         answer_event_id TEXT,
         outcome TEXT NOT NULL, -- 'answered' | 'refused' | 'pending'
         created_at INTEGER NOT NULL
       );
       INSERT OR IGNORE INTO cursor (id, last_created_at) VALUES (1, 0);
     `);
+    // Additive migrations for DBs created before these columns existed. SQLite
+    // ADD COLUMN is a cheap metadata-only change; ignore "duplicate column".
+    for (const alter of [
+      'ALTER TABLE ops ADD COLUMN title TEXT',
+      'ALTER TABLE ops ADD COLUMN tx_hash TEXT',
+      'ALTER TABLE asks ADD COLUMN author_pubkey TEXT',
+    ]) {
+      try {
+        this.db.exec(alter);
+      } catch (e: any) {
+        if (!String(e.message).includes('duplicate column')) throw e;
+      }
+    }
   }
 
   loadBindings(bindings: ChannelBinding[]): void {
@@ -142,14 +158,15 @@ export class Registry {
     digest: string;
     kaName: string;
     rootUri: string;
+    title?: string;
   }): OpRecord | null {
     const now = Date.now();
     try {
       this.db
         .prepare(
           `INSERT INTO ops (trigger_event_id, trigger_kind, channel_id, context_graph_id, root_event_id,
-             digest, ka_name, root_uri, state, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'distilled', ?, ?)`,
+             digest, ka_name, root_uri, title, state, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'distilled', ?, ?)`,
         )
         .run(
           fields.triggerEventId,
@@ -160,6 +177,7 @@ export class Registry {
           fields.digest,
           fields.kaName,
           fields.rootUri,
+          fields.title ?? null,
           now,
           now,
         );
@@ -278,18 +296,26 @@ export class Registry {
   }
 
   /** Claims an ask exactly once; false = duplicate. */
-  claimAsk(askEventId: string, channelId: string): boolean {
+  claimAsk(askEventId: string, channelId: string, authorPubkey?: string): boolean {
     try {
       this.db
         .prepare(
-          "INSERT INTO asks (ask_event_id, channel_id, outcome, created_at) VALUES (?, ?, 'pending', ?)",
+          "INSERT INTO asks (ask_event_id, channel_id, author_pubkey, outcome, created_at) VALUES (?, ?, ?, 'pending', ?)",
         )
-        .run(askEventId, channelId, Date.now());
+        .run(askEventId, channelId, authorPubkey ?? null, Date.now());
       return true;
     } catch (e: any) {
       if (String(e.message).includes('UNIQUE')) return false;
       throw e;
     }
+  }
+
+  /** Count asks claimed by one pubkey within the window (per-pubkey ask rate limit). */
+  recentAskCountByPubkey(authorPubkey: string, windowMs: number): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS n FROM asks WHERE author_pubkey = ? AND created_at > ?')
+      .get(authorPubkey, Date.now() - windowMs) as { n: number };
+    return row.n;
   }
 
   resolveAsk(askEventId: string, outcome: 'answered' | 'refused', answerEventId?: string): void {
@@ -324,10 +350,12 @@ function toOp(r: Record<string, unknown>): OpRecord {
     digest: r.digest as string,
     kaName: r.ka_name as string,
     rootUri: r.root_uri as string,
+    title: (r.title as string) ?? null,
     assertionUri: (r.assertion_uri as string) ?? null,
     state: r.state as OpState,
     receiptEventId: (r.receipt_event_id as string) ?? null,
     ual: (r.ual as string) ?? null,
+    txHash: (r.tx_hash as string) ?? null,
     vmReceiptEventId: (r.vm_receipt_event_id as string) ?? null,
     consumedApprovalId: (r.consumed_approval_id as string) ?? null,
     error: (r.error as string) ?? null,
