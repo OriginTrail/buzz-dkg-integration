@@ -1,0 +1,41 @@
+#!/bin/sh
+set -eu
+
+repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+node_is_usable() {
+  candidate=$1
+  [ -x "$candidate" ] || return 1
+  version=$("$candidate" -p 'process.versions.node.split(".").slice(0,2).join(" ")' 2>/dev/null || true)
+  major=${version%% *}
+  minor=${version#* }
+  [ -n "$major" ] && [ -n "$minor" ] || return 1
+  if [ "$major" -eq 22 ]; then
+    [ "$minor" -ge 13 ]
+  elif [ "$major" -eq 23 ]; then
+    [ "$minor" -ge 4 ]
+  else
+    [ "$major" -gt 23 ]
+  fi
+}
+
+if [ -n "${BDI_MVP_NODE:-}" ]; then
+  if ! node_is_usable "$BDI_MVP_NODE"; then
+    echo "buzz-dkg: BDI_MVP_NODE must satisfy Node >=22.13 <23 or >=23.4" >&2
+    exit 2
+  fi
+  node_bin=$BDI_MVP_NODE
+elif command -v node >/dev/null 2>&1 && node_is_usable "$(command -v node)"; then
+  node_bin=$(command -v node)
+elif node_is_usable "$repo_dir/../buzz/bin/node"; then
+  # The sibling Buzz checkout pins a compatible Node through Hermit.
+  node_bin=$repo_dir/../buzz/bin/node
+elif node_is_usable /opt/homebrew/bin/node; then
+  node_bin=/opt/homebrew/bin/node
+else
+  echo "buzz-dkg requires Node >=22.13 <23 or >=23.4." >&2
+  echo "Set BDI_MVP_NODE to a compatible node binary and retry." >&2
+  exit 2
+fi
+
+exec "$node_bin" "$repo_dir/scripts/mvp.mjs" "$@"

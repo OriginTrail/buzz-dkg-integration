@@ -1,0 +1,157 @@
+name: buzz-dkg-m0
+
+# Local M0 Buzz dependencies only. DKG and the integration daemon are host
+# processes so their existing lifecycle and token-file interfaces remain the
+# source of truth. Only the relay is published, and only on loopback.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: buzz
+      POSTGRES_USER: buzz
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?missing POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U buzz -d buzz']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    networks: [mvp]
+    labels:
+      com.buzz-dkg.scope: m0
+
+  redis:
+    image: redis:7-alpine
+    entrypoint: ['/bin/sh', '-euc']
+    command:
+      - exec redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?missing REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'redis-cli -a "$${REDIS_PASSWORD}" ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+    networks: [mvp]
+    labels:
+      com.buzz-dkg.scope: m0
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${BUZZ_S3_ACCESS_KEY:?missing BUZZ_S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${BUZZ_S3_SECRET_KEY:?missing BUZZ_S3_SECRET_KEY}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://127.0.0.1:9000/minio/health/live']
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    networks: [mvp]
+    labels:
+      com.buzz-dkg.scope: m0
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      BUZZ_S3_ACCESS_KEY: ${BUZZ_S3_ACCESS_KEY:?missing BUZZ_S3_ACCESS_KEY}
+      BUZZ_S3_SECRET_KEY: ${BUZZ_S3_SECRET_KEY:?missing BUZZ_S3_SECRET_KEY}
+      BUZZ_S3_BUCKET: buzz-media
+    entrypoint: >
+      /bin/sh -euc '
+        mc alias set local http://minio:9000 "$${BUZZ_S3_ACCESS_KEY}" "$${BUZZ_S3_SECRET_KEY}"
+        mc mb --ignore-existing "local/$${BUZZ_S3_BUCKET}"
+        mc anonymous set none "local/$${BUZZ_S3_BUCKET}"
+      '
+    restart: 'no'
+    networks: [mvp]
+    labels:
+      com.buzz-dkg.scope: m0
+
+  relay:
+    # Current audited Buzz commit 318fbf8, pinned by immutable manifest digest.
+    image: ghcr.io/block/buzz:sha-318fbf8@sha256:5544939bbb2faa70032b322ba11c578ead685a3abf6fa4596a9e7b839715960e
+    environment:
+      BUZZ_BIND_ADDR: 0.0.0.0:3000
+      BUZZ_HEALTH_PORT: '8080'
+      BUZZ_METRICS_PORT: '9102'
+      RELAY_URL: ws://127.0.0.1:9440
+      DATABASE_URL: postgres://buzz:${POSTGRES_PASSWORD:?missing POSTGRES_PASSWORD}@postgres:5432/buzz
+      REDIS_URL: redis://:${REDIS_PASSWORD:?missing REDIS_PASSWORD}@redis:6379
+      BUZZ_RELAY_PRIVATE_KEY: ${BDI_SPIKE_RELAY_KEY:?missing BDI_SPIKE_RELAY_KEY}
+      BUZZ_S3_ENDPOINT: http://minio:9000
+      BUZZ_S3_ADDRESSING_STYLE: path
+      BUZZ_S3_ACCESS_KEY: ${BUZZ_S3_ACCESS_KEY:?missing BUZZ_S3_ACCESS_KEY}
+      BUZZ_S3_SECRET_KEY: ${BUZZ_S3_SECRET_KEY:?missing BUZZ_S3_SECRET_KEY}
+      BUZZ_S3_BUCKET: buzz-media
+      BUZZ_GIT_REPO_PATH: /data/git
+      BUZZ_AUTO_MIGRATE: 'true'
+      BUZZ_GIT_CONFORMANCE_PROBE: 'false'
+      RUST_LOG: buzz_relay=info,buzz_db=warn,buzz_datastore=warn
+    ports:
+      - '127.0.0.1:9440:3000'
+    volumes:
+      - git-data:/data/git
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8080; printf \"GET /_readiness HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n\" >&3; grep -q \"200 OK\" <&3'",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
+    restart: unless-stopped
+    networks: [mvp]
+    labels:
+      com.buzz-dkg.scope: m0
+
+volumes:
+  postgres-data:
+    name: buzz-dkg-m0-postgres
+    labels:
+      com.buzz-dkg.scope: m0
+  redis-data:
+    name: buzz-dkg-m0-redis
+    labels:
+      com.buzz-dkg.scope: m0
+  minio-data:
+    name: buzz-dkg-m0-minio
+    labels:
+      com.buzz-dkg.scope: m0
+  git-data:
+    name: buzz-dkg-m0-git
+    labels:
+      com.buzz-dkg.scope: m0
+
+networks:
+  mvp:
+    name: buzz-dkg-m0-net
+    driver: bridge
+    labels:
+      com.buzz-dkg.scope: m0
