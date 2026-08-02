@@ -19,7 +19,26 @@ Time: ~30 minutes. Everything is self-serve; nothing needs an operator.
 - git ≥ 2.46, Rust toolchain, Node 20+, pnpm (or hermit — the repo ships it)
 - Your Buzz identity nsec (the key your Buzz app uses on this relay)
 
-## Step 1 — build the desktop app with the Memory panel
+## Step 1 (easiest) — download the prebuilt app
+
+No toolchain needed. On the tailnet, download:
+
+**https://macbook-pro-8.tailb02f7e.ts.net/downloads/Buzz-Memory_0.5.2_aarch64.dmg** (Apple Silicon)
+
+Install notes:
+- The build is ad-hoc signed (internal build): first launch is **right-click →
+  Open** (or `xattr -dc "/Applications/Buzz.app"` after copying).
+- It uses the same app identifier as official Buzz, so **your existing
+  identity and community login carry over automatically**. If you keep the
+  official app too, rename this one (e.g. "Buzz Memory.app") and only run
+  one of them at a time.
+- Intel Mac or Linux? Use Step 1b (source build) below, or ask in the
+  channel for a build for your platform.
+
+Then skip to Step 2 (or just open the ◈ Memory chip — discovery mode works
+immediately, no node needed).
+
+## Step 1b (developers) — build the desktop app from source
 
 The fork lives on **our community git** (access = channel membership, via
 NIP-98 git auth):
