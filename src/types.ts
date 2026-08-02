@@ -65,6 +65,14 @@ export interface ChannelBinding {
   contextGraphId: string;
   /** npubs (hex) authorized to approve VM publication for this channel (§6.1). */
   promoters: string[];
+  /**
+   * Optional base URL of a DKG explorer scoped to this channel's Context
+   * Graph; when set (or when the global BDI_EXPLORER_URL fallback is),
+   * receipts carry a markdown link so clients that render markdown (Buzz
+   * desktop) get a click-through into the graph. Purely presentational —
+   * absent, receipts are byte-identical to the pre-explorer format.
+   */
+  explorerUrl?: string;
 }
 
 export interface EvidenceRecord {
@@ -97,6 +105,13 @@ export interface DaemonConfig {
   publishMode: PublishMode;
   /** mainnet guardrail: max daemon-initiated publications per rolling 24 h. */
   maxPublishesPerDay: number;
+  /**
+   * Seconds between HTTP catch-up polls, as a fallback when the relay's live
+   * WS fan-out is not delivering. 0 (default) disables polling.
+   */
+  pollIntervalS: number;
   dbPath: string;
   bindings: ChannelBinding[];
+  /** Global explorer base URL fallback for bindings without their own. */
+  explorerUrl?: string;
 }

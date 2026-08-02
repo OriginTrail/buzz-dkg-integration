@@ -36,6 +36,8 @@ export class Daemon {
   readonly distiller: Distiller;
   #queue: Promise<void> = Promise.resolve();
   #chainId: string | undefined;
+  #pollTimer: ReturnType<typeof setInterval> | undefined;
+  #pollInFlight = false;
 
   constructor(
     config: DaemonConfig,
@@ -124,9 +126,27 @@ export class Daemon {
     }
     this.subscribe();
     this.relay.connect();
+    // Safety net for relay deployments whose live WS fan-out fails to deliver
+    // to HTTP-bridge-authenticated subscribers (observed against buzz-relay
+    // 63496cc: `relay ws connected`, zero events ever pushed): poll the stored
+    // history through the HTTP catch-up path. Dedup makes replay free, so a
+    // missed live event is delayed by at most one interval instead of waiting
+    // for an operator restart. Disabled by default (0) — live fan-out plus
+    // reconnect replay is the primary path.
+    if (this.config.pollIntervalS > 0) {
+      this.#pollTimer = setInterval(() => {
+        if (this.#pollInFlight) return;
+        this.#pollInFlight = true;
+        void this.catchUp()
+          .catch((err) => logger.warn('poll catch-up failed', { err: String(err) }))
+          .finally(() => (this.#pollInFlight = false));
+      }, this.config.pollIntervalS * 1000);
+      this.#pollTimer.unref?.();
+    }
     logger.info('daemon started', {
       servicePubkey: this.relay.pubkey,
       channels: this.config.bindings.length,
+      pollIntervalS: this.config.pollIntervalS,
     });
   }
 
@@ -373,7 +393,10 @@ export class Daemon {
           (
             await this.relay.sendMessage(
               op.channelId,
-              swmReceipt({ ...op, assertionUri: op.assertionUri }),
+              swmReceipt(
+                { ...op, assertionUri: op.assertionUri },
+                this.explorerUrlFor(op.channelId),
+              ),
               {
                 replyTo: op.rootEventId,
               },
@@ -392,6 +415,14 @@ export class Daemon {
   }
 
   /** Read-back before retry (§9): find a receipt we may have posted pre-crash. */
+  /** Per-binding explorer link base, falling back to the global config value. */
+  explorerUrlFor(channelId: string): string | undefined {
+    return (
+      this.config.bindings.find((b) => b.channelId === channelId)?.explorerUrl ??
+      this.config.explorerUrl
+    );
+  }
+
   async findExistingReceipt(op: OpRecord): Promise<string | null> {
     const mine = await this.relay.query([
       { kinds: [9], '#h': [op.channelId], '#e': [op.rootEventId], authors: [this.relay.pubkey] },
@@ -614,7 +645,12 @@ export class Daemon {
       (
         await this.relay.sendMessage(
           op.channelId,
-          vmReceipt(op, op.consumedApprovalId ?? '', approverPubkey),
+          vmReceipt(
+            op,
+            op.consumedApprovalId ?? '',
+            approverPubkey,
+            this.explorerUrlFor(op.channelId),
+          ),
           { replyTo: op.rootEventId },
         )
       ).eventId;
@@ -712,6 +748,7 @@ export class Daemon {
   }
 
   async stop(): Promise<void> {
+    if (this.#pollTimer) clearInterval(this.#pollTimer);
     this.relay.close();
     await this.drain();
     this.registry.close();

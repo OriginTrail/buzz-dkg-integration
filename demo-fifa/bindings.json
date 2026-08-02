@@ -4,6 +4,16 @@
     "contextGraphId": "0x633E5a7C5e612d9981538F60D824cC03be97e2Ab/fifa-world-cup-2026",
     "promoters": [
       "fc11ee8605a0bca53185867f1982334c61dd9249c752ab2532c07312acc294d6"
-    ]
+    ],
+    "explorerUrl": "http://127.0.0.1:9295"
+  },
+  {
+    "channelId": "91f4ca95-17bf-4d93-a335-13f51b40fb07",
+    "contextGraphId": "0x633E5a7C5e612d9981538F60D824cC03be97e2Ab/web-of-trust",
+    "promoters": [
+      "fc11ee8605a0bca53185867f1982334c61dd9249c752ab2532c07312acc294d6",
+      "7b20d5265af65543cbe6192e1665f8f0730004622c111c381d163cde53ae5bc5"
+    ],
+    "explorerUrl": "http://127.0.0.1:9295"
   }
 ]

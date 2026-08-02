@@ -15,3 +15,8 @@ demo-fifa/*.db
 demo-fifa/*.db-shm
 demo-fifa/*.db-wal
 repos/.pack-cache/
+dkg-mirror/*
+!dkg-mirror/sync.sh
+wot-knowledge-ui-clone/
+wot-autocapture-state.json
+*.log
