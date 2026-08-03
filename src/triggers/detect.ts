@@ -17,6 +17,8 @@ const lastETag = (e: NostrEvent): string | undefined =>
 const mentionsPubkey = (e: NostrEvent, pubkey: string): boolean =>
   e.tags.some((t) => t[0] === 'p' && t[1] === pubkey);
 
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 /**
  * Hard cap on question length. Retrieval builds O(n²) term pairs and
  * interpolates them into a SPARQL FILTER (see grounded.ts), so an unbounded
@@ -38,7 +40,7 @@ export const MAX_QUESTION_CHARS = 512;
  */
 export function classify(
   event: NostrEvent,
-  opts: { servicePubkey: string; mentionHandle: string },
+  opts: { servicePubkey: string; mentionHandle: string; mentionDisplayName?: string },
 ): Trigger {
   if (event.pubkey === opts.servicePubkey) return null; // never self-trigger
 
@@ -58,7 +60,15 @@ export function classify(
   if (event.kind === 9 && mentionsPubkey(event, opts.servicePubkey)) {
     const channelId = firstTag(event, 'h');
     if (!channelId) return null;
-    const re = new RegExp(`@${opts.mentionHandle}\\b\\s+(distill|ask)\\b\\s*(.*)`, 'is');
+    // Buzz renders the selected profile's display_name into message content
+    // while the signed p tag carries the authoritative identity. Accept both
+    // configured labels exactly; never treat arbitrary @text as the service.
+    const names = [...new Set([opts.mentionHandle, opts.mentionDisplayName].filter(Boolean))]
+      .map((name) => String(name))
+      .sort((a, b) => b.length - a.length)
+      .map(escapeRegExp)
+      .join('|');
+    const re = new RegExp(`@(?:${names})(?=\\s)\\s+(distill|ask)\\b\\s*(.*)`, 'is');
     const m = event.content.match(re);
     if (!m) return null;
     const verb = m[1]!.toLowerCase();

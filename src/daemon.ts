@@ -192,6 +192,7 @@ export class Daemon {
         const trigger = classify(event, {
           servicePubkey: this.relay.pubkey,
           mentionHandle: this.config.mentionHandle,
+          mentionDisplayName: this.config.mentionDisplayName,
         });
         if (trigger?.type === 'ask')
           await this.executeAsk(trigger.event, trigger.channelId, trigger.question, true).catch(
@@ -206,6 +207,7 @@ export class Daemon {
     const trigger = classify(event, {
       servicePubkey: this.relay.pubkey,
       mentionHandle: this.config.mentionHandle,
+      mentionDisplayName: this.config.mentionDisplayName,
     });
     // `created_at` is client-set; a single event dated far in the future would
     // otherwise pin the MAX-cursor forever, so every subsequent `since` filters

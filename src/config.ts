@@ -92,6 +92,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
       env.BDI_BUZZ_WS ?? (env.BDI_BUZZ_HTTP ?? 'ws://127.0.0.1:9440').replace(/^http/, 'ws'),
     serviceSecretKeyHex: required('BDI_SERVICE_KEY', env),
     mentionHandle: env.BDI_MENTION_HANDLE ?? 'dkg',
+    mentionDisplayName: env.BDI_MENTION_DISPLAY_NAME?.trim() || undefined,
     dkgApiUrl: (env.BDI_DKG_API ?? 'http://127.0.0.1:9200').replace(/\/$/, ''),
     dkgToken,
     approvalEmoji: env.BDI_APPROVAL_EMOJI ?? '✅',

@@ -82,7 +82,9 @@ export interface DaemonConfig {
   relayHttpUrl: string;
   relayWsUrl: string;
   serviceSecretKeyHex: string;
-  mentionHandle: string; // e.g. "dkg" — matched as @<handle> in kind-9 content
+  mentionHandle: string; // stable short name, e.g. "dkg"
+  /** Optional Buzz profile display name rendered into message content. */
+  mentionDisplayName?: string;
   dkgApiUrl: string;
   dkgToken: string;
   approvalEmoji: string;
