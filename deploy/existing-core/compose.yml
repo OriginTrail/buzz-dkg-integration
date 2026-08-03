@@ -1,0 +1,199 @@
+name: buzz-dkg-existing-core
+
+x-log-policy: &log-policy
+  driver: local
+  options:
+    max-size: 10m
+    max-file: "3"
+
+x-integration: &integration
+  image: buzz-dkg-integration:existing-core-mvp
+  build:
+    context: ../..
+    dockerfile: deploy/existing-core/Dockerfile.integration
+  network_mode: host
+  user: "${BDI_RUNTIME_UID:-1000}:${BDI_RUNTIME_GID:-1000}"
+  volumes:
+    - ${BDI_RUNTIME_DIR:?set BDI_RUNTIME_DIR}:/runtime
+    - ${BDI_DKG_TOKEN_PATH:?set BDI_DKG_TOKEN_PATH}:/run/secrets/dkg-auth.token:ro
+  environment: &integration-environment
+    BDI_BUZZ_HTTP: ${BDI_BUZZ_HTTP:?set BDI_BUZZ_HTTP}
+    BDI_BUZZ_WS: ${BDI_BUZZ_WS:?set BDI_BUZZ_WS}
+    BDI_SERVICE_KEY: ${BDI_SERVICE_KEY:?set BDI_SERVICE_KEY}
+    BDI_MENTION_HANDLE: ${BDI_MENTION_HANDLE:-dkg}
+    BDI_DKG_API: http://127.0.0.1:9200
+    BDI_DKG_TOKEN_PATH: /run/secrets/dkg-auth.token
+    BDI_BINDINGS_PATH: /runtime/bindings.json
+    BDI_PUBLISH_MODE: disabled
+    BDI_MAX_PUBLISHES_PER_DAY: "0"
+    BDI_DB_PATH: /runtime/daemon.db
+    BDI_LOG_LEVEL: ${BDI_LOG_LEVEL:-info}
+  logging: *log-policy
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: buzz
+      POSTGRES_USER: buzz
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command:
+      - postgres
+      - -c
+      - shared_buffers=96MB
+      - -c
+      - max_connections=60
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U buzz -d buzz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    networks: [buzz]
+    logging: *log-policy
+
+  redis:
+    image: redis:7-alpine
+    entrypoint: ["/bin/sh", "-euc"]
+    command:
+      - >-
+        exec redis-server --appendonly yes --requirepass "$${REDIS_PASSWORD}"
+        --maxmemory 128mb --maxmemory-policy allkeys-lru
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    networks: [buzz]
+    logging: *log-policy
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${BUZZ_S3_ACCESS_KEY:?set BUZZ_S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${BUZZ_S3_SECRET_KEY:?set BUZZ_S3_SECRET_KEY}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    networks: [buzz]
+    logging: *log-policy
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      BUZZ_S3_ACCESS_KEY: ${BUZZ_S3_ACCESS_KEY:?set BUZZ_S3_ACCESS_KEY}
+      BUZZ_S3_SECRET_KEY: ${BUZZ_S3_SECRET_KEY:?set BUZZ_S3_SECRET_KEY}
+    entrypoint:
+      - /bin/sh
+      - -euc
+      - >-
+        mc alias set local http://minio:9000 "$${BUZZ_S3_ACCESS_KEY}" "$${BUZZ_S3_SECRET_KEY}";
+        mc mb --ignore-existing local/buzz-media;
+        mc anonymous set none local/buzz-media
+    restart: "no"
+    networks: [buzz]
+    logging: *log-policy
+
+  relay:
+    image: ghcr.io/block/buzz:sha-318fbf8@sha256:5544939bbb2faa70032b322ba11c578ead685a3abf6fa4596a9e7b839715960e
+    environment:
+      BUZZ_BIND_ADDR: 0.0.0.0:3000
+      BUZZ_HEALTH_PORT: "8080"
+      BUZZ_METRICS_PORT: "9102"
+      RELAY_URL: ${BDI_BUZZ_WS:?set BDI_BUZZ_WS}
+      DATABASE_URL: postgres://buzz:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/buzz
+      REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379
+      BUZZ_RELAY_PRIVATE_KEY: ${BUZZ_RELAY_PRIVATE_KEY:?set BUZZ_RELAY_PRIVATE_KEY}
+      BUZZ_S3_ENDPOINT: http://minio:9000
+      BUZZ_S3_ADDRESSING_STYLE: path
+      BUZZ_S3_ACCESS_KEY: ${BUZZ_S3_ACCESS_KEY:?set BUZZ_S3_ACCESS_KEY}
+      BUZZ_S3_SECRET_KEY: ${BUZZ_S3_SECRET_KEY:?set BUZZ_S3_SECRET_KEY}
+      BUZZ_S3_BUCKET: buzz-media
+      BUZZ_GIT_REPO_PATH: /data/git
+      BUZZ_AUTO_MIGRATE: "true"
+      BUZZ_GIT_CONFORMANCE_PROBE: "false"
+      RUST_LOG: buzz_relay=info,buzz_db=warn,buzz_datastore=warn
+    ports:
+      - 127.0.0.1:9440:3000
+    volumes:
+      - git-data:/data/git
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          bash -ec 'exec 3<>/dev/tcp/127.0.0.1/8080;
+          printf "GET /_readiness HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n" >&3;
+          grep -q "200 OK" <&3'
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+    networks: [buzz]
+    logging: *log-policy
+
+  daemon:
+    <<: *integration
+    restart: unless-stopped
+
+  bootstrap:
+    <<: *integration
+    profiles: [tools]
+    command: ["node", "deploy/existing-core/bootstrap.mjs"]
+    environment:
+      <<: *integration-environment
+      BDI_BUZZ_OWNER_KEY: ${BDI_BUZZ_OWNER_KEY:?set BDI_BUZZ_OWNER_KEY}
+      BDI_CHANNEL_NAME: ${BDI_CHANNEL_NAME:-Web of Trust}
+      BDI_CHANNEL_VISIBILITY: ${BDI_CHANNEL_VISIBILITY:-open}
+      BDI_CHANNEL_DESCRIPTION: ${BDI_CHANNEL_DESCRIPTION:-Buzz channel with DKG-backed memory}
+      BDI_CONTEXT_GRAPH_ACCESS_POLICY: ${BDI_CONTEXT_GRAPH_ACCESS_POLICY:-1}
+    restart: "no"
+
+  smoke:
+    <<: *integration
+    profiles: [tools]
+    command: ["node", "scripts/mvp-smoke.mjs"]
+    environment:
+      <<: *integration-environment
+      BDI_MVP_STATE_DIR: /runtime
+      BDI_BUZZ_OWNER_KEY: ${BDI_BUZZ_OWNER_KEY:?set BDI_BUZZ_OWNER_KEY}
+    restart: "no"
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  git-data:
+
+networks:
+  buzz:
+    driver: bridge
