@@ -12,8 +12,9 @@ Safety defaults:
 - Docker logs are capped at three 10 MB files per service.
 - Bootstrap creates one channel, one private off-chain Context Graph, and one
   service bot membership. It also publishes the managed `DKG Memory` / `dkg`
-  bot profile needed for `@dkg distill` mention autocomplete. It is convergent
-  on rerun.
+  bot profile needed for mention autocomplete. The daemon accepts both the
+  profile's rendered `@DKG Memory distill` command and `@dkg distill`, while
+  requiring the signed bot `p` tag. Bootstrap is convergent on rerun.
 
 The intended lifecycle is:
 

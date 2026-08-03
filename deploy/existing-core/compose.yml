@@ -21,6 +21,7 @@ x-integration: &integration
     BDI_BUZZ_WS: ${BDI_BUZZ_WS:?set BDI_BUZZ_WS}
     BDI_SERVICE_KEY: ${BDI_SERVICE_KEY:?set BDI_SERVICE_KEY}
     BDI_MENTION_HANDLE: ${BDI_MENTION_HANDLE:-dkg}
+    BDI_MENTION_DISPLAY_NAME: ${BDI_MENTION_DISPLAY_NAME:-DKG Memory}
     BDI_DKG_API: http://127.0.0.1:9200
     BDI_DKG_TOKEN_PATH: /run/secrets/dkg-auth.token
     BDI_BINDINGS_PATH: /runtime/bindings.json

@@ -96,8 +96,8 @@ if (!hasService(await membership())) {
 }
 
 const desiredServiceProfile = {
-  name: 'dkg',
-  display_name: 'DKG Memory',
+  name: process.env.BDI_MENTION_HANDLE || 'dkg',
+  display_name: process.env.BDI_MENTION_DISPLAY_NAME || 'DKG Memory',
   about:
     'OriginTrail DKG memory service for this Buzz community. Mention @dkg distill in a thread to capture it into Shared Working Memory.',
 };
