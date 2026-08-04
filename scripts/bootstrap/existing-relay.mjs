@@ -12,6 +12,7 @@ import {
   reconcileResolvedBootstrap,
   validateContextGraphId,
 } from './core.mjs';
+import { channelFromMetadataEvent, membershipRole } from './nip29.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -32,31 +33,6 @@ async function poll(label, fn, attempts = 40) {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   throw new Error(`timed out waiting for ${label}`);
-}
-
-function tagValue(event, name) {
-  return event.tags.find((tag) => tag[0] === name)?.[1];
-}
-
-function hasMarker(event, name) {
-  return event.tags.some((tag) => tag[0] === name);
-}
-
-export function channelFromMetadataEvent(event) {
-  const explicitVisibility = tagValue(event, 'visibility');
-  const visibility = hasMarker(event, 'private')
-    ? 'private'
-    : explicitVisibility === 'private'
-      ? 'private'
-      : 'open';
-  const archived = tagValue(event, 'archived');
-  return {
-    id: tagValue(event, 'd'),
-    name: tagValue(event, 'name'),
-    visibility,
-    channelType: tagValue(event, 't') || tagValue(event, 'channel_type') || 'stream',
-    archived: ['true', '1'].includes(String(archived).toLowerCase()),
-  };
 }
 
 export class ExistingRelayBuzzAdapter {
@@ -162,7 +138,7 @@ function hasBotMembership(event, servicePubkey) {
       (tag) =>
         tag[0] === 'p' &&
         String(tag[1]).toLowerCase() === servicePubkey &&
-        String(tag[3] || tag[2]).toLowerCase() === 'bot',
+        String(membershipRole(tag)).toLowerCase() === 'bot',
     ),
   );
 }

@@ -2,11 +2,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import {
-  bootstrapExistingRelay,
-  channelFromMetadataEvent,
-  loadExistingRelayConfig,
-} from '../scripts/bootstrap/existing-relay.mjs';
+import { bootstrapExistingRelay, loadExistingRelayConfig } from '../scripts/bootstrap/existing-relay.mjs';
+import { channelFromMetadataEvent, membershipRole } from '../scripts/bootstrap/nip29.mjs';
 
 const channelId = '550e8400-e29b-41d4-a716-446655440000';
 const ownerPubkey = '1'.repeat(64);
@@ -122,6 +119,31 @@ describe('existing-relay bootstrap reconciliation', () => {
         ],
       }),
     ).toMatchObject({ visibility: 'private', channelType: 'forum' });
+    expect(membershipRole(['p', servicePubkey, '', 'bot'])).toBe('bot');
+    expect(membershipRole(['p', servicePubkey, 'bot'])).toBeUndefined();
+  });
+
+  it('does not infer a stream channel when relay metadata omits its type', async () => {
+    const h = harness();
+    h.channels.push(
+      channelFromMetadataEvent({
+        tags: [
+          ['d', channelId],
+          ['name', h.config.channelName],
+          ['public'],
+          ['closed'],
+        ],
+      }),
+    );
+    await expect(
+      bootstrapExistingRelay(h.config, { buzz: h.buzz, dkg: h.dkg }),
+    ).rejects.toThrow(/type 'unknown'.*expected 'stream'/);
+    expect(h.calls).toEqual({
+      createChannel: 0,
+      addBot: 0,
+      publishProfile: 0,
+      createGraph: 0,
+    });
   });
 
   it('binds the relay-assigned channel, upgrades the bot role, and converges', async () => {
