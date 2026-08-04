@@ -22,6 +22,12 @@ describe('config hardening', () => {
     ).toThrow(/BDI_MAX_PUBLISHES_PER_DAY/);
   });
 
+  it('rejects a non-numeric poll interval (fails closed, not open)', () => {
+    expect(() => loadConfig({ BDI_DKG_TOKEN: 'x', BDI_POLL_INTERVAL_S: 'often' } as never)).toThrow(
+      /BDI_POLL_INTERVAL_S/,
+    );
+  });
+
   it('normalizes a hex promoter pubkey and decodes an npub', () => {
     const hex = 'ab'.repeat(32);
     expect(normalizePubkey(hex.toUpperCase(), 'x')).toBe(hex);
@@ -86,6 +92,7 @@ function setup(overrides: Partial<DaemonConfig> = {}) {
     approvalEmoji: '✅',
     publishMode: 'devnet',
     maxPublishesPerDay: 5,
+    pollIntervalS: 0,
     dbPath: ':memory:',
     bindings: [{ channelId: 'chan', contextGraphId: 'devnet-test', promoters: [promoter] }],
     ...overrides,
@@ -403,7 +410,9 @@ describe('deferred-item follow-ups (#19, ask rate-limit, #20b)', () => {
     const { pin } = pinnedThread(ctx.relay);
     await ctx.daemon.start();
     await run(ctx.daemon, pin);
-    expect(ctx.relay.sent[0]!.content).toMatch(/^Captured .*Distilled to Shared Working Memory\./);
+    expect(ctx.relay.sent[0]!.content).toMatch(
+      /^🟡 Captured .*Distilled to Shared Working Memory — visible to this channel's members, off-chain\./,
+    );
 
     const approval = makeEvent({
       kind: 7,
@@ -414,7 +423,9 @@ describe('deferred-item follow-ups (#19, ask rate-limit, #20b)', () => {
     ctx.relay.ingest(approval);
     await run(ctx.daemon, approval);
     const vm = ctx.relay.sent[1]!.content;
-    expect(vm).toMatch(/^Published .*Published to Verifiable Memory\./);
+    expect(vm).toMatch(
+      /^🟢 Published .*Published to Verifiable Memory — anchored on-chain, publicly resolvable\./,
+    );
     expect(vm).toContain('tx: 0xtx');
     expect(vm).toContain('UAL:');
   });

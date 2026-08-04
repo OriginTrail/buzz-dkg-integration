@@ -6,8 +6,11 @@ PHASE0="$(cd "$(dirname "$0")" && pwd)"
 set -a; source "$PHASE0/.env.spike"; set +a
 export DATABASE_URL="postgres://buzz:bdi_spike_pg@127.0.0.1:15442/buzz"
 export REDIS_URL="redis://127.0.0.1:15443"
-export BUZZ_BIND_ADDR="127.0.0.1:9440"
-export RELAY_URL="ws://127.0.0.1:9440"
+export BUZZ_REDIS_POOL_SIZE=64
+export BUZZ_RATE_LIMIT_HUMAN_API_CALLS_PER_MIN=100000
+export BUZZ_RATE_LIMIT_HUMAN_MESSAGES_PER_MIN=100000
+export BUZZ_BIND_ADDR="0.0.0.0:9440"
+export RELAY_URL="wss://macbook-pro-8.tailb02f7e.ts.net"
 export BUZZ_HEALTH_PORT="9442"
 export BUZZ_METRICS_PORT="9443"
 export BUZZ_AUTO_MIGRATE="1"

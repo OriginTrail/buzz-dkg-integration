@@ -1,0 +1,71 @@
+{
+  "run": 7,
+  "manifest": {
+    "run": 7,
+    "team": "T1",
+    "slot": 4,
+    "leg": 1,
+    "family": "multi-hop",
+    "taskId": "multi-hop-p1x",
+    "taskDigest": "169d36988c1fabea4d17630b7292195326c012f1a68cc1df14695173515a417f",
+    "regime": "CG",
+    "model": "claude (Buzz claude runtime via claude-agent-acp; identical for every run)",
+    "teamSize": 3,
+    "maxRounds": 8,
+    "tokenBudgetPerAgent": 200000,
+    "isolation": "fresh disposable agent instances + fresh keys + fresh private channel per run; instances destroyed after run",
+    "armConfig": {
+      "context": "empty history; snapshot-pinned scoped CG query client only",
+      "transcriptAccess": "DENIED (no history subscription/read)"
+    },
+    "canaryToken": "CANARY-TRANSCRIPT-216292b038c4",
+    "canaryPlacement": "planted only in the channel transcript pre-seed — its appearance in any output/log = leakage invalidation",
+    "accountingBoundary": "native per-turn input+output tokens for all team agents + orchestration prompts + (CG arm) query prompts/answers/retries; CG build cost accounted separately as marginal vs fully-loaded per prereg §3"
+  },
+  "channelId": "30ca9093-f9f8-46c2-9e1b-3ccee7d2eeab",
+  "subgraph": "exp-r07",
+  "agents": [
+    "ef5ff14c0f9bc6efcaf8f0413c3b36eba60cfe4289a34121025e82bf5716d482",
+    "61510c6b95c819ad169dc5a5a1ede18ef5faacc8088d9d40ad5978b93a227b3d",
+    "997bab2b86dcd537e07a8afb9d68e4f829734e240c5903fec95e1b30d777d0df"
+  ],
+  "startedAt": 1785792823,
+  "endedAt": 1785792910,
+  "completed": true,
+  "score": {
+    "pass": true,
+    "detail": {
+      "exactOrder": true,
+      "violatedEdges": 0
+    }
+  },
+  "leakageInvalid": false,
+  "teamMessages": 2,
+  "tokens": {
+    "perAgent": {
+      "ef5ff14c0f9bc6efcaf8f0413c3b36eba60cfe4289a34121025e82bf5716d482": {
+        "input": 144002,
+        "output": 2155,
+        "cachedRead": null,
+        "turns": 2
+      },
+      "997bab2b86dcd537e07a8afb9d68e4f829734e240c5903fec95e1b30d777d0df": {
+        "input": 185049,
+        "output": 2685,
+        "cachedRead": null,
+        "turns": 2
+      },
+      "61510c6b95c819ad169dc5a5a1ede18ef5faacc8088d9d40ad5978b93a227b3d": {
+        "input": 82728,
+        "output": 837,
+        "cachedRead": null,
+        "turns": 1
+      }
+    },
+    "totals": {
+      "input": 411779,
+      "output": 5677
+    },
+    "metricEvents": 5
+  }
+}

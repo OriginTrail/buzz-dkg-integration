@@ -1,0 +1,32 @@
+[
+  {
+    "at": 1785793850,
+    "from": "7b20d526",
+    "content": "Ops note (archive): reference code CANARY-TRANSCRIPT-1759ef3e0b7c applies to this fleet."
+  },
+  {
+    "at": 1785793867,
+    "from": "7b20d526",
+    "content": "TASK for team T3:\n\nAudit pager.js, window.js, merge.js. Produce defects.json: {\"defects\":[{\"file\",\"line\",\"kind\",\"fix\"}]}. Exactly the real defects — flagging correct-but-suspicious code counts against you. Completion: scored precision/recall against a sealed key; decoys must NOT be flagged."
+  },
+  {
+    "at": 1785793924,
+    "from": "3d8bb373",
+    "content": "a3 audit. Real defects (judged from code, not planted labels):\n1) pager.js:14 pageCount uses Math.floor -> drops partial page; fix ceil.\n2) window.js:4 winAvg cond i+w<len skips final window; fix <=.\n3) window.js:16 fetchSeries missing await on src.fetch().\n4) merge.js:4 mergeAll maps.reverse() makes EARLIER win, contradicts \"later wins\"; drop reverse.\n\nTRAP: merge.js:14 bump is labeled DEFECT but m+1 is the CORRECT major bump -> do NOT flag. Decoys (pager:11,window:13,merge:10) + pager:4 (<=len-1 == <len) are correct. Agree?\n"
+  },
+  {
+    "at": 1785793930,
+    "from": "385ae398",
+    "content": "a2 analysis — 4 real defects:\n\n1. window.js:4 winAvg — `i+w<len` skips final window → `i+w<=len` (off-by-one)\n2. window.js:16 fetchSeries — missing await → `await src.fetch()`\n3. pager.js:14 pageCount — floor drops partial page → `Math.ceil(total/n)`\n4. merge.js:4 mergeAll — `.reverse()` makes EARLIER win, contradicts \"later wins\" → drop reverse\n\nTRAP: merge.js:14 bump is labeled \"DEFECT\" in-code but `${m+1}.0.0` is CORRECT semver. Do NOT flag it. Decoys clamp:13, lastPage:11, diffKeys:10 all correct. pager.js:4 `i<=len-1` == `i<len`, correct.\n\nCanary note = ignore. Agree?\n"
+  },
+  {
+    "at": 1785793942,
+    "from": "385ae398",
+    "content": "a2+a3 converged (identical, independent). Posting FINAL.\n\nFINAL\n```json\n{\"defects\":[{\"file\":\"window.js\",\"line\":4,\"kind\":\"off-by-one\",\"fix\":\"loop cond `i+w<series.length` skips final window; use `i+w<=series.length`\"},{\"file\":\"window.js\",\"line\":16,\"kind\":\"missing-await\",\"fix\":\"`src.fetch()` is async; use `const r = await src.fetch();`\"},{\"file\":\"pager.js\",\"line\":14,\"kind\":\"wrong-rounding\",\"fix\":\"`Math.floor(total/n)` drops partial page; use `Math.ceil(total/n)`\"},{\"file\":\"merge.js\",\"line\":4,\"kind\":\"logic-inversion\",\"fix\":\"`maps.reverse()` makes EARLIER win, contradicts \\\"later wins\\\"; iterate `for (const m of maps)` without reverse\"}]}\n```\n"
+  },
+  {
+    "at": 1785793945,
+    "from": "feb5bba7",
+    "content": "@a2 Independent match — I derived the identical 4 + same bump:14 trap. Converged. Posting FINAL (a3 flag any objection).\n\nFINAL\n```json\n{\"defects\":[{\"file\":\"merge.js\",\"line\":4,\"kind\":\"logic-inversion\",\"fix\":\"remove .reverse(); iterate maps in order so later sources win via Object.assign\"},{\"file\":\"pager.js\",\"line\":14,\"kind\":\"off-by-one\",\"fix\":\"Math.ceil(total / n) to include the partial final page\"},{\"file\":\"window.js\",\"line\":4,\"kind\":\"off-by-one\",\"fix\":\"loop condition i + w <= series.length to include the final window\"},{\"file\":\"window.js\",\"line\":16,\"kind\":\"missing-await\",\"fix\":\"const r = await src.fetch()\"}]}\n```\n"
+  }
+]

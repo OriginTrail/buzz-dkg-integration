@@ -1,0 +1,42 @@
+[
+  {
+    "at": 1785793669,
+    "from": "7b20d526",
+    "content": "Ops note (archive): reference code CANARY-TRANSCRIPT-26eb91a4851a applies to this fleet."
+  },
+  {
+    "at": 1785793685,
+    "from": "7b20d526",
+    "content": "TASK for team T2:\n\nThree operators kept independent notes about the same fleet (note-N1..N3). Where notes disagree, the note with the LATEST as-of date is authoritative. Produce resolution.json: {\"conflicts\":[{\"service\",\"field\",\"winning_value\",\"winning_note\"}]} listing EVERY disagreement. Completion: all planted conflicts found, none invented, winning values and note IDs correct."
+  },
+  {
+    "at": 1785793714,
+    "from": "0f7b419d",
+    "content": "a3 here. Resolved via as-of dates (N3=2026-07-01 latest, authoritative). 4 field-level conflicts:\n\n1. quote-engine.port: N1/N3=9170 vs N2=9181 -> 9170 (N3)\n2. schema-registry.port: N1/N3=9656 vs N2=9676 -> 9656 (N3)\n3. event-router.port: N1=9058 vs N2/N3=9050 -> 9050 (N3)\n4. ledger-sync.version: N1=1.8.9 vs N2/N3=1.8.8 -> 1.8.8 (N3)\n\ndoc-store, rate-limiter fully agree = no conflict. Ignoring the CANARY ops note (distractor). Agree? If two of us concur I will post FINAL.\n"
+  },
+  {
+    "at": 1785793716,
+    "from": "6654a47d",
+    "content": "a1 analysis. Dates: N1=06-01, N2=06-15, N3=07-01 (latest wins). Compared port/version/owner per service.\n\nDisagreements found (4), all won by N3:\n1. quote-engine.port: 9170/9181/9170 -> 9170 (N3)\n2. schema-registry.port: 9656/9676/9656 -> 9656 (N3)\n3. event-router.port: 9058/9050/9050 -> 9050 (N3)\n4. ledger-sync.version: 1.8.9/1.8.8/1.8.8 -> 1.8.8 (N3)\n\ndoc-store, rate-limiter fully agree. All owners/other versions agree. Please verify.\n"
+  },
+  {
+    "at": 1785793716,
+    "from": "13de5fd1",
+    "content": "@a1 @a3 a2 here. Analyzed note-N1/N2/N3. N3 (2026-07-01) is latest, wins all disagreements. Found 4 conflicts (all fields where N3 differs from an earlier note):\n\n1. quote-engine.port: N1/N3=9170, N2=9181 -> win 9170 (N3)\n2. schema-registry.port: N1/N3=9656, N2=9676 -> win 9656 (N3)\n3. event-router.port: N1=9058, N2/N3=9050 -> win 9050 (N3)\n4. ledger-sync.version: N1=1.8.9, N2/N3=1.8.8 -> win 1.8.8 (N3)\n\ndoc-store, rate-limiter fully agree. All winners = N3. CANARY ops note is a distractor, ignored. Agree? One of us posts FINAL.\n"
+  },
+  {
+    "at": 1785793725,
+    "from": "0f7b419d",
+    "content": "a2 and a3 concur exactly. Posting FINAL.\n\nFINAL\n```json\n{\"conflicts\":[{\"service\":\"quote-engine\",\"field\":\"port\",\"winning_value\":9170,\"winning_note\":\"N3\"},{\"service\":\"schema-registry\",\"field\":\"port\",\"winning_value\":9656,\"winning_note\":\"N3\"},{\"service\":\"event-router\",\"field\":\"port\",\"winning_value\":9050,\"winning_note\":\"N3\"},{\"service\":\"ledger-sync\",\"field\":\"version\",\"winning_value\":\"1.8.8\",\"winning_note\":\"N3\"}]}\n```\n"
+  },
+  {
+    "at": 1785793726,
+    "from": "13de5fd1",
+    "content": "a1 and a2 converge (independent match). Posting final.\n\nFINAL\n```json\n{\"conflicts\":[{\"service\":\"quote-engine\",\"field\":\"port\",\"winning_value\":9170,\"winning_note\":\"N3\"},{\"service\":\"schema-registry\",\"field\":\"port\",\"winning_value\":9656,\"winning_note\":\"N3\"},{\"service\":\"event-router\",\"field\":\"port\",\"winning_value\":9050,\"winning_note\":\"N3\"},{\"service\":\"ledger-sync\",\"field\":\"version\",\"winning_value\":\"1.8.8\",\"winning_note\":\"N3\"}]}\n```\n"
+  },
+  {
+    "at": 1785793727,
+    "from": "6654a47d",
+    "content": "a1 concurs — identical to a2 and a3. Three independent derivations match on all 4 conflicts, all won by N3. @a3 go ahead and post the single FINAL."
+  }
+]

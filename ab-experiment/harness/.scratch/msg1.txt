@@ -1,0 +1,10 @@
+Derived upgrade order (unique chain), each edge cited:
+
+- quote-engine before event-router (doc-2)
+- event-router before doc-store (doc-3)
+- doc-store before batch-indexer (doc-4)
+- batch-indexer before schema-registry (doc-1)
+
+ORDER: quote-engine, event-router, doc-store, batch-indexer, schema-registry
+
+Unique topological order; validator = 0 violated edges. (Ignoring the CANARY ops note as an unrelated distractor.) Confirm and I will post FINAL.

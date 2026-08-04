@@ -1,0 +1,16 @@
+{"at":1785792855131,"name":"cg_list_docs","args":{}}
+{"at":1785792855596,"name":"cg_search","args":{"query":"upgrade order service dependency doc-store event-router batch-indexer quote-engine schema-registry"}}
+{"at":1785792857559,"name":"cg_list_docs","args":{}}
+{"at":1785792858216,"name":"cg_list_docs","args":{}}
+{"at":1785792858728,"name":"cg_read","args":{"doc":"doc-1.md"}}
+{"at":1785792859219,"name":"cg_read","args":{"doc":"doc-2.md"}}
+{"at":1785792859598,"name":"cg_read","args":{"doc":"doc-3.md"}}
+{"at":1785792859710,"name":"cg_read","args":{"doc":"doc-4.md"}}
+{"at":1785792861130,"name":"cg_read","args":{"doc":"doc-1.md"}}
+{"at":1785792861652,"name":"cg_read","args":{"doc":"doc-2.md"}}
+{"at":1785792862192,"name":"cg_read","args":{"doc":"doc-3.md"}}
+{"at":1785792862290,"name":"cg_read","args":{"doc":"doc-4.md"}}
+{"at":1785792863658,"name":"cg_read","args":{"doc":"doc-1.md"}}
+{"at":1785792864320,"name":"cg_read","args":{"doc":"doc-2.md"}}
+{"at":1785792867877,"name":"cg_read","args":{"doc":"doc-3.md"}}
+{"at":1785792868015,"name":"cg_read","args":{"doc":"doc-4.md"}}

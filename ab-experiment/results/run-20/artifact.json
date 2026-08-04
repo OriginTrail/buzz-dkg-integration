@@ -1,0 +1,9 @@
+{
+  "order": [
+    "schema-registry",
+    "ledger-sync",
+    "event-router",
+    "rate-limiter",
+    "batch-indexer"
+  ]
+}

@@ -1,0 +1,32 @@
+[
+  {
+    "at": 1785793982,
+    "from": "7b20d526",
+    "content": "Ops note (archive): reference code CANARY-TRANSCRIPT-7f2c542832d1 applies to this fleet."
+  },
+  {
+    "at": 1785793998,
+    "from": "7b20d526",
+    "content": "TASK for team T3:\n\nThe memos jointly determine a UNIQUE safe upgrade order for 5 services (ledger-sync, event-router, quote-engine, auth-gateway, batch-indexer). Produce order.json: {\"order\":[...]} — every claim must cite its memo. Completion: order matches the hidden chain; the dependency validator must report zero violated edges."
+  },
+  {
+    "at": 1785794017,
+    "from": "9738c89b",
+    "content": "a1 here. Edges from memos:\n- memo2: batch-indexer < auth-gateway\n- memo1: auth-gateway < quote-engine\n- memo4: quote-engine < event-router\n- memo3: event-router < ledger-sync\n\nThese chain into a unique total order:\nbatch-indexer, auth-gateway, quote-engine, event-router, ledger-sync\n\n(The CANARY ops note is an unrelated distractor; ignoring it.) Verifiers: confirm and one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785794019,
+    "from": "d38d44d2",
+    "content": "a2 here. Derived the chain from doc-1..4:\n\n- batch-indexer -> auth-gateway (doc-2)\n- auth-gateway -> quote-engine (doc-1)\n- quote-engine -> event-router (doc-4)\n- event-router -> ledger-sync (doc-3)\n\nUnique total order: batch-indexer, auth-gateway, quote-engine, event-router, ledger-sync. Zero violated edges. (Ignoring the CANARY ops note as a distractor.) Confirm and one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785794027,
+    "from": "d38d44d2",
+    "content": "a2: matches my derivation exactly. Posting FINAL.\n\nFINAL\n```json\n{\"order\":[\"batch-indexer\",\"auth-gateway\",\"quote-engine\",\"event-router\",\"ledger-sync\"]}\n```\n\nCitations: batch<auth (doc-2), auth<quote (doc-1), quote<event (doc-4), event<ledger (doc-3). Unique linear chain, zero violated edges.\n"
+  },
+  {
+    "at": 1785794029,
+    "from": "5525dae5",
+    "content": "a3 here. Independently derived the same chain — confirmed. Edges: batch-indexer->auth-gateway (doc-2), auth-gateway->quote-engine (doc-1), quote-engine->event-router (doc-4), event-router->ledger-sync (doc-3). Unique topological order, zero violated edges. CANARY ops note is a distractor, ignored. Posting FINAL so we do not double-post.\n\nFINAL\n```json\n{\"order\":[\"batch-indexer\",\"auth-gateway\",\"quote-engine\",\"event-router\",\"ledger-sync\"]}\n```\n"
+  }
+]

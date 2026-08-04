@@ -5,26 +5,49 @@ import type { EvidenceRecord, OpRecord } from '../types.ts';
  * kinds — SPEC §12). Machine-readable lines up front, human-readable status
  * last. The SWM receipt is also the anchor the ✅ approval must target (§6.2).
  */
-export function swmReceipt(op: OpRecord): string {
+/**
+ * Markdown click-through into an explorer's /explore view. The link carries
+ * both the record's identifier (KA name for SWM records, which have no minted
+ * UAL; full UAL once published) and the Context Graph id — with a local-first
+ * explorer (the default, http://127.0.0.1:9295) the same link resolves
+ * through each viewer's OWN edge node, which must have subscribed to that
+ * Context Graph for the asset to be present at all.
+ */
+function explorerLink(explorerUrl: string | undefined, id: string, cg: string): string[] {
+  if (!explorerUrl) return [];
+  return [
+    `[Explore in DKG Explorer](${explorerUrl}/explore?ual=${encodeURIComponent(id)}&cg=${encodeURIComponent(cg)})`,
+  ];
+}
+
+export function swmReceipt(op: OpRecord, explorerUrl?: string): string {
   // A leading human line so the receipt says WHAT was captured, not just seven
-  // lines of hashes. The machine-readable lines below stay `^…$`-anchored, so
-  // the approval parsers are unaffected.
+  // lines of hashes. The level badge (🟡 SWM / 🟢 VM) and the trailing
+  // explorer link are presentational for markdown-rendering clients (Buzz
+  // desktop); the machine-readable lines stay `^…$`-anchored, so the approval
+  // parsers and the `trigger:`-line receipt dedup are unaffected.
   const lead = op.title ? `Captured “${op.title.replace(/\s+/g, ' ').trim()}”. ` : '';
   return [
-    `${lead}Distilled to Shared Working Memory.`,
+    `🟡 ${lead}Distilled to Shared Working Memory — visible to this channel's members, off-chain.`,
     `assertion: ${op.assertionUri}`,
     `ka: ${op.kaName}`,
     `context-graph: ${op.contextGraphId}`,
     `source-digest: sha256:${op.digest}`,
     `trigger: ${op.triggerEventId}`,
     'status: SWM (not published to Verifiable Memory)',
+    ...explorerLink(explorerUrl, op.kaName, op.contextGraphId),
   ].join('\n');
 }
 
-export function vmReceipt(op: OpRecord, approvalEventId: string, approverPubkey: string): string {
+export function vmReceipt(
+  op: OpRecord,
+  approvalEventId: string,
+  approverPubkey: string,
+  explorerUrl?: string,
+): string {
   const lead = op.title ? `Published “${op.title.replace(/\s+/g, ' ').trim()}”. ` : '';
   return [
-    `${lead}Published to Verifiable Memory.`,
+    `🟢 ${lead}Published to Verifiable Memory — anchored on-chain, publicly resolvable.`,
     `UAL: ${op.ual}`,
     ...(op.txHash ? [`tx: ${op.txHash}`] : []),
     `ka: ${op.kaName}`,
@@ -32,6 +55,7 @@ export function vmReceipt(op: OpRecord, approvalEventId: string, approverPubkey:
     `source-digest: sha256:${op.digest}`,
     `approved-by: ${approverPubkey}`,
     `approval-event: ${approvalEventId}`,
+    ...explorerLink(explorerUrl, op.ual ?? op.kaName, op.contextGraphId),
   ].join('\n');
 }
 

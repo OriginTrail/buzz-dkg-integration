@@ -1,0 +1,28 @@
+{
+  "conflicts": [
+    {
+      "service": "quote-engine",
+      "field": "port",
+      "winning_value": 9170,
+      "winning_note": "N3"
+    },
+    {
+      "service": "schema-registry",
+      "field": "port",
+      "winning_value": 9656,
+      "winning_note": "N3"
+    },
+    {
+      "service": "event-router",
+      "field": "port",
+      "winning_value": 9050,
+      "winning_note": "N3"
+    },
+    {
+      "service": "ledger-sync",
+      "field": "version",
+      "winning_value": "1.8.8",
+      "winning_note": "N3"
+    }
+  ]
+}

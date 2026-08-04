@@ -1,0 +1,57 @@
+[
+  {
+    "at": 1785792124,
+    "from": "7b20d526",
+    "content": "📄 note-N1.md\n\n# Ops note N1\nas-of: 2026-06-01\n\n- ledger-sync: port 9850, version 1.7.8, owner cvetka\n- doc-store: port 9884, version 1.8.1, owner cvetka\n- rate-limiter: port 9358, version 1.2.6, owner eva\n- auth-gateway: port 9635, version 1.5.6, owner eva\n- quote-engine: port 9010, version 1.6.1, owner cvetka\n- schema-registry: port 9697, version 2.0.8, owner ana\n"
+  },
+  {
+    "at": 1785792124,
+    "from": "7b20d526",
+    "content": "📄 note-N3.md\n\n# Ops note N3\nas-of: 2026-07-01\n\n- schema-registry: port 9697, version 2.0.8, owner bojan\n- auth-gateway: port 9616, version 1.5.6, owner eva\n- ledger-sync: port 9850, version 1.7.8, owner cvetka\n- doc-store: port 9884, version 1.8.1, owner cvetka\n- quote-engine: port 9010, version 1.6.1, owner cvetka\n- rate-limiter: port 9358, version 1.2.6, owner eva\n"
+  },
+  {
+    "at": 1785792124,
+    "from": "7b20d526",
+    "content": "📄 note-N2.md\n\n# Ops note N2\nas-of: 2026-06-15\n\n- ledger-sync: port 9850, version 1.7.8, owner cvetka\n- schema-registry: port 9697, version 2.0.8, owner bojan\n- auth-gateway: port 9616, version 1.5.6, owner eva\n- rate-limiter: port 9358, version 1.2.7, owner eva\n- doc-store: port 9884, version 1.8.1, owner cvetka\n- quote-engine: port 9010, version 1.6.1, owner darko\n"
+  },
+  {
+    "at": 1785792140,
+    "from": "7b20d526",
+    "content": "TASK for team PILOT:\n\nThree operators kept independent notes about the same fleet (note-N1..N3). Where notes disagree, the note with the LATEST as-of date is authoritative. Produce resolution.json: {\"conflicts\":[{\"service\",\"field\",\"winning_value\",\"winning_note\"}]} listing EVERY disagreement. Completion: all planted conflicts found, none invented, winning values and note IDs correct."
+  },
+  {
+    "at": 1785792157,
+    "from": "f66e2da9",
+    "content": "a3 analysis. Latest as-of = N3 (2026-07-01) wins all. 4 conflicts:\n1. rate-limiter/version: N1=1.2.6, N2=1.2.7, N3=1.2.6 -> 1.2.6 (N3)\n2. auth-gateway/port: N1=9635, N2/N3=9616 -> 9616 (N3)\n3. quote-engine/owner: N1/N3=cvetka, N2=darko -> cvetka (N3)\n4. schema-registry/owner: N1=ana, N2/N3=bojan -> bojan (N3)\nledger-sync & doc-store agree. Agree? If so I post FINAL.\n"
+  },
+  {
+    "at": 1785792158,
+    "from": "3d8e1ecb",
+    "content": "a2 analysis — 4 conflicts (all won by N3, the latest):\n\n1. rate-limiter/version: N1=1.2.6, N2=1.2.7, N3=1.2.6 → 1.2.6 (N3)\n2. auth-gateway/port: N1=9635, N2=9616, N3=9616 → 9616 (N3)\n3. quote-engine/owner: N1/N3=cvetka, N2=darko → cvetka (N3)\n4. schema-registry/owner: N1=ana, N2/N3=bojan → bojan (N3)\n\nledger-sync and doc-store fully agree. Agree? If a1/a3 concur, one of us posts FINAL."
+  },
+  {
+    "at": 1785792164,
+    "from": "f66e2da9",
+    "content": "a3 here. Diffed all 3 notes (N3=2026-07-01 latest wins). 4 conflicts:\n1. rate-limiter version: N1/N3=1.2.6, N2=1.2.7 -> 1.2.6 (N3)\n2. auth-gateway port: N1=9635, N2/N3=9616 -> 9616 (N3)\n3. quote-engine owner: N1/N3=cvetka, N2=darko -> cvetka (N3)\n4. schema-registry owner: N1=ana, N2/N3=bojan -> bojan (N3)\nledger-sync & doc-store identical across all. a1/a2 confirm?"
+  },
+  {
+    "at": 1785792167,
+    "from": "3abd528d",
+    "content": "a1 concurs — independently verified the same 4 conflicts, all won by N3 (2026-07-01, latest):\n\n1. rate-limiter/version → 1.2.6 (N3); N2 outlier 1.2.7\n2. auth-gateway/port → 9616 (N3); N1 outlier 9635\n3. quote-engine/owner → cvetka (N3); N2 outlier darko\n4. schema-registry/owner → bojan (N3); N1 outlier ana\n\nledger-sync + doc-store fully agree. Waiting on @a3 to concur, then a2 posts FINAL.\n"
+  },
+  {
+    "at": 1785792170,
+    "from": "3d8e1ecb",
+    "content": "a2 confirms — I independently derived the exact same 4 conflicts, all won by N3. ledger-sync & doc-store agree across all notes. a3, go ahead and post FINAL."
+  },
+  {
+    "at": 1785792179,
+    "from": "3d8e1ecb",
+    "content": "FINAL\n```json\n{\n  \"conflicts\": [\n    {\"service\": \"rate-limiter\", \"field\": \"version\", \"winning_value\": \"1.2.6\", \"winning_note\": \"N3\"},\n    {\"service\": \"auth-gateway\", \"field\": \"port\", \"winning_value\": \"9616\", \"winning_note\": \"N3\"},\n    {\"service\": \"quote-engine\", \"field\": \"owner\", \"winning_value\": \"cvetka\", \"winning_note\": \"N3\"},\n    {\"service\": \"schema-registry\", \"field\": \"owner\", \"winning_value\": \"bojan\", \"winning_note\": \"N3\"}\n  ]\n}\n```\n"
+  },
+  {
+    "at": 1785792180,
+    "from": "3d8e1ecb",
+    "content": "a2 analysis — 4 conflicts (all resolved by N3, latest 2026-07-01):\n\n1. rate-limiter/version: N1=1.2.6, N2=1.2.7, N3=1.2.6 -> 1.2.6 (N3)\n2. auth-gateway/port: N1=9635, N2=N3=9616 -> 9616 (N3)\n3. quote-engine/owner: N1=cvetka, N2=darko, N3=cvetka -> cvetka (N3)\n4. schema-registry/owner: N1=ana, N2=N3=bojan -> bojan (N3)\n\nledger-sync & doc-store identical across all notes (no conflict). Confirm?"
+  }
+]

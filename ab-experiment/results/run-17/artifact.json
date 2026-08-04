@@ -1,0 +1,34 @@
+{
+  "defects": [
+    {
+      "file": "pager.js",
+      "line": 14,
+      "kind": "off-by-one",
+      "fix": "pageCount: use Math.ceil(total / n) to include the partial page"
+    },
+    {
+      "file": "window.js",
+      "line": 4,
+      "kind": "off-by-one",
+      "fix": "winAvg loop: use i + w <= series.length so the final window is included"
+    },
+    {
+      "file": "window.js",
+      "line": 16,
+      "kind": "missing-await",
+      "fix": "fetchSeries: const r = await src.fetch()"
+    },
+    {
+      "file": "merge.js",
+      "line": 4,
+      "kind": "logic",
+      "fix": "mergeAll: drop .reverse() so later sources win"
+    },
+    {
+      "file": "merge.js",
+      "line": 14,
+      "kind": "logic",
+      "fix": "bump major: return `${m + 1}.0.0`"
+    }
+  ]
+}

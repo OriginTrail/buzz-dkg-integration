@@ -1,0 +1,17 @@
+{
+  "run": 0,
+  "team": "PILOT",
+  "slot": 0,
+  "leg": 0,
+  "family": "conflict-notes",
+  "taskId": "pilot-cg",
+  "taskDigest": "pilot-not-preregistered",
+  "regime": "CG",
+  "model": "claude",
+  "teamSize": 3,
+  "maxRounds": 8,
+  "tokenBudgetPerAgent": 200000,
+  "canaryToken": "CANARY-TRANSCRIPT-pilot0000cafe",
+  "canaryPlacement": "transcript",
+  "accountingBoundary": "pilot"
+}

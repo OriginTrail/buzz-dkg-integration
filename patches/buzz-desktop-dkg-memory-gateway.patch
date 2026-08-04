@@ -1,0 +1,2450 @@
+diff --git a/desktop/package.json b/desktop/package.json
+index 2226a0cb1..db7e5a55d 100644
+--- a/desktop/package.json
++++ b/desktop/package.json
+@@ -31,6 +31,7 @@
+     "@emoji-mart/react": "^1.1.1",
+     "@fontsource-variable/inter": "^5.2.8",
+     "@mediapipe/tasks-vision": "^0.10.35",
++    "@origintrail-official/dkg-graph-viz": "10.0.11",
+     "@radix-ui/react-alert-dialog": "^1.1.15",
+     "@radix-ui/react-avatar": "^1.1.11",
+     "@radix-ui/react-checkbox": "^1.3.3",
+diff --git a/desktop/playwright.config.ts b/desktop/playwright.config.ts
+index 459fa7574..2c84e5a4a 100644
+--- a/desktop/playwright.config.ts
++++ b/desktop/playwright.config.ts
+@@ -19,6 +19,7 @@ export default defineConfig({
+     {
+       name: "smoke",
+       testMatch: [
++        "**/dkg-memory-demo.spec.ts",
+         "**/smoke.spec.ts",
+         "**/onboarding-docked-cta-screenshots.spec.ts",
+         "**/identity-key-help.spec.ts",
+diff --git a/desktop/src/features/channels/ui/ChannelPane.tsx b/desktop/src/features/channels/ui/ChannelPane.tsx
+index 92fa172ff..b3afc3e6a 100644
+--- a/desktop/src/features/channels/ui/ChannelPane.tsx
++++ b/desktop/src/features/channels/ui/ChannelPane.tsx
+@@ -30,6 +30,7 @@ import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
+ import { ChannelFindBar } from "@/features/search/ui/ChannelFindBar";
+ import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
+ import { ChannelManagementAuxiliaryPanel } from "@/features/channels/ui/ChannelManagementAuxiliaryPanel";
++import { DkgMemoryDock } from "@/features/dkg-memory/ui/DkgMemoryDock";
+ import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
+ import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggle";
+ import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
+@@ -819,6 +820,7 @@ export const ChannelPane = React.memo(function ChannelPane({
+        * animate. It can hold the real thread through the exit rather than a
+        * frozen snapshot because the panel is fully prop-driven.
+        */}
++      <DkgMemoryDock channelId={activeChannel?.id ?? null} />
+       <AnimatePresence onExitComplete={markExitComplete}>
+         {channelManagementOpen && activeChannel ? (
+           <ChannelManagementAuxiliaryPanel
+diff --git a/desktop/src/features/dkg-memory/api.ts b/desktop/src/features/dkg-memory/api.ts
+new file mode 100644
+index 000000000..5d5e1d39d
+--- /dev/null
++++ b/desktop/src/features/dkg-memory/api.ts
+@@ -0,0 +1,313 @@
++// Data access for the Buzz-native DKG memory panel.
++//
++// All graph reads go through the viewer's OWN local explorer/edge node
++// (127.0.0.1:9295 → 127.0.0.1:9200) — the local-first mandate: memory
++// resolves only for viewers whose node participates in the channel's
++// Context Graph. The relay is used solely to discover the channel→CG
++// binding, which the @dkg daemon's receipts carry in-channel.
++import { relayClient } from "@/shared/api/relayClient";
++
++// Local-first with community-gateway fallback (RFC deployment profile 2):
++// the viewer's own explorer/node wins when present; otherwise the panel
++// resolves through the community's gateway node over the tailnet — full
++// fidelity, honestly labeled as gateway-resolved rather than self-verified.
++const LOCAL_EXPLORER = "http://127.0.0.1:9295";
++const GATEWAY_EXPLORER = "https://wot-gateway.example.ts.net/wot-explorer";
++
++export type ExplorerSource = "local" | "gateway";
++
++let resolvedExplorer: { url: string; source: ExplorerSource } | null = null;
++
++async function explorer(): Promise<{ url: string; source: ExplorerSource }> {
++  if (resolvedExplorer) return resolvedExplorer;
++  try {
++    const override = localStorage.getItem("dkg-memory-explorer-url");
++    if (override) {
++      resolvedExplorer = {
++        url: override.replace(/\/$/, ""),
++        source: override.includes("127.0.0.1") ? "local" : "gateway",
++      };
++      return resolvedExplorer;
++    }
++  } catch {
++    /* storage unavailable */
++  }
++  try {
++    // Any HTTP response (even an error status) proves a local explorer exists.
++    await fetch(`${LOCAL_EXPLORER}/api/channel-memory?cg=probe`, {
++      signal: AbortSignal.timeout(1500),
++    });
++    resolvedExplorer = { url: LOCAL_EXPLORER, source: "local" };
++  } catch {
++    resolvedExplorer = { url: GATEWAY_EXPLORER, source: "gateway" };
++  }
++  return resolvedExplorer;
++}
++
++/** Which explorer the panel resolved through (null until first fetch). */
++export function explorerSource(): ExplorerSource | null {
++  return resolvedExplorer?.source ?? null;
++}
++
++export type MemoryGate = "ok" | "node-missing" | "auth" | "not-subscribed";
++
++export interface LayerEntry {
++  graph: string;
++  label: string;
++}
++
++export interface DecisionEntry {
++  uri: string;
++  name: string | null;
++  digest: string | null;
++  at: string | null;
++}
++
++export interface ContributorEntry {
++  pubkey: string;
++  events: number;
++  latest: number | null;
++}
++
++export interface SubGraphEntry {
++  name: string;
++  uri: string;
++  entityCount: number;
++  tripleCount: number;
++}
++
++export interface ChannelMemory {
++  gate: MemoryGate;
++  cg?: string;
++  layers?: Record<"WM" | "SWM" | "VM", LayerEntry[] | null>;
++  decisions?: DecisionEntry[];
++  contributors?: ContributorEntry[];
++  subgraphs?: SubGraphEntry[];
++}
++
++export interface TrailEntry {
++  event: string;
++  content: string | null;
++  at: number | null;
++  decision: string | null;
++  decisionName: string | null;
++}
++
++/**
++ * Derive the channel's Context Graph id from the latest @dkg receipt in the
++ * channel. Receipts are ordinary kind-9 replies whose machine-readable lines
++ * include `context-graph: <id>` — so the binding is discoverable by any
++ * member with zero extra configuration.
++ */
++export async function deriveContextGraphId(
++  channelId: string,
++): Promise<string | null> {
++  // Explicit override for channels without receipts yet (also the seam the
++  // e2e demo uses): a global or per-channel localStorage key wins.
++  try {
++    const override =
++      localStorage.getItem(`dkg-memory-cg:${channelId}`) ??
++      localStorage.getItem("dkg-memory-cg-override");
++    if (override) return override;
++  } catch {
++    /* storage unavailable */
++  }
++  const events = await relayClient.fetchEvents({
++    kinds: [9],
++    "#h": [channelId],
++    limit: 500,
++  });
++  const sorted = [...events].sort((a, b) => b.created_at - a.created_at);
++  for (const ev of sorted) {
++    const m = /^context-graph: (\S+)$/m.exec(ev.content);
++    if (m) return m[1];
++  }
++  return null;
++}
++
++export async function fetchChannelMemory(cg: string): Promise<ChannelMemory> {
++  const { url } = await explorer();
++  const res = await fetch(
++    `${url}/api/channel-memory?cg=${encodeURIComponent(cg)}`,
++  );
++  if (!res.ok) throw new Error(`channel-memory ${res.status}`);
++  return (await res.json()) as ChannelMemory;
++}
++
++export async function fetchContributorTrail(
++  cg: string,
++  pubkey: string,
++): Promise<TrailEntry[]> {
++  const { url } = await explorer();
++  const res = await fetch(
++    `${url}/api/contributor-trail?cg=${encodeURIComponent(cg)}&pubkey=${encodeURIComponent(pubkey)}`,
++  );
++  if (!res.ok) throw new Error(`contributor-trail ${res.status}`);
++  return (await res.json()) as TrailEntry[];
++}
++
++// ── Graph view (per the graph-view deliberation) ────────────────────────────
++// One entry door: "open as graph" on a subgraph row. The endpoint returns the
++// decision spine this subgraph's evidence fed plus one hop of evidence; the
++// client lays it out deterministically (time-ordered, no physics).
++export interface GraphNode {
++  id: string;
++  kind: "decision" | "claim" | "commit";
++  label: string;
++  at: number | null;
++  contested?: number;
++  run?: string | null;
++  commit?: string | null;
++  /** Memory layer, per the node's own three-view regime (VM > SWM > WM). */
++  layer?: "WM" | "SWM" | "VM";
++}
++
++export interface GraphEdge {
++  from: string;
++  to: string;
++  rel: "supports" | "contradicts" | "generated";
++}
++
++export interface SubgraphGraphData {
++  gate: MemoryGate;
++  cg?: string;
++  subgraph?: string;
++  nodes?: GraphNode[];
++  edges?: GraphEdge[];
++}
++
++export async function fetchSubgraphGraph(
++  cg: string,
++  name: string,
++): Promise<SubgraphGraphData> {
++  const { url } = await explorer();
++  const res = await fetch(
++    `${url}/api/subgraph-graph?cg=${encodeURIComponent(cg)}&name=${encodeURIComponent(name)}`,
++  );
++  if (!res.ok) throw new Error(`subgraph-graph ${res.status}`);
++  return (await res.json()) as SubgraphGraphData;
++}
++
++/**
++ * Display names for contributor pubkeys from kind-0 profiles — humans see
++ * "People & agents" as names, never hex (humanize wrap, Thread 2).
++ */
++export async function fetchProfileNames(
++  pubkeys: string[],
++): Promise<Record<string, string>> {
++  if (pubkeys.length === 0) return {};
++  const events = await relayClient.fetchEvents({
++    kinds: [0],
++    authors: pubkeys,
++    limit: pubkeys.length * 2,
++  });
++  const out: Record<string, string> = {};
++  for (const ev of [...events].sort((a, b) => a.created_at - b.created_at)) {
++    try {
++      const meta = JSON.parse(ev.content) as {
++        name?: string;
++        display_name?: string;
++      };
++      const name = meta.display_name || meta.name;
++      if (name) out[ev.pubkey] = name;
++    } catch {
++      /* malformed profile */
++    }
++  }
++  return out;
++}
++
++// ── Evidence Envelope (the agent/human seam, humanize wrap) ─────────────────
++// One canonical object; human cards and agent JSON render the SAME shape.
++// Fields may be collapsed in the UI but the envelope is never thinned —
++// unknown values stay present as null.
++export interface EvidenceSource {
++  id: string;
++  span: string | null;
++  author: string | null;
++  at: number | null;
++}
++
++export interface EvidenceEnvelope {
++  gate: MemoryGate;
++  found?: boolean;
++  claimId: string;
++  name?: string | null;
++  status?: string;
++  trustState?: string;
++  memoryLayer?: "WM" | "SWM" | "VM" | null;
++  attribution?: string[];
++  digest?: string | null;
++  asOf?: string | null;
++  sources?: EvidenceSource[];
++  relations?: { from: string; rel: string }[];
++  receiptUal?: string | null;
++  replay?: { cg: string; graph: string | null; sparqlEndpoint: string };
++}
++
++export async function fetchEvidence(
++  cg: string,
++  uri: string,
++): Promise<EvidenceEnvelope> {
++  const { url } = await explorer();
++  const res = await fetch(
++    `${url}/api/evidence?cg=${encodeURIComponent(cg)}&uri=${encodeURIComponent(uri)}`,
++  );
++  if (!res.ok) throw new Error(`evidence ${res.status}`);
++  return (await res.json()) as EvidenceEnvelope;
++}
++
++/** Deep link into the patched edge-node UI, landed on this CG. */
++export function nodeUiDeepLink(
++  cg: string,
++  layer?: "wm" | "swm" | "vm",
++): string {
++  const base = `http://127.0.0.1:9200/ui/?cg=${encodeURIComponent(cg)}`;
++  return layer ? `${base}&layer=${layer}` : base;
++}
++
++// ── C-recommendation: relay-backed discovery fallback ────────────────────────
++// When the viewer runs no edge node, @dkg receipts already in the channel
++// provide a read-only "shown for discovery" listing: KA name, human title,
++// digest, layer, and time — signed by the daemon but NOT verified through the
++// viewer's own node. Discovery entries never feed confidence and expose no
++// actions; a local node upgrades the same items to "verified through your node".
++export interface DiscoveryEntry {
++  kaName: string;
++  title: string | null;
++  digest: string | null;
++  layer: "SWM" | "VM";
++  at: number;
++}
++
++export async function fetchDiscoveryFromReceipts(
++  channelId: string,
++): Promise<DiscoveryEntry[]> {
++  const events = await relayClient.fetchEvents({
++    kinds: [9],
++    "#h": [channelId],
++    limit: 500,
++  });
++  const out: DiscoveryEntry[] = [];
++  const seen = new Set<string>();
++  for (const ev of [...events].sort((a, b) => b.created_at - a.created_at)) {
++    const ka = /^ka: (\S+)$/m.exec(ev.content)?.[1];
++    if (!ka || seen.has(ka)) continue;
++    const digest = /^source-digest: sha256:([0-9a-f]{64})$/m.exec(
++      ev.content,
++    )?.[1];
++    if (!digest) continue; // not a receipt
++    seen.add(ka);
++    const title =
++      /^🟢? ?(?:🟡 )?(?:Captured|Published) “(.+?)”/mu.exec(ev.content)?.[1] ??
++      null;
++    out.push({
++      kaName: ka,
++      title,
++      digest,
++      layer: /^UAL: /m.test(ev.content) ? "VM" : "SWM",
++      at: ev.created_at,
++    });
++  }
++  return out;
++}
+diff --git a/desktop/src/features/dkg-memory/hooks.ts b/desktop/src/features/dkg-memory/hooks.ts
+new file mode 100644
+index 000000000..5ccd3bf16
+--- /dev/null
++++ b/desktop/src/features/dkg-memory/hooks.ts
+@@ -0,0 +1,84 @@
++import { useQuery } from "@tanstack/react-query";
++import {
++  deriveContextGraphId,
++  fetchChannelMemory,
++  fetchContributorTrail,
++} from "./api";
++
++export function useChannelContextGraph(channelId: string | null) {
++  return useQuery({
++    queryKey: ["dkg-memory", "cg", channelId],
++    queryFn: () => deriveContextGraphId(channelId as string),
++    enabled: Boolean(channelId),
++    staleTime: 5 * 60 * 1000,
++  });
++}
++
++export function useChannelMemory(cg: string | null | undefined) {
++  return useQuery({
++    queryKey: ["dkg-memory", "memory", cg],
++    queryFn: () => fetchChannelMemory(cg as string),
++    enabled: Boolean(cg),
++    refetchInterval: 30 * 1000,
++  });
++}
++
++export function useContributorTrail(
++  cg: string | null | undefined,
++  pubkey: string | null,
++) {
++  return useQuery({
++    queryKey: ["dkg-memory", "trail", cg, pubkey],
++    queryFn: () => fetchContributorTrail(cg as string, pubkey as string),
++    enabled: Boolean(cg && pubkey),
++  });
++}
++
++import {
++  fetchDiscoveryFromReceipts,
++  fetchEvidence,
++  fetchProfileNames,
++  fetchSubgraphGraph,
++} from "./api";
++
++export function useEvidence(cg: string | null | undefined, uri: string | null) {
++  return useQuery({
++    queryKey: ["dkg-memory", "evidence", cg, uri],
++    queryFn: () => fetchEvidence(cg as string, uri as string),
++    enabled: Boolean(cg && uri),
++    staleTime: 60 * 1000,
++  });
++}
++
++export function useProfileNames(pubkeys: string[]) {
++  return useQuery({
++    queryKey: ["dkg-memory", "profiles", pubkeys.join(",")],
++    queryFn: () => fetchProfileNames(pubkeys),
++    enabled: pubkeys.length > 0,
++    staleTime: 10 * 60 * 1000,
++  });
++}
++
++export function useSubgraphGraph(
++  cg: string | null | undefined,
++  name: string | null,
++) {
++  return useQuery({
++    queryKey: ["dkg-memory", "graph", cg, name],
++    queryFn: () => fetchSubgraphGraph(cg as string, name as string),
++    enabled: Boolean(cg && name),
++    staleTime: 30 * 1000,
++  });
++}
++
++export function useDiscoveryFallback(
++  channelId: string | null,
++  enabled: boolean,
++) {
++  return useQuery({
++    queryKey: ["dkg-memory", "discovery", channelId],
++    queryFn: () => fetchDiscoveryFromReceipts(channelId as string),
++    enabled: Boolean(channelId) && enabled,
++    staleTime: 60 * 1000,
++  });
++}
+diff --git a/desktop/src/features/dkg-memory/topology/TopologyView.tsx b/desktop/src/features/dkg-memory/topology/TopologyView.tsx
+new file mode 100644
+index 000000000..fedfdfb8b
+--- /dev/null
++++ b/desktop/src/features/dkg-memory/topology/TopologyView.tsx
+@@ -0,0 +1,247 @@
++// Graph mode of the overlay — the node-UI-parity hexagonal RDF canvas
++// (dkg-graph-viz, exact-pinned 10.0.11), mounted ONLY when the user
++// explicitly enters the Graph view (acceptance gate from the repurpose
++// wrap: no RdfGraph import until a scoped graph action). Render-only:
++// data arrives through the client boundary; node clicks select — they
++// never navigate.
++//
++// Visual parity with the DKG node UI: options mirror MemoryLayerView's
++// GRAPH_OPTIONS (packages/node-ui) — humanized labels over the same
++// predicate list, the schema.org class palette, hexagon sizing, and the
++// NodePanel inspector. "Entity types" coloring is the node-parity default;
++// "Contributors" preserves the attribution view (recorded attribution,
++// not verification).
++import { Suspense, lazy, useMemo, useState } from "react";
++import { useQuery } from "@tanstack/react-query";
++import { fetchTopologyTriples } from "./client";
++import {
++  applyHeaviestSubjectsCap,
++  attributionLegend,
++  attributionNodeColors,
++  splitGraphTriplesForShelf,
++} from "./topology";
++
++const RdfGraph = lazy(() =>
++  import("@origintrail-official/dkg-graph-viz/react").then((m) => ({
++    default: m.RdfGraph,
++  })),
++);
++const NodePanel = lazy(() =>
++  import("@origintrail-official/dkg-graph-viz/react").then((m) => ({
++    default: m.NodePanel,
++  })),
++);
++
++// Mirrors packages/node-ui MemoryLayerView GRAPH_OPTIONS + memoryGraphLabels.
++const NODE_UI_LABEL_PREDICATES = [
++  "http://schema.org/text",
++  "http://schema.org/name",
++  "http://www.w3.org/2000/01/rdf-schema#label",
++  "http://purl.org/dc/terms/title",
++  "http://purl.org/dc/elements/1.1/title",
++  "http://xmlns.com/foaf/0.1/name",
++];
++const BUZZ_NS = "https://w3id.org/buzz-dkg/buzz#";
++const NODE_UI_GRAPH_OPTIONS = {
++  labelMode: "humanized" as const,
++  renderer: "2d" as const,
++  labels: { predicates: NODE_UI_LABEL_PREDICATES },
++  style: {
++    classColors: {
++      // node-UI schema.org palette…
++      "http://schema.org/Person": "#f472b6",
++      "http://schema.org/Organization": "#fb923c",
++      "http://schema.org/Place": "#34d399",
++      "http://schema.org/Product": "#c084fc",
++      "http://schema.org/Event": "#facc15",
++      "http://schema.org/CreativeWork": "#7dd3fc",
++      "http://schema.org/Thing": "#94a3b8",
++      // …extended to the buzz-dkg ontology with the same hues:
++      [`${BUZZ_NS}Claim`]: "#7dd3fc", // a claim is a creative record
++      [`${BUZZ_NS}AgentRun`]: "#facc15", // a run is an event
++      [`${BUZZ_NS}DecisionCluster`]: "#c084fc",
++      [`${BUZZ_NS}Commit`]: "#fb923c",
++      [`${BUZZ_NS}Evidence`]: "#34d399",
++    },
++    defaultNodeColor: "#94a3b8",
++    defaultEdgeColor: "#5f8598",
++    edgeWidth: 0.9,
++  },
++  hexagon: { baseSize: 4, minSize: 3, maxSize: 6, scaleWithDegree: true },
++  focus: { maxNodes: 3000, hops: 999 },
++};
++
++export function TopologyView({
++  cg,
++  subgraph,
++  onSelectUri,
++}: {
++  cg: string;
++  subgraph: string;
++  onSelectUri: (uri: string, label?: string) => void;
++}) {
++  const [colorMode, setColorMode] = useState<"entity" | "attribution">(
++    "entity",
++  );
++  const query = useQuery({
++    queryKey: ["dkg-memory", "topology", cg, subgraph],
++    queryFn: () => fetchTopologyTriples(cg, subgraph),
++    staleTime: 30 * 1000,
++  });
++
++  const shaped = useMemo(() => {
++    const triples = query.data?.triples ?? [];
++    const bounded = applyHeaviestSubjectsCap(triples);
++    const { canvasTriples, singletonItems } =
++      splitGraphTriplesForShelf(bounded);
++    return {
++      canvasTriples,
++      singletonItems,
++      nodeColors: attributionNodeColors(bounded),
++      legend: attributionLegend(bounded),
++      dropped: triples.length - bounded.length,
++    };
++  }, [query.data]);
++
++  const graphData = useMemo(
++    () =>
++      shaped.canvasTriples.map((t) => ({
++        subject: t.subject,
++        predicate: t.predicate,
++        object: t.object,
++      })),
++    [shaped.canvasTriples],
++  );
++
++  if (query.isLoading) {
++    return (
++      <div className="p-6 text-sm text-muted-foreground">
++        Reading subgraph triples through your node…
++      </div>
++    );
++  }
++  if (query.isError || query.data?.gate !== "ok") {
++    return (
++      <div className="p-6 text-sm text-muted-foreground">
++        Graph unavailable — it resolves only through your own node.
++      </div>
++    );
++  }
++
++  return (
++    <div className="flex h-full min-h-0 flex-col">
++      {/* Color-mode header: entity types (node-UI parity) or contributors. */}
++      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-1.5">
++        <span className="flex rounded-md border border-border text-2xs">
++          <button
++            type="button"
++            onClick={() => setColorMode("entity")}
++            className={`rounded-l-md px-2 py-0.5 ${colorMode === "entity" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
++          >
++            Entity types
++          </button>
++          <button
++            type="button"
++            onClick={() => setColorMode("attribution")}
++            className={`rounded-r-md px-2 py-0.5 ${colorMode === "attribution" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
++          >
++            Contributors
++          </button>
++        </span>
++        {colorMode === "attribution" &&
++          shaped.legend.map((l) => (
++            <span
++              key={l.agent}
++              className="flex items-center gap-1 rounded-full border border-border bg-muted/30 px-2 py-0.5 text-2xs"
++            >
++              <span
++                className="h-2 w-2 rounded-full"
++                style={{ backgroundColor: l.color }}
++              />
++              {l.agent}
++              <span className="tabular-nums text-muted-foreground">
++                {l.subjects}
++              </span>
++            </span>
++          ))}
++        <span className="ml-auto text-2xs text-muted-foreground">
++          {colorMode === "attribution"
++            ? "colors = recorded attribution, not verification"
++            : "colors = entity types, as in your DKG node"}
++          {shaped.dropped > 0 && ` · ${shaped.dropped} triples beyond cap`}
++        </span>
++      </div>
++
++      {/* Dark node-idiom island: the renderer's palette is tuned for the DKG
++          node UI's canvas (#0a0a0f); rendering on that background *is* the
++          node look — bright hexagons, thin edges, light labels. */}
++      <div className="min-h-0 flex-1" style={{ background: "#0a0a0f" }}>
++        <Suspense
++          fallback={
++            <div className="p-6 text-sm text-muted-foreground">
++              Loading graph renderer…
++            </div>
++          }
++        >
++          <RdfGraph
++            data={graphData}
++            format="triples"
++            options={
++              colorMode === "entity"
++                ? NODE_UI_GRAPH_OPTIONS
++                : {
++                    ...NODE_UI_GRAPH_OPTIONS,
++                    style: {
++                      ...NODE_UI_GRAPH_OPTIONS.style,
++                      nodeColors: shaped.nodeColors,
++                    },
++                  }
++            }
++            initialFit
++            onNodeClick={(node) => onSelectUri(node.id, node.label)}
++            className="h-full w-full"
++            style={{ height: "100%" }}
++          >
++            {/* Node-UI-parity inspector, same props as MemoryLayerView. */}
++            <NodePanel
++              showUri
++              showTypes
++              showProperties
++              showMetadata={false}
++              maxValueLength={150}
++            />
++          </RdfGraph>
++        </Suspense>
++      </div>
++
++      {shaped.singletonItems.length > 0 && (
++        <div className="border-t border-border px-3 py-1.5">
++          <span
++            className="mr-2 text-2xs text-muted-foreground"
++            title="Entities with no visible links are grouped here to keep the graph readable."
++          >
++            Standalone entities ({shaped.singletonItems.length})
++          </span>
++          <span className="inline-flex max-w-full flex-wrap gap-1 align-middle">
++            {shaped.singletonItems.slice(0, 12).map((item) => (
++              <button
++                key={item.uri}
++                type="button"
++                title={item.uri}
++                onClick={() => onSelectUri(item.uri, item.label)}
++                className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-2xs hover:bg-muted"
++              >
++                {item.label.slice(0, 32)}
++              </button>
++            ))}
++            {shaped.singletonItems.length > 12 && (
++              <span className="text-2xs text-muted-foreground">
++                +{shaped.singletonItems.length - 12}
++              </span>
++            )}
++          </span>
++        </div>
++      )}
++    </div>
++  );
++}
+diff --git a/desktop/src/features/dkg-memory/topology/client.ts b/desktop/src/features/dkg-memory/topology/client.ts
+new file mode 100644
+index 000000000..afcce0136
+--- /dev/null
++++ b/desktop/src/features/dkg-memory/topology/client.ts
+@@ -0,0 +1,34 @@
++// Adapter boundary for the topology view (per the node-ui repurpose wrap):
++// render code never calls the node or explorer directly — this module owns
++// the transport. Today's implementation reads the local explorer (fallback
++// transport per the spec); the canonical direct-node transport can replace
++// the body without touching render code, because the contract is node-shaped.
++const EXPLORER = "http://127.0.0.1:9295";
++
++export interface TopologyTriple {
++  subject: string;
++  predicate: string;
++  /** Raw N-Triples-style object — literals keep their quotes. */
++  object: string;
++  layer: "WM" | "SWM" | "VM";
++  /** Participant subgraph the triple's named graph belongs to. */
++  agent: string;
++}
++
++export interface TopologyData {
++  gate: "ok" | "node-missing" | "auth" | "not-subscribed";
++  cg?: string;
++  subgraph?: string;
++  triples?: TopologyTriple[];
++}
++
++export async function fetchTopologyTriples(
++  cg: string,
++  name: string,
++): Promise<TopologyData> {
++  const res = await fetch(
++    `${EXPLORER}/api/subgraph-triples?cg=${encodeURIComponent(cg)}&name=${encodeURIComponent(name)}`,
++  );
++  if (!res.ok) throw new Error(`subgraph-triples ${res.status}`);
++  return (await res.json()) as TopologyData;
++}
+diff --git a/desktop/src/features/dkg-memory/topology/topology.ts b/desktop/src/features/dkg-memory/topology/topology.ts
+new file mode 100644
+index 000000000..3cf4882db
+--- /dev/null
++++ b/desktop/src/features/dkg-memory/topology/topology.ts
+@@ -0,0 +1,185 @@
++// Pure topology shaping — no I/O, no React. The two load-bearing helpers are
++// ported (semantics kept verbatim) from the DKG node UI,
++// packages/node-ui/src/ui/views/project/components/graph.tsx, per the
++// node-ui repurpose JOINT RECOMMENDATION:
++//  • applyHeaviestSubjectsCap — deterministic bounded topology sample
++//    (degree-ranked complete subject clusters; pre-add budget check;
++//    smaller-satellite scan; heaviest-subject fallback; final slice).
++//  • splitGraphTriplesForShelf — degree-0 subjects move to a "standalone
++//    entities" shelf; triples touching shelved entities leave the canvas so
++//    the same entity never renders in two places.
++import type { TopologyTriple } from "./client";
++
++const RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
++const LABEL_PREDICATES = [
++  "http://schema.org/name",
++  "http://www.w3.org/2000/01/rdf-schema#label",
++  "http://schema.org/text",
++];
++const LABEL_PRIORITY = new Map(LABEL_PREDICATES.map((p, i) => [p, i]));
++
++export function graphNodeKey(value: string): string {
++  const trimmed = value.trim();
++  return trimmed.startsWith("<") && trimmed.endsWith(">")
++    ? trimmed.slice(1, -1)
++    : trimmed;
++}
++
++export function isResourceNode(value: string): boolean {
++  const trimmed = value.trim();
++  if (!trimmed || trimmed.startsWith('"')) return false;
++  if (trimmed.startsWith("_:")) return true;
++  if (trimmed.startsWith("<") && trimmed.endsWith(">")) return true;
++  if (/\s/.test(trimmed)) return false;
++  return /^[A-Za-z][A-Za-z0-9+.-]*:/.test(trimmed);
++}
++
++export function decodeLiteral(raw: string): string {
++  const t = raw.trim();
++  if (!t.startsWith('"')) return t;
++  const close = t.lastIndexOf('"');
++  return t
++    .slice(1, close)
++    .replace(/\\"/g, '"')
++    .replace(/\\n/g, "\n")
++    .replace(/\\\\/g, "\\");
++}
++
++export interface SingletonShelfItem {
++  uri: string;
++  label: string;
++}
++
++export function splitGraphTriplesForShelf(triples: TopologyTriple[]): {
++  canvasTriples: TopologyTriple[];
++  singletonItems: SingletonShelfItem[];
++} {
++  const subjects = new Set<string>();
++  const degree = new Map<string, number>();
++  const labels = new Map<string, string>();
++  const labelPriority = new Map<string, number>();
++
++  for (const triple of triples) {
++    const subjectKey = graphNodeKey(triple.subject);
++    subjects.add(subjectKey);
++    const priority = LABEL_PRIORITY.get(triple.predicate);
++    if (priority !== undefined) {
++      const label = decodeLiteral(triple.object).trim();
++      if (label) {
++        const existing = labelPriority.get(subjectKey);
++        if (existing === undefined || priority < existing) {
++          labels.set(subjectKey, label);
++          labelPriority.set(subjectKey, priority);
++        }
++      }
++    }
++    if (
++      graphNodeKey(triple.predicate) === RDF_TYPE_URI ||
++      !isResourceNode(triple.object)
++    )
++      continue;
++    const objectKey = graphNodeKey(triple.object);
++    degree.set(subjectKey, (degree.get(subjectKey) ?? 0) + 1);
++    degree.set(objectKey, (degree.get(objectKey) ?? 0) + 1);
++  }
++
++  const singletonItems = [...subjects]
++    .filter((key) => (degree.get(key) ?? 0) === 0)
++    .map((key) => ({
++      uri: key,
++      label: labels.get(key) ?? key.split(/[/#:]/).pop() ?? key,
++    }))
++    .sort((a, b) => a.label.localeCompare(b.label));
++  if (singletonItems.length === 0)
++    return { canvasTriples: triples, singletonItems };
++
++  const singletonSet = new Set(singletonItems.map((item) => item.uri));
++  return {
++    canvasTriples: triples.filter(
++      (triple) =>
++        !singletonSet.has(graphNodeKey(triple.subject)) &&
++        !singletonSet.has(graphNodeKey(triple.object)),
++    ),
++    singletonItems,
++  };
++}
++
++const MAX_TRIPLES = 2500;
++export function applyHeaviestSubjectsCap(
++  triples: TopologyTriple[],
++  max: number = MAX_TRIPLES,
++): TopologyTriple[] {
++  if (triples.length <= max) return triples;
++  const degree = new Map<string, number>();
++  for (const t of triples)
++    degree.set(t.subject, (degree.get(t.subject) ?? 0) + 1);
++  const order = [...degree.entries()]
++    .sort((a, b) => b[1] - a[1])
++    .map(([uri]) => uri);
++  const keep = new Set<string>();
++  let kept = 0;
++  for (const uri of order) {
++    const subjectDegree = degree.get(uri) ?? 0;
++    if (kept + subjectDegree > max) continue;
++    keep.add(uri);
++    kept += subjectDegree;
++  }
++  if (keep.size === 0 && order.length > 0) keep.add(order[0]);
++  return triples.filter((t) => keep.has(t.subject)).slice(0, max);
++}
++
++// ── Attribution palette ──────────────────────────────────────────────────────
++// Colors show RECORDED ATTRIBUTION (which participant subgraph wrote a
++// subject) — never truth, trustworthiness, or verification (UT Voice's
++// vocabulary guard from the wrap). Fixed hues for known participants,
++// hashed hue fallback for new ones.
++const AGENT_COLORS: Record<string, string> = {
++  openclaw: "#e06c75",
++  hermes: "#61afef",
++  utvoice: "#98c379",
++  fizz: "#e5c07b",
++  blackbox: "#c678dd",
++  ziga: "#56b6c2",
++  brana: "#d19a66",
++  t: "#abb2bf",
++  jurij: "#f28fad",
++  forge: "#8a91a0",
++  decisions: "#ffd866",
++};
++
++export function agentColor(agent: string): string {
++  const known = AGENT_COLORS[agent];
++  if (known) return known;
++  let h = 0;
++  for (const c of agent) h = (h * 31 + c.charCodeAt(0)) % 360;
++  return `hsl(${h} 55% 60%)`;
++}
++
++/** Per-subject-URI colors for RdfGraph's style.nodeColors (attribution). */
++export function attributionNodeColors(
++  triples: TopologyTriple[],
++): Record<string, string> {
++  const out: Record<string, string> = {};
++  for (const t of triples) {
++    const key = graphNodeKey(t.subject);
++    if (!(key in out)) out[key] = agentColor(t.agent);
++  }
++  return out;
++}
++
++export function attributionLegend(
++  triples: TopologyTriple[],
++): { agent: string; color: string; subjects: number }[] {
++  const subjectsByAgent = new Map<string, Set<string>>();
++  for (const t of triples) {
++    if (!subjectsByAgent.has(t.agent)) subjectsByAgent.set(t.agent, new Set());
++    subjectsByAgent.get(t.agent)?.add(graphNodeKey(t.subject));
++  }
++  return [...subjectsByAgent.entries()]
++    .map(([agent, subjects]) => ({
++      agent,
++      color: agentColor(agent),
++      subjects: subjects.size,
++    }))
++    .sort((a, b) => b.subjects - a.subjects);
++}
+diff --git a/desktop/src/features/dkg-memory/ui/DkgMemoryDock.tsx b/desktop/src/features/dkg-memory/ui/DkgMemoryDock.tsx
+new file mode 100644
+index 000000000..61ff5e46b
+--- /dev/null
++++ b/desktop/src/features/dkg-memory/ui/DkgMemoryDock.tsx
+@@ -0,0 +1,32 @@
++// Prototype mount for the Buzz-native DKG memory experience, per the
++// 2026-08-01 design deliberation (captured in the web-of-trust CG):
++// a read-first "Catch up" side panel beside the conversation, toggled by a
++// floating chip. Self-contained so the ChannelPane diff stays one line.
++import { useState } from "react";
++import { MemoryPanel } from "./MemoryPanel";
++
++export function DkgMemoryDock({ channelId }: { channelId: string | null }) {
++  const [open, setOpen] = useState(false);
++  if (!channelId) return null;
++  return (
++    <>
++      <button
++        type="button"
++        data-testid="dkg-memory-toggle"
++        onClick={() => setOpen((v) => !v)}
++        className="absolute right-3 top-14 z-30 rounded-full border border-border bg-background/90 px-2.5 py-1 text-xs font-medium shadow-sm backdrop-blur transition-colors hover:bg-muted"
++        title="Channel memory (DKG)"
++      >
++        ◈ Memory
++      </button>
++      {open ? (
++        <aside
++          data-testid="dkg-memory-panel"
++          className="absolute bottom-0 right-0 top-14 z-20 w-[340px] border-l border-t border-border bg-background shadow-xl"
++        >
++          <MemoryPanel channelId={channelId} />
++        </aside>
++      ) : null}
++    </>
++  );
++}
+diff --git a/desktop/src/features/dkg-memory/ui/EvidenceCard.tsx b/desktop/src/features/dkg-memory/ui/EvidenceCard.tsx
+new file mode 100644
+index 000000000..b25bebab3
+--- /dev/null
++++ b/desktop/src/features/dkg-memory/ui/EvidenceCard.tsx
+@@ -0,0 +1,147 @@
++// Decision card with the humanize-wrap anatomy: Status / Why / From / As of
++// visible, "View evidence" disclosure revealing the full Evidence Envelope.
++// The envelope is the canonical agent/human seam: the JSON toggle shows the
++// EXACT object agents consume — fields collapse for humans, the envelope is
++// never thinned.
++import { useState } from "react";
++import type { EvidenceEnvelope } from "../api";
++import { useEvidence, useProfileNames } from "../hooks";
++
++const LAYER_HUMAN = {
++  WM: "Draft — only on this node",
++  SWM: "Channel Memory — shared with channel members",
++  VM: "Anchored Record — integrity anchor on-chain",
++} as const;
++
++export function EvidenceCard({
++  cg,
++  uri,
++  title,
++  at,
++}: {
++  cg: string;
++  uri: string;
++  title: string;
++  at: string | null;
++}) {
++  const [showEvidence, setShowEvidence] = useState(false);
++  const evidence = useEvidence(cg, showEvidence ? uri : null);
++  const env = evidence.data;
++  const authorPks = env?.attribution ?? [];
++  const profiles = useProfileNames(authorPks);
++
++  const status =
++    env?.memoryLayer === "VM"
++      ? "Anchored Record"
++      : "Shared with channel members";
++  const from =
++    authorPks.length > 0
++      ? authorPks
++          .map((pk) => profiles.data?.[pk] ?? `${pk.slice(0, 8)}…`)
++          .join(", ")
++      : null;
++
++  return (
++    <div className="rounded-md border border-border bg-muted/20 p-2">
++      <p className="text-xs leading-snug">{title}</p>
++      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-2xs text-muted-foreground">
++        {showEvidence && env ? (
++          <>
++            <span>
++              <span className="font-medium">Status:</span> {status}
++            </span>
++            {from && (
++              <span>
++                <span className="font-medium">From:</span> {from}
++              </span>
++            )}
++          </>
++        ) : null}
++        {at && (
++          <span>
++            <span className="font-medium">As of:</span>{" "}
++            {new Date(at).toLocaleString()}
++          </span>
++        )}
++        <button
++          type="button"
++          onClick={() => setShowEvidence((v) => !v)}
++          className="text-primary hover:underline"
++          data-testid="view-evidence"
++        >
++          {showEvidence ? "Hide evidence" : "View evidence"}
++        </button>
++      </div>
++      {showEvidence && (
++        <div className="mt-2 border-t border-border pt-2">
++          {evidence.isLoading && (
++            <p className="text-2xs text-muted-foreground">
++              Reading evidence through your node…
++            </p>
++          )}
++          {env?.found && <EnvelopeBody env={env} />}
++          {env && env.found === false && (
++            <p className="text-2xs text-muted-foreground">
++              This record is not resolvable through your node yet.
++            </p>
++          )}
++        </div>
++      )}
++    </div>
++  );
++}
++
++function EnvelopeBody({ env }: { env: EvidenceEnvelope }) {
++  const [showJson, setShowJson] = useState(false);
++  return (
++    <div className="space-y-1.5 text-2xs">
++      <p className="text-muted-foreground">
++        {env.trustState} ·{" "}
++        {env.memoryLayer ? LAYER_HUMAN[env.memoryLayer] : "layer unknown"}
++      </p>
++      {env.sources && env.sources.length > 0 && (
++        <div>
++          <p className="mb-0.5 font-medium uppercase tracking-wide text-muted-foreground">
++            Built from {env.sources.length} source message
++            {env.sources.length === 1 ? "" : "s"}
++          </p>
++          <div className="max-h-40 space-y-1 overflow-y-auto">
++            {env.sources.slice(0, 6).map((s) => (
++              <p key={s.id} className="leading-snug" title={s.id}>
++                {s.span ?? s.id}
++              </p>
++            ))}
++            {env.sources.length > 6 && (
++              <p className="text-muted-foreground">
++                +{env.sources.length - 6} more
++              </p>
++            )}
++          </div>
++        </div>
++      )}
++      {env.digest && (
++        <p className="break-all font-mono text-3xs text-muted-foreground">
++          digest {env.digest}
++        </p>
++      )}
++      {env.receiptUal && (
++        <p className="break-all font-mono text-3xs text-muted-foreground">
++          UAL {env.receiptUal}
++        </p>
++      )}
++      <button
++        type="button"
++        onClick={() => setShowJson((v) => !v)}
++        className="text-primary hover:underline"
++        title="The exact envelope object agents consume — same data, same shape"
++      >
++        {showJson ? "hide agent view" : "{} agent view"}
++      </button>
++      {showJson && (
++        <pre className="max-h-48 overflow-auto rounded bg-muted p-1.5 font-mono text-3xs">
++          {JSON.stringify(env, null, 2)}
++        </pre>
++      )}
++    </div>
++  );
++}
+diff --git a/desktop/src/features/dkg-memory/ui/GraphCanvas.tsx b/desktop/src/features/dkg-memory/ui/GraphCanvas.tsx
+new file mode 100644
+index 000000000..00ea4e4ab
+--- /dev/null
++++ b/desktop/src/features/dkg-memory/ui/GraphCanvas.tsx
+@@ -0,0 +1,405 @@
++// Deterministic graph canvas for a subgraph lens — the on-demand graph view
++// the deliberation settled: time-ordered decision SPINE on the horizontal
++// axis, one hop of evidence hanging OFF the spine (supports below,
++// counter-claims above, dashed + labeled — never color alone), deterministic
++// positions (no physics), labels only on selection. Scale picks the layout:
++// this canvas IS the small-subgraph direct-DAG mode; cluster-map first paint
++// for channel-wide scale arrives with the Knowledge section.
++import { useMemo } from "react";
++import type { GraphEdge, GraphNode } from "../api";
++
++const LAYER_DOT = {
++  WM: "fill-slate-400",
++  SWM: "fill-amber-400",
++  VM: "fill-green-500",
++} as const;
++
++const SLOT_W = 190;
++const SPINE_Y = 150;
++const EVIDENCE_Y0 = 230;
++const EVIDENCE_DY = 48;
++const CONTRA_Y0 = 70;
++export const MAX_SPINE = 7;
++const MAX_EVIDENCE_PER = 4;
++
++export interface GraphSelection {
++  node: GraphNode;
++  neighbors: { rel: string; node: GraphNode }[];
++}
++
++interface Props {
++  nodes: GraphNode[];
++  edges: GraphEdge[];
++  window: number; // spine window start index
++  onWindow: (start: number) => void;
++  selectedId: string | null;
++  onSelect: (sel: GraphSelection | null) => void;
++}
++
++export function GraphCanvas({
++  nodes,
++  edges,
++  window: winStart,
++  onWindow,
++  selectedId,
++  onSelect,
++}: Props) {
++  const layout = useMemo(() => {
++    const byId = new Map(nodes.map((n) => [n.id, n]));
++    const spine = nodes
++      .filter((n) => n.kind === "decision")
++      .sort(
++        (a, b) =>
++          (a.at ?? Number.MAX_SAFE_INTEGER) -
++            (b.at ?? Number.MAX_SAFE_INTEGER) || a.label.localeCompare(b.label),
++      );
++    // Evidence grouped under the first decision it supports; counter-claims
++    // grouped above the decision they contradict.
++    const under = new Map<string, GraphNode[]>();
++    const over = new Map<string, GraphNode[]>();
++    const linked = new Set<string>();
++    for (const e of edges) {
++      const src = byId.get(e.from);
++      const dst = byId.get(e.to);
++      if (!src || !dst || dst.kind !== "decision") continue;
++      const lane = e.rel === "contradicts" ? over : under;
++      if (!lane.has(dst.id)) lane.set(dst.id, []);
++      if (!lane.get(dst.id)?.some((n) => n.id === src.id)) {
++        lane.get(dst.id)?.push(src);
++      }
++      linked.add(src.id);
++    }
++    for (const list of [...under.values(), ...over.values()]) {
++      list.sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
++    }
++    const unlinked = nodes
++      .filter((n) => n.kind !== "decision" && !linked.has(n.id))
++      .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
++    return { byId, spine, under, over, unlinked };
++  }, [nodes, edges]);
++
++  const { spine, under, over, unlinked } = layout;
++  // First paint: coarsest view that shows at least one contested decision;
++  // fallback: the latest window (consensus rule + UT Voice's fallback).
++  const start = Math.max(0, Math.min(winStart, spine.length - MAX_SPINE));
++  const visible = spine.slice(start, start + MAX_SPINE);
++  const width = Math.max(visible.length, 1) * SLOT_W + 80;
++  const maxUnder = Math.max(
++    0,
++    ...visible.map((d) =>
++      Math.min(under.get(d.id)?.length ?? 0, MAX_EVIDENCE_PER),
++    ),
++  );
++  const unlinkedY = EVIDENCE_Y0 + maxUnder * EVIDENCE_DY + 40;
++  const height = unlinkedY + (unlinked.length > 0 ? 70 : 10);
++
++  const select = (node: GraphNode) => {
++    const neighbors: { rel: string; node: GraphNode }[] = [];
++    const seen = new Set<string>();
++    for (const e of edges) {
++      if (e.from !== node.id && e.to !== node.id) continue;
++      const other = layout.byId.get(e.from === node.id ? e.to : e.from);
++      if (!other || seen.has(`${e.rel}|${other.id}`)) continue;
++      seen.add(`${e.rel}|${other.id}`);
++      neighbors.push({ rel: e.rel, node: other });
++    }
++    onSelect({ node, neighbors });
++  };
++
++  const xOf = (i: number) => 60 + i * SLOT_W + SLOT_W / 2;
++
++  return (
++    <div className="h-full w-full overflow-auto">
++      <svg
++        width={width}
++        height={height}
++        role="img"
++        aria-label="Decision traces graph"
++        className="min-h-full"
++      >
++        {/* time axis = the spine line */}
++        {visible.length > 0 && (
++          <line
++            x1={30}
++            y1={SPINE_Y}
++            x2={width - 30}
++            y2={SPINE_Y}
++            className="stroke-border"
++            strokeWidth={2}
++          />
++        )}
++        {start > 0 && (
++          <SpineFold
++            x={34}
++            y={SPINE_Y}
++            label={`‹ +${start} earlier`}
++            onClick={() => onWindow(Math.max(0, start - MAX_SPINE))}
++          />
++        )}
++        {start + MAX_SPINE < spine.length && (
++          <SpineFold
++            x={width - 44}
++            y={SPINE_Y}
++            anchor="end"
++            label={`+${spine.length - start - MAX_SPINE} later ›`}
++            onClick={() => onWindow(start + MAX_SPINE)}
++          />
++        )}
++
++        {visible.map((d, i) => {
++          const x = xOf(i);
++          const evidence = (under.get(d.id) ?? []).slice(0, MAX_EVIDENCE_PER);
++          const extra = (under.get(d.id)?.length ?? 0) - evidence.length;
++          const counters = over.get(d.id) ?? [];
++          const contested = (d.contested ?? 0) > 0 || counters.length > 0;
++          return (
++            <g key={d.id}>
++              {/* evidence below: supports */}
++              {evidence.map((n, j) => {
++                const y = EVIDENCE_Y0 + j * EVIDENCE_DY;
++                return (
++                  <g key={n.id}>
++                    <line
++                      x1={x}
++                      y1={SPINE_Y + 16}
++                      x2={x}
++                      y2={y - 14}
++                      className="stroke-border"
++                      strokeWidth={1}
++                    />
++                    <EvidenceNode
++                      node={n}
++                      x={x}
++                      y={y}
++                      selected={selectedId === n.id}
++                      onClick={() => select(n)}
++                    />
++                  </g>
++                );
++              })}
++              {extra > 0 && (
++                <text
++                  x={x}
++                  y={EVIDENCE_Y0 + evidence.length * EVIDENCE_DY}
++                  textAnchor="middle"
++                  className="fill-muted-foreground text-2xs"
++                >
++                  +{extra} more
++                </text>
++              )}
++              {/* counter-claims above: dashed + labeled relation */}
++              {counters.slice(0, 2).map((n, j) => {
++                const y = CONTRA_Y0 - j * EVIDENCE_DY;
++                return (
++                  <g key={n.id}>
++                    <line
++                      x1={x}
++                      y1={y + 14}
++                      x2={x}
++                      y2={SPINE_Y - 16}
++                      className="stroke-amber-500"
++                      strokeWidth={1.5}
++                      strokeDasharray="4 3"
++                    />
++                    <text
++                      x={x + 6}
++                      y={(y + SPINE_Y) / 2}
++                      className="fill-amber-500 text-3xs"
++                    >
++                      counter-claim
++                    </text>
++                    <EvidenceNode
++                      node={n}
++                      x={x}
++                      y={y}
++                      counter
++                      selected={selectedId === n.id}
++                      onClick={() => select(n)}
++                    />
++                  </g>
++                );
++              })}
++              {/* decision on the spine */}
++              {/* biome-ignore lint/a11y/useSemanticElements: SVG interactive node — <button> is invalid inside <svg> */}
++              <g
++                role="button"
++                tabIndex={0}
++                onClick={() => select(d)}
++                onKeyDown={(e) => e.key === "Enter" && select(d)}
++                className="cursor-pointer"
++              >
++                <rect
++                  x={x - 78}
++                  y={SPINE_Y - 16}
++                  width={156}
++                  height={32}
++                  rx={6}
++                  className={`${
++                    selectedId === d.id
++                      ? "fill-primary/15 stroke-primary"
++                      : "fill-muted stroke-foreground/60"
++                  } ${contested ? "stroke-amber-500" : ""}`}
++                  strokeWidth={contested ? 2 : 1.5}
++                />
++                <title>{d.label}</title>
++                {d.layer && (
++                  <circle
++                    cx={x + 72}
++                    cy={SPINE_Y - 10}
++                    r={3}
++                    className={LAYER_DOT[d.layer]}
++                  />
++                )}
++                <text
++                  x={x}
++                  y={SPINE_Y + 4}
++                  textAnchor="middle"
++                  className="fill-foreground text-2xs"
++                >
++                  {ellipsize(d.label, 24)}
++                </text>
++                {contested && (
++                  <text
++                    x={x}
++                    y={SPINE_Y - 22}
++                    textAnchor="middle"
++                    className="fill-amber-500 text-3xs font-medium"
++                  >
++                    CONTESTED{d.contested ? ` (${d.contested})` : ""}
++                  </text>
++                )}
++              </g>
++            </g>
++          );
++        })}
++
++        {/* unlinked evidence lane */}
++        {unlinked.length > 0 && (
++          <g>
++            <text
++              x={40}
++              y={unlinkedY - 12}
++              className="fill-muted-foreground text-2xs"
++            >
++              evidence not yet feeding a decision
++            </text>
++            {unlinked.slice(0, 12).map((n, i) => (
++              <EvidenceNode
++                key={n.id}
++                node={n}
++                x={60 + i * 52}
++                y={unlinkedY + 16}
++                selected={selectedId === n.id}
++                onClick={() => select(n)}
++              />
++            ))}
++            {unlinked.length > 12 && (
++              <text
++                x={60 + 12 * 52}
++                y={unlinkedY + 20}
++                className="fill-muted-foreground text-2xs"
++              >
++                +{unlinked.length - 12}
++              </text>
++            )}
++          </g>
++        )}
++      </svg>
++    </div>
++  );
++}
++
++function EvidenceNode({
++  node,
++  x,
++  y,
++  counter,
++  selected,
++  onClick,
++}: {
++  node: GraphNode;
++  x: number;
++  y: number;
++  counter?: boolean;
++  selected: boolean;
++  onClick: () => void;
++}) {
++  const stroke = selected
++    ? "stroke-primary"
++    : counter
++      ? "stroke-amber-500"
++      : "stroke-foreground/50";
++  const fill = selected ? "fill-primary/20" : "fill-muted";
++  return (
++    // biome-ignore lint/a11y/useSemanticElements: SVG interactive node — <button> is invalid inside <svg>
++    <g
++      role="button"
++      tabIndex={0}
++      onClick={onClick}
++      onKeyDown={(e) => e.key === "Enter" && onClick()}
++      className="cursor-pointer"
++    >
++      <title>{node.label}</title>
++      {node.layer && (
++        <circle
++          cx={x + 12}
++          cy={y - 10}
++          r={3}
++          className={LAYER_DOT[node.layer]}
++        />
++      )}
++      {node.kind === "commit" ? (
++        <rect
++          x={x - 11}
++          y={y - 11}
++          width={22}
++          height={22}
++          className={`${fill} ${stroke}`}
++          strokeWidth={1.5}
++        />
++      ) : (
++        <circle
++          cx={x}
++          cy={y}
++          r={12}
++          className={`${fill} ${stroke}`}
++          strokeWidth={1.5}
++        />
++      )}
++    </g>
++  );
++}
++
++function SpineFold({
++  x,
++  y,
++  label,
++  anchor,
++  onClick,
++}: {
++  x: number;
++  y: number;
++  label: string;
++  anchor?: "end";
++  onClick: () => void;
++}) {
++  return (
++    // biome-ignore lint/a11y/useSemanticElements: SVG interactive node — <button> is invalid inside <svg>
++    <text
++      x={x}
++      y={y - 24}
++      textAnchor={anchor ?? "start"}
++      role="button"
++      tabIndex={0}
++      onClick={onClick}
++      onKeyDown={(e) => e.key === "Enter" && onClick()}
++      className="cursor-pointer fill-primary text-2xs hover:underline"
++    >
++      {label}
++    </text>
++  );
++}
++
++function ellipsize(s: string, n: number): string {
++  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
++}
+diff --git a/desktop/src/features/dkg-memory/ui/GraphOverlay.tsx b/desktop/src/features/dkg-memory/ui/GraphOverlay.tsx
+new file mode 100644
+index 000000000..4e5efb977
+--- /dev/null
++++ b/desktop/src/features/dkg-memory/ui/GraphOverlay.tsx
+@@ -0,0 +1,291 @@
++// Full-screen inspection state of the Memory panel — the graph view's ONE
++// home in v1 (per the deliberation: panel expansion first, built as the
++// reusable canvas the Knowledge section mounts later). Read-only: node click
++// selects and focuses the evidence rail; the graph orients, it never
++// navigates away. Labels are inert text; no editing, no action execution.
++import { useEffect, useMemo, useState } from "react";
++import { createPortal } from "react-dom";
++import { useSubgraphGraph } from "../hooks";
++import { TopologyView } from "../topology/TopologyView";
++import { GraphCanvas, type GraphSelection, MAX_SPINE } from "./GraphCanvas";
++
++const LAYER_META = {
++  WM: { label: "Draft — only on this node", dot: "bg-slate-400" },
++  SWM: {
++    label: "Channel Memory — shared with channel members",
++    dot: "bg-amber-400",
++  },
++  VM: {
++    label: "Anchored Record — integrity anchor on-chain",
++    dot: "bg-green-500",
++  },
++} as const;
++
++export function GraphOverlay({
++  cg,
++  subgraph,
++  onClose,
++}: {
++  cg: string;
++  subgraph: string;
++  onClose: () => void;
++}) {
++  const graph = useSubgraphGraph(cg, subgraph);
++  const [selection, setSelection] = useState<GraphSelection | null>(null);
++  const [windowStart, setWindowStart] = useState<number | null>(null);
++  // Spine is the first paint; topology (hexagonal RdfGraph) mounts only on
++  // this explicit scoped action — per the repurpose wrap's acceptance gate.
++  const [mode, setMode] = useState<"spine" | "topology">("spine");
++
++  useEffect(() => {
++    const onKey = (e: KeyboardEvent) => {
++      if (e.key === "Escape") onClose();
++    };
++    window.addEventListener("keydown", onKey);
++    return () => window.removeEventListener("keydown", onKey);
++  }, [onClose]);
++
++  const data = graph.data;
++  const nodes = useMemo(() => data?.nodes ?? [], [data]);
++  const edges = useMemo(() => data?.edges ?? [], [data]);
++
++  // First paint: the coarsest window that shows at least one contested
++  // decision; deterministic fallback — the latest window with a decision.
++  const defaultStart = useMemo(() => {
++    const spine = nodes
++      .filter((n) => n.kind === "decision")
++      .sort(
++        (a, b) =>
++          (a.at ?? Number.MAX_SAFE_INTEGER) -
++            (b.at ?? Number.MAX_SAFE_INTEGER) || a.label.localeCompare(b.label),
++      );
++    const contestedIdx = spine.findIndex((n) => (n.contested ?? 0) > 0);
++    if (contestedIdx >= 0)
++      return Math.max(0, Math.min(contestedIdx, spine.length - MAX_SPINE));
++    return Math.max(0, spine.length - MAX_SPINE);
++  }, [nodes]);
++
++  const decisionCount = nodes.filter((n) => n.kind === "decision").length;
++  const evidenceCount = nodes.length - decisionCount;
++  const layerCounts = useMemo(() => {
++    const c = { WM: 0, SWM: 0, VM: 0 };
++    for (const n of nodes) if (n.layer) c[n.layer] += 1;
++    return c;
++  }, [nodes]);
++
++  return createPortal(
++    <div
++      className="fixed inset-0 z-[100] flex flex-col bg-background"
++      data-testid="dkg-graph-overlay"
++    >
++      <header className="flex items-center gap-3 border-b border-border py-2 pl-20 pr-4">
++        <h2 className="text-sm font-semibold">
++          {subgraph}
++          <span className="ml-2 font-normal text-muted-foreground">
++            {decisionCount} decisions · {evidenceCount} evidence
++          </span>
++        </h2>
++        <span className="rounded-md border border-green-600/40 bg-green-600/10 px-2 py-0.5 text-xs">
++          provenance checked by your node
++        </span>
++        <div className="ml-2 flex items-center gap-2">
++          {(["WM", "SWM", "VM"] as const).map((tag) => (
++            <span
++              key={tag}
++              className="flex items-center gap-1 rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-2xs"
++              title={LAYER_META[tag].label}
++            >
++              <span
++                className={`h-1.5 w-1.5 rounded-full ${LAYER_META[tag].dot}`}
++              />
++              {tag}
++              <span className="tabular-nums text-muted-foreground">
++                {layerCounts[tag]}
++              </span>
++            </span>
++          ))}
++        </div>
++        <div className="flex-1" />
++        <div className="mr-2 flex rounded-md border border-border text-xs">
++          <button
++            type="button"
++            onClick={() => setMode("spine")}
++            className={`rounded-l-md px-2 py-1 ${mode === "spine" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
++          >
++            Traces
++          </button>
++          <button
++            type="button"
++            onClick={() => setMode("topology")}
++            data-testid="dkg-topology-toggle"
++            className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
++          >
++            ⬡ Graph
++          </button>
++        </div>
++        <button
++          type="button"
++          onClick={onClose}
++          className="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted"
++          aria-label="Close graph view"
++        >
++          ✕ close
++        </button>
++      </header>
++
++      <div className="flex min-h-0 flex-1">
++        <main className="min-w-0 flex-1">
++          {graph.isLoading && (
++            <div className="p-6 text-sm text-muted-foreground">
++              Reading subgraph through your node…
++            </div>
++          )}
++          {graph.isError && (
++            <div className="p-6 text-sm text-muted-foreground">
++              Could not read this subgraph through your local node.
++            </div>
++          )}
++          {data && data.gate !== "ok" && (
++            <div className="p-6 text-sm text-muted-foreground">
++              Your edge node is not answering — the graph view resolves only
++              through your own node.
++            </div>
++          )}
++          {data && data.gate === "ok" && mode === "spine" && (
++            <GraphCanvas
++              nodes={nodes}
++              edges={edges}
++              window={windowStart ?? defaultStart}
++              onWindow={setWindowStart}
++              selectedId={selection?.node.id ?? null}
++              onSelect={setSelection}
++            />
++          )}
++          {mode === "topology" && (
++            <TopologyView
++              cg={cg}
++              subgraph={subgraph}
++              onSelectUri={(uri, label) => {
++                const known = nodes.find((n) => n.id === uri);
++                if (known) {
++                  const neighbors: {
++                    rel: string;
++                    node: (typeof nodes)[number];
++                  }[] = [];
++                  const seen = new Set<string>();
++                  for (const e of edges) {
++                    if (e.from !== uri && e.to !== uri) continue;
++                    const other = nodes.find(
++                      (n) => n.id === (e.from === uri ? e.to : e.from),
++                    );
++                    if (!other || seen.has(`${e.rel}|${other.id}`)) continue;
++                    seen.add(`${e.rel}|${other.id}`);
++                    neighbors.push({ rel: e.rel, node: other });
++                  }
++                  setSelection({ node: known, neighbors });
++                } else {
++                  setSelection({
++                    node: {
++                      id: uri,
++                      kind: "claim",
++                      label: label ?? uri,
++                      at: null,
++                    },
++                    neighbors: [],
++                  });
++                }
++              }}
++            />
++          )}
++        </main>
++
++        <aside className="w-80 shrink-0 overflow-y-auto border-l border-border p-3">
++          {selection ? (
++            <EvidenceRail selection={selection} />
++          ) : mode === "spine" ? (
++            <p className="text-xs text-muted-foreground">
++              Select a node to inspect its evidence trail. Boxes on the line are
++              decisions in time order; anything hanging off a box is its
++              evidence — supports below, counter-claims above.
++            </p>
++          ) : (
++            <p className="text-xs text-muted-foreground">
++              The knowledge graph as your DKG node renders it — hexagons are
++              entities, sized by connections; zoom in for labels. Click a node
++              to inspect it, or select one to open its evidence trail here.
++            </p>
++          )}
++        </aside>
++      </div>
++    </div>,
++    document.body,
++  );
++}
++
++function EvidenceRail({ selection }: { selection: GraphSelection }) {
++  const { node, neighbors } = selection;
++  return (
++    <div className="space-y-3">
++      <div>
++        <span className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-2xs uppercase tracking-wide">
++          {node.kind}
++        </span>
++        {node.layer && (
++          <span className="ml-1.5 inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-0.5 text-2xs">
++            <span
++              className={`h-1.5 w-1.5 rounded-full ${LAYER_META[node.layer].dot}`}
++            />
++            {LAYER_META[node.layer].label}
++          </span>
++        )}
++        {(node.contested ?? 0) > 0 && (
++          <span className="ml-1.5 rounded-full border border-amber-500/60 bg-amber-500/10 px-2 py-0.5 text-2xs text-amber-500">
++            contested ({node.contested})
++          </span>
++        )}
++      </div>
++      <p className="whitespace-pre-wrap text-xs leading-snug">{node.label}</p>
++      {node.at && (
++        <p className="text-2xs text-muted-foreground">
++          {new Date(node.at * 1000).toLocaleString()}
++        </p>
++      )}
++      {node.commit && (
++        <p className="break-all font-mono text-2xs text-muted-foreground">
++          commit {node.commit}
++        </p>
++      )}
++      {neighbors.length > 0 && (
++        <section>
++          <h4 className="mb-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
++            Evidence trail
++          </h4>
++          <div className="space-y-1.5">
++            {neighbors.map((n) => (
++              <div
++                key={`${n.rel}-${n.node.id}`}
++                className="rounded-md border border-border bg-muted/20 px-2 py-1"
++              >
++                <span
++                  className={`text-2xs uppercase ${
++                    n.rel === "contradicts"
++                      ? "text-amber-500"
++                      : "text-muted-foreground"
++                  }`}
++                >
++                  {n.rel}
++                </span>
++                <p className="text-xs leading-snug">
++                  {n.node.label.slice(0, 160)}
++                </p>
++              </div>
++            ))}
++          </div>
++        </section>
++      )}
++      <p className="break-all font-mono text-3xs text-muted-foreground/70">
++        {node.id}
++      </p>
++    </div>
++  );
++}
+diff --git a/desktop/src/features/dkg-memory/ui/MemoryPanel.tsx b/desktop/src/features/dkg-memory/ui/MemoryPanel.tsx
+new file mode 100644
+index 000000000..550fb9ab3
+--- /dev/null
++++ b/desktop/src/features/dkg-memory/ui/MemoryPanel.tsx
+@@ -0,0 +1,410 @@
++// Buzz-native DKG memory panel: the channel's collective memory — three
++// layers (WM/SWM/VM), named subgraphs (per-agent contribution lenses,
++// decisions, projects), and drill-in contributor trails — rendered where the
++// conversation happens. Data resolves through the viewer's OWN edge node
++// (local-first); failing gates render instructions, never silent emptiness.
++import { useState } from "react";
++import {
++  useChannelContextGraph,
++  useChannelMemory,
++  useContributorTrail,
++  useDiscoveryFallback,
++  useProfileNames,
++} from "../hooks";
++import { explorerSource, nodeUiDeepLink } from "../api";
++import { EvidenceCard } from "./EvidenceCard";
++import { GraphOverlay } from "./GraphOverlay";
++
++// Humanized layer names per the 2026-08-02 humanize wrap (Hermes' table,
++// seconded by OpenClaw): reach + durability in plain words, technical
++// WM/SWM/VM kept as the small tag (progressive disclosure).
++const LAYER_META = {
++  WM: { label: "Draft", hint: "only on this node", dot: "bg-slate-400" },
++  SWM: {
++    label: "Channel Memory",
++    hint: "shared with channel members",
++    dot: "bg-amber-400",
++  },
++  VM: {
++    label: "Anchored Record",
++    hint: "integrity anchor on-chain",
++    dot: "bg-green-500",
++  },
++} as const;
++
++function shortPk(pk: string): string {
++  return `${pk.slice(0, 8)}…`;
++}
++
++export function MemoryPanel({ channelId }: { channelId: string }) {
++  const cgQuery = useChannelContextGraph(channelId);
++  const cg = cgQuery.data ?? null;
++  const memory = useChannelMemory(cg);
++  const [trailPubkey, setTrailPubkey] = useState<string | null>(null);
++  const [graphSubgraph, setGraphSubgraph] = useState<string | null>(null);
++  const [search, setSearch] = useState("");
++  const trail = useContributorTrail(cg, trailPubkey);
++  const gateFailed =
++    Boolean(memory.data && memory.data.gate !== "ok") || memory.isError;
++  const discovery = useDiscoveryFallback(channelId, gateFailed);
++  const contributorPubkeys = (memory.data?.contributors ?? []).map(
++    (c) => c.pubkey,
++  );
++  const profiles = useProfileNames(contributorPubkeys);
++  const sortedDecisions = [...(memory.data?.decisions ?? [])].sort((a, b) =>
++    (b.at ?? "").localeCompare(a.at ?? ""),
++  );
++  const latestDecision =
++    sortedDecisions.find((d) => d.at) ?? sortedDecisions[0] ?? null;
++  const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
++  const happeningNow = sortedDecisions.filter(
++    (d) => d.at && Date.parse(d.at) > dayAgo,
++  );
++  const query = search.trim().toLowerCase();
++  const filteredDecisions = query
++    ? sortedDecisions.filter((d) =>
++        (d.name ?? d.uri).toLowerCase().includes(query),
++      )
++    : sortedDecisions;
++
++  if (cgQuery.isLoading) {
++    return <PanelShell title="Memory">Resolving channel binding…</PanelShell>;
++  }
++  if (!cg) {
++    return (
++      <PanelShell title="Memory">
++        <p className="text-sm text-muted-foreground">
++          This channel is not bound to a Context Graph yet. Pin a thread or use{" "}
++          <code>@dkg distill</code> once the knowledge daemon is attached.
++        </p>
++      </PanelShell>
++    );
++  }
++  if (memory.isLoading) {
++    return <PanelShell title="Memory">Reading your edge node…</PanelShell>;
++  }
++  const data = memory.data;
++  if (!data || data.gate !== "ok") {
++    return (
++      <PanelShell title="Memory">
++        <div className="mb-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs">
++          Shown for discovery — unverified (via relay receipts). Run a local
++          node to verify.
++        </div>
++        {discovery.data && discovery.data.length > 0 ? (
++          <div className="mb-3 max-h-72 space-y-1 overflow-y-auto">
++            {discovery.data.map((d) => (
++              <div
++                key={d.kaName}
++                className="rounded px-1.5 py-0.5 text-xs"
++                title={`digest ${d.digest ?? "?"}`}
++              >
++                <span
++                  className={`mr-1 inline-block h-2 w-2 rounded-full ${d.layer === "VM" ? "bg-green-500" : "bg-amber-400"}`}
++                />
++                {d.title ?? d.kaName}
++              </div>
++            ))}
++          </div>
++        ) : (
++          <p className="mb-3 text-xs text-muted-foreground">
++            {discovery.isLoading
++              ? "Reading receipts…"
++              : "No receipts found in this channel yet."}
++          </p>
++        )}
++        <details>
++          <summary className="cursor-pointer text-xs text-muted-foreground">
++            Verify through your own node
++          </summary>
++          <div className="mt-2">
++            <GateNotice gate={data?.gate ?? "node-missing"} cg={cg} />
++          </div>
++        </details>
++      </PanelShell>
++    );
++  }
++
++  return (
++    <PanelShell
++      title="Memory"
++      action={
++        explorerSource() === "local" ? (
++          <a
++            className="text-xs text-primary hover:underline"
++            href={nodeUiDeepLink(cg)}
++            target="_blank"
++            rel="noreferrer"
++          >
++            open in node ↗
++          </a>
++        ) : null
++      }
++    >
++      {explorerSource() === "gateway" ? (
++        <div className="mb-2 rounded-md border border-sky-600/40 bg-sky-600/10 px-2 py-1 text-xs">
++          ✓ Resolved through the community DKG provider — full memory from the
++          community's node. Run your own node to verify independently.
++        </div>
++      ) : (
++        <div className="mb-2 rounded-md border border-green-600/40 bg-green-600/10 px-2 py-1 text-xs">
++          ✓ Verified through your node
++        </div>
++      )}
++      {/* What this channel remembers — plain-language summary + layer ladder */}
++      <section className="mb-3">
++        <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
++          What this channel remembers
++        </h4>
++        <p className="mb-2 text-xs text-muted-foreground">
++          {sortedDecisions.length} decisions across{" "}
++          {(data.subgraphs ?? []).filter((sg) => sg.entityCount > 0).length}{" "}
++          topics, from {(data.contributors ?? []).length} people &amp; agents.
++        </p>
++        <div className="mb-1 grid grid-cols-3 gap-2">
++          {(["WM", "SWM", "VM"] as const).map((tag) => {
++            const entries = data.layers?.[tag];
++            const meta = LAYER_META[tag];
++            return (
++              <div
++                key={tag}
++                className="rounded-md border border-border bg-muted/30 px-2 py-1.5"
++                title={meta.hint}
++              >
++                <div className="flex items-center gap-1.5">
++                  <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
++                  <span className="truncate text-xs font-medium">
++                    {meta.label}
++                  </span>
++                  <span className="ml-auto text-3xs text-muted-foreground">
++                    {tag}
++                  </span>
++                </div>
++                <div className="text-base font-semibold tabular-nums">
++                  {entries ? entries.length : "—"}
++                </div>
++              </div>
++            );
++          })}
++        </div>
++      </section>
++
++      {/* What is happening now */}
++      {happeningNow.length > 0 && (
++        <section className="mb-3">
++          <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
++            What is happening now
++          </h4>
++          <p className="mb-1 text-2xs text-muted-foreground">
++            {happeningNow.length} record{happeningNow.length === 1 ? "" : "s"}{" "}
++            in the last 24 hours
++          </p>
++          <div className="space-y-0.5">
++            {happeningNow.slice(0, 3).map((d) => (
++              <p
++                key={d.uri}
++                className="truncate text-xs"
++                title={d.name ?? d.uri}
++              >
++                {d.name ?? d.uri.split("/").pop()}
++              </p>
++            ))}
++          </div>
++        </section>
++      )}
++
++      {/* Latest decision — card anatomy + Evidence Envelope */}
++      {latestDecision && (
++        <section className="mb-3">
++          <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
++            Latest decision
++          </h4>
++          <EvidenceCard
++            cg={cg}
++            uri={latestDecision.uri}
++            title={latestDecision.name ?? latestDecision.uri}
++            at={latestDecision.at}
++          />
++        </section>
++      )}
++
++      {/* Subgraph lenses */}
++      {data.subgraphs && data.subgraphs.length > 0 && (
++        <section className="mb-3">
++          <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
++            Topics
++          </h4>
++          <div className="flex flex-wrap gap-1.5">
++            {data.subgraphs
++              .filter((sg) => sg.entityCount > 0)
++              .map((sg) => (
++                <button
++                  key={sg.uri}
++                  type="button"
++                  onClick={() => setGraphSubgraph(sg.name)}
++                  className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs transition-colors hover:border-primary/60 hover:bg-muted"
++                  title={`${sg.entityCount} entities · ${sg.tripleCount} triples — open as graph`}
++                  data-testid={`dkg-subgraph-${sg.name}`}
++                >
++                  {sg.name}
++                  <span className="ml-1 text-muted-foreground tabular-nums">
++                    {sg.entityCount}
++                  </span>
++                  <span className="ml-1 text-muted-foreground">⌗</span>
++                </button>
++              ))}
++          </div>
++        </section>
++      )}
++
++      {/* Contributors → trail drill-in */}
++      {data.contributors && data.contributors.length > 0 && (
++        <section className="mb-3">
++          <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
++            People &amp; agents
++          </h4>
++          <div className="flex flex-wrap gap-1.5">
++            {data.contributors.map((c) => (
++              <button
++                key={c.pubkey}
++                type="button"
++                onClick={() =>
++                  setTrailPubkey(trailPubkey === c.pubkey ? null : c.pubkey)
++                }
++                className={`rounded-full border px-2 py-0.5 text-xs transition-colors ${
++                  trailPubkey === c.pubkey
++                    ? "border-primary bg-primary/10"
++                    : "border-border bg-muted/40 hover:bg-muted"
++                }`}
++              >
++                {profiles.data?.[c.pubkey] ?? shortPk(c.pubkey)}
++                <span className="ml-1 text-muted-foreground tabular-nums">
++                  {c.events}
++                </span>
++              </button>
++            ))}
++          </div>
++          {trailPubkey && (
++            <div className="mt-2 max-h-48 space-y-1 overflow-y-auto rounded-md border border-border bg-muted/20 p-2">
++              {trail.isLoading && (
++                <div className="text-xs text-muted-foreground">
++                  loading trail…
++                </div>
++              )}
++              {trail.data?.map((t) => (
++                <div key={t.event} className="text-xs leading-snug">
++                  <span className="text-muted-foreground">
++                    {t.at ? new Date(t.at * 1000).toLocaleString() : ""}
++                  </span>{" "}
++                  {t.content ?? "(structured entity)"}
++                  {t.decisionName && (
++                    <div className="text-primary">
++                      ↳ fed decision: {t.decisionName}
++                    </div>
++                  )}
++                </div>
++              ))}
++            </div>
++          )}
++        </section>
++      )}
++
++      {/* On-demand graph view: full-screen inspection state */}
++      {graphSubgraph && (
++        <GraphOverlay
++          cg={cg}
++          subgraph={graphSubgraph}
++          onClose={() => setGraphSubgraph(null)}
++        />
++      )}
++
++      {/* Ask this memory — search over what this channel knows */}
++      <section>
++        <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
++          Ask this memory
++        </h4>
++        <input
++          type="search"
++          value={search}
++          onChange={(e) => setSearch(e.target.value)}
++          placeholder="Search what this channel knows…"
++          className="mb-2 w-full rounded-md border border-border bg-muted/30 px-2 py-1 text-xs outline-none placeholder:text-muted-foreground focus:border-primary/60"
++          data-testid="dkg-memory-search"
++        />
++        {query ? (
++          <p className="mb-1 text-2xs text-muted-foreground">
++            {filteredDecisions.length} match
++            {filteredDecisions.length === 1 ? "" : "es"}
++          </p>
++        ) : (
++          <p className="mb-1 text-2xs text-muted-foreground">
++            All decisions ({sortedDecisions.length})
++          </p>
++        )}
++        <div className="max-h-64 space-y-1 overflow-y-auto">
++          {filteredDecisions.slice(0, 60).map((d) => (
++            <div
++              key={d.uri}
++              className="truncate rounded px-1.5 py-0.5 text-xs hover:bg-muted/50"
++              title={d.name ?? d.uri}
++            >
++              {d.name ?? d.uri.split("/").pop()}
++            </div>
++          ))}
++        </div>
++      </section>
++    </PanelShell>
++  );
++}
++
++function PanelShell({
++  title,
++  action,
++  children,
++}: {
++  title: string;
++  action?: React.ReactNode;
++  children: React.ReactNode;
++}) {
++  return (
++    <div className="flex h-full flex-col overflow-y-auto p-3">
++      <div className="mb-2 flex items-center justify-between pr-24">
++        <h3 className="text-sm font-semibold">{title}</h3>
++        {action}
++      </div>
++      {children}
++    </div>
++  );
++}
++
++function GateNotice({ gate, cg }: { gate: string; cg: string }) {
++  if (gate === "not-subscribed") {
++    return (
++      <div className="space-y-2 text-sm text-muted-foreground">
++        <p>
++          Your edge node has not joined this channel's Context Graph, so its
++          memory is not synced to you yet.
++        </p>
++        <pre className="overflow-x-auto rounded bg-muted p-2 text-xs">
++          {`curl -X POST http://127.0.0.1:9200/api/context-graph/subscribe \\
++  -H "authorization: Bearer $(tail -1 $DKG_HOME/auth.token)" \\
++  -H "content-type: application/json" \\
++  -d '{"contextGraphId":"${cg}","includeSharedMemory":true}'`}
++        </pre>
++      </div>
++    );
++  }
++  return (
++    <div className="space-y-2 text-sm text-muted-foreground">
++      <p>
++        No DKG edge node is answering locally. Channel memory resolves through{" "}
++        <em>your own</em> node — run one, then reopen this panel.
++      </p>
++      <pre className="overflow-x-auto rounded bg-muted p-2 text-xs">
++        {`mkdir dkg-node && cd dkg-node && npm install dkg@latest
++DKG_HOME=$HOME/.dkg node_modules/.bin/dkg start
++node explorer/local-explorer.mjs   # from buzz-dkg-integration`}
++      </pre>
++    </div>
++  );
++}
+diff --git a/desktop/tests/e2e/dkg-memory-demo.spec.ts b/desktop/tests/e2e/dkg-memory-demo.spec.ts
+new file mode 100644
+index 000000000..207d29b55
+--- /dev/null
++++ b/desktop/tests/e2e/dkg-memory-demo.spec.ts
+@@ -0,0 +1,192 @@
++import { expect, test } from "@playwright/test";
++
++import { waitForAnimations } from "../helpers/animations";
++import { installMockBridge } from "../helpers/bridge";
++
++// Demo screenshots for the Buzz-native DKG memory panel: a realistic
++// deliberation timeline plus the panel resolving the REAL web-of-trust
++// Context Graph through the developer's local explorer/edge node.
++const SHOTS = "test-results/dkg-memory-demo";
++const CHANNEL = "engineering";
++const WOT_CG = "0x633E5a7C5e612d9981538F60D824cC03be97e2Ab/web-of-trust";
++
++async function waitForMockLiveSubscription(
++  page: import("@playwright/test").Page,
++  channelName: string,
++) {
++  await expect
++    .poll(() =>
++      page.evaluate(
++        ({ channelName }) =>
++          window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName }) ??
++          false,
++        { channelName },
++      ),
++    )
++    .toBe(true);
++}
++
++async function emit(
++  page: import("@playwright/test").Page,
++  content: string,
++) {
++  const event = await page.evaluate(
++    (payload) =>
++      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
++        channelName: payload.channel,
++        content: payload.content,
++      }),
++    { channel: CHANNEL, content },
++  );
++  if (!event) throw new Error("mock message emitter is not installed");
++  return event as { created_at: number; id: string };
++}
++
++const DELIBERATION = [
++  "DESIGN THREAD A — Placement & shape: side panel, center tab, or message-anchored memory? Take a position.",
++  "OPENING TAKE: ship a read-first “Catch up” side panel beside the conversation; receipts focus matching rows, deeper inspection expands on demand.",
++  "ATProto labels are signed source/subject/value objects with explicit negation and expiry — steal that lifecycle for claim rows.",
++  "Add Ceramic/IPLD: content-addressed streams give mutable claim histories anchored to immutable records. Rows should link both.",
++  "🟡 Captured “DESIGN THREAD A — Placement & shape…”. Distilled to Shared Working Memory — visible to this channel's members, off-chain.\nassertion: did:dkg:context-graph:0x633E5a7C5e612d9981538F60D824cC03be97e2Ab/web-of-trust/assertion/0x633E5a7C5e612d9981538F60D824cC03be97e2Ab/buzz-dkg-6655106675c1\nka: buzz-dkg-6655106675c1\ncontext-graph: 0x633E5a7C5e612d9981538F60D824cC03be97e2Ab/web-of-trust\nsource-digest: sha256:6655106675c1aa2b7e2fb0f3a3f9f1d2c4e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9\ntrigger: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0\nstatus: SWM (not published to Verifiable Memory)",
++  "JOINT RECOMMENDATION — A: side panel; B: by-type rows with agent filters; C: relay discovery fallback upgrading to node-verified.",
++];
++
++test.describe("dkg memory panel demo", () => {
++  test("verified panel over the live web-of-trust graph", async ({ page }) => {
++    await page.addInitScript((cg) => {
++      window.localStorage.setItem("dkg-memory-cg-override", cg);
++    }, WOT_CG);
++    await installMockBridge(page);
++    await page.goto("/", { waitUntil: "domcontentloaded" });
++    await page.getByTestId("channel-engineering").click();
++    await waitForMockLiveSubscription(page, CHANNEL);
++    for (const msg of DELIBERATION) {
++      await emit(page, msg);
++    }
++    await waitForAnimations(page);
++    await page.screenshot({ path: `${SHOTS}/01-channel-with-memory-chip.png` });
++
++    await page.getByTestId("dkg-memory-toggle").click();
++    const panel = page.getByTestId("dkg-memory-panel");
++    await expect(panel).toBeVisible();
++    await expect(panel.getByText("Verified through your node")).toBeVisible({
++      timeout: 20_000,
++    });
++    await expect(panel.getByText(/what this channel remembers/i)).toBeVisible({
++      timeout: 20_000,
++    });
++    await waitForAnimations(page);
++    await page.screenshot({ path: `${SHOTS}/02-panel-verified-overview.png` });
++    await panel.screenshot({ path: `${SHOTS}/03-panel-detail.png` });
++
++    // Evidence trail (provenance) — the "why" behind a decision.
++    try {
++      await panel.getByText("View evidence", { exact: false }).first().click();
++      // Wait for the evidence to actually resolve through the node (not the
++      // "Reading evidence…" spinner) before capturing.
++      await expect(panel.getByText(/reading evidence/i)).toBeHidden({
++        timeout: 20_000,
++      });
++      await expect(
++        panel.getByText(/derived from|source|sha256|assertion|evidence/i).first(),
++      ).toBeVisible({ timeout: 20_000 });
++      await waitForAnimations(page);
++      await panel.screenshot({ path: `${SHOTS}/06-evidence-trail.png` });
++    } catch {
++      /* evidence view optional for the screenshot run */
++    }
++
++    // Contributor trail drill-in.
++    const chip = panel.locator("button", { hasText: "…" }).first();
++    await chip.click();
++    await expect(panel.getByText(/loading trail|fed decision|structured entity|\d{4}/).first())
++      .toBeVisible({ timeout: 20_000 });
++    await waitForAnimations(page);
++    await panel.screenshot({ path: `${SHOTS}/04-contributor-trail.png` });
++  });
++
++  test("graph view: node-UI-parity hexagonal canvas", async ({ page }) => {
++    await page.addInitScript((cg) => {
++      window.localStorage.setItem("dkg-memory-cg-override", cg);
++    }, WOT_CG);
++    await installMockBridge(page);
++    await page.goto("/", { waitUntil: "domcontentloaded" });
++    await page.getByTestId("channel-engineering").click();
++    await waitForMockLiveSubscription(page, CHANNEL);
++    await emit(page, DELIBERATION[4]); // one receipt to bind the CG
++    await page.getByTestId("dkg-memory-toggle").click();
++    const panel = page.getByTestId("dkg-memory-panel");
++    await expect(panel.getByText(/what this channel remembers/i)).toBeVisible({
++      timeout: 20_000,
++    });
++    // Open a real subgraph as graph.
++    await page.getByTestId("dkg-subgraph-openclaw").click();
++    const overlay = page.getByTestId("dkg-graph-overlay");
++    await expect(overlay).toBeVisible({ timeout: 20_000 });
++    await expect(overlay.getByText("Traces")).toBeVisible();
++    await waitForAnimations(page);
++    await overlay.screenshot({ path: `${SHOTS}/08-traces-view.png` });
++    // Switch to the node-parity Graph mode.
++    await overlay.getByTestId("dkg-topology-toggle").click();
++    await expect(
++      overlay.getByRole("button", { name: "Entity types" }),
++    ).toBeVisible({ timeout: 30_000 });
++    await expect(overlay.locator("canvas").first()).toBeVisible({
++      timeout: 30_000,
++    });
++    await page.waitForTimeout(2500); // let the force layout settle
++    await waitForAnimations(page);
++    await overlay.screenshot({ path: `${SHOTS}/09-graph-node-parity.png` });
++    // Contributors coloring still available.
++    await overlay.getByRole("button", { name: "Contributors" }).click();
++    await page.waitForTimeout(1200);
++    await overlay.screenshot({ path: `${SHOTS}/10-graph-contributors.png` });
++  });
++
++  test("community gateway fallback resolves full memory", async ({ page }) => {
++    await page.addInitScript((cg) => {
++      window.localStorage.setItem("dkg-memory-cg-override", cg);
++    }, WOT_CG);
++    // Simulate a tester's machine: no local explorer, but tailnet reachable.
++    await page.route("http://127.0.0.1:9295/**", (route) => route.abort());
++    await installMockBridge(page);
++    await page.goto("/", { waitUntil: "domcontentloaded" });
++    await page.getByTestId("channel-engineering").click();
++    await waitForMockLiveSubscription(page, CHANNEL);
++    for (const msg of DELIBERATION) {
++      await emit(page, msg);
++    }
++    await page.getByTestId("dkg-memory-toggle").click();
++    const panel = page.getByTestId("dkg-memory-panel");
++    await expect(
++      panel.getByText(/resolved through the community dkg provider/i),
++    ).toBeVisible({ timeout: 25_000 });
++    await expect(panel.getByText(/what this channel remembers/i)).toBeVisible({
++      timeout: 25_000,
++    });
++    await waitForAnimations(page);
++    await panel.screenshot({ path: `${SHOTS}/07-gateway-mode.png` });
++  });
++
++  test("discovery fallback when no local node", async ({ page }) => {
++    await page.addInitScript((cg) => {
++      window.localStorage.setItem("dkg-memory-cg-override", cg);
++    }, WOT_CG);
++    await page.route("http://127.0.0.1:9295/**", (route) => route.abort());
++    // Also block the community gateway so pure discovery mode is exercised.
++    await page.route("**/wot-explorer/**", (route) => route.abort());
++    await installMockBridge(page);
++    await page.goto("/", { waitUntil: "domcontentloaded" });
++    await page.getByTestId("channel-engineering").click();
++    await waitForMockLiveSubscription(page, CHANNEL);
++    for (const msg of DELIBERATION) {
++      await emit(page, msg);
++    }
++    await page.getByTestId("dkg-memory-toggle").click();
++    const panel = page.getByTestId("dkg-memory-panel");
++    await expect(panel.getByText("Shown for discovery", { exact: false }))
++      .toBeVisible({ timeout: 20_000 });
++    await waitForAnimations(page);
++    await panel.screenshot({ path: `${SHOTS}/05-discovery-fallback.png` });
++  });
++});

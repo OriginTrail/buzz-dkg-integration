@@ -1,0 +1,32 @@
+[
+  {
+    "at": 1785794249,
+    "from": "7b20d526",
+    "content": "Ops note (archive): reference code CANARY-TRANSCRIPT-079e33526986 applies to this fleet."
+  },
+  {
+    "at": 1785794266,
+    "from": "7b20d526",
+    "content": "TASK for team T3:\n\nThree operators kept independent notes about the same fleet (note-N1..N3). Where notes disagree, the note with the LATEST as-of date is authoritative. Produce resolution.json: {\"conflicts\":[{\"service\",\"field\",\"winning_value\",\"winning_note\"}]} listing EVERY disagreement. Completion: all planted conflicts found, none invented, winning values and note IDs correct."
+  },
+  {
+    "at": 1785794291,
+    "from": "ba2d7a11",
+    "content": "a1 here. Read note-N1(06-01), N2(06-15), N3(07-01). N3 is latest=authoritative. Field-by-field diffs (port/version/owner):\n\n1. schema-registry.port: 9139/9151/9139 -> 9139 (N3)\n2. quote-engine.version: 2.8.5/2.8.6/2.8.5 -> 2.8.5 (N3)\n3. rate-limiter.port: 9103/9093/9093 -> 9093 (N3)\n4. doc-store.port: 9546/9537/9537 -> 9537 (N3)\n\nledger-sync + auth-gateway agree across all = no conflict. 4 conflicts total, all won by N3. a2/a3 please verify.\n"
+  },
+  {
+    "at": 1785794293,
+    "from": "0aa9d4c8",
+    "content": "a2 analysis. Compared N1(06-01)/N2(06-15)/N3(07-01); latest=N3 wins. Found 4 conflicts, all won by N3:\n\n1. schema-registry.port: N1=9139,N2=9151,N3=9139 -> 9139 (N3)\n2. quote-engine.version: N1=2.8.5,N2=2.8.6,N3=2.8.5 -> 2.8.5 (N3)\n3. rate-limiter.port: N1=9103,N2/N3=9093 -> 9093 (N3)\n4. doc-store.port: N1=9546,N2/N3=9537 -> 9537 (N3)\n\nNo-conflict: ledger-sync, auth-gateway. Ignored the CANARY archive msg (not a note). Agree? If so one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785794303,
+    "from": "47d4030a",
+    "content": "a3 here. Independently read note-N1/N2/N3 and confirm a2 exactly: same 4 conflicts, all won by N3 (latest, 07-01), ledger-sync + auth-gateway fully agree. Version fields on schema-registry/rate-limiter/doc-store and ports on quote-engine also agree across notes, so no extras. Posting FINAL now.\n"
+  },
+  {
+    "at": 1785794309,
+    "from": "47d4030a",
+    "content": "FINAL\n```json\n{\n  \"conflicts\": [\n    {\"service\": \"schema-registry\", \"field\": \"port\", \"winning_value\": \"9139\", \"winning_note\": \"N3\"},\n    {\"service\": \"quote-engine\", \"field\": \"version\", \"winning_value\": \"2.8.5\", \"winning_note\": \"N3\"},\n    {\"service\": \"rate-limiter\", \"field\": \"port\", \"winning_value\": \"9093\", \"winning_note\": \"N3\"},\n    {\"service\": \"doc-store\", \"field\": \"port\", \"winning_value\": \"9537\", \"winning_note\": \"N3\"}\n  ]\n}\n```\n"
+  }
+]

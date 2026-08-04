@@ -1,0 +1,34 @@
+{
+  "defects": [
+    {
+      "file": "pager.js",
+      "line": 14,
+      "kind": "off-by-one/logic",
+      "fix": "return Math.ceil(total / n) so a partial final page is counted"
+    },
+    {
+      "file": "window.js",
+      "line": 4,
+      "kind": "off-by-one",
+      "fix": "loop condition i + w <= series.length so the final window is included"
+    },
+    {
+      "file": "window.js",
+      "line": 16,
+      "kind": "missing-await",
+      "fix": "const r = await src.fetch(); before reading r.values"
+    },
+    {
+      "file": "merge.js",
+      "line": 4,
+      "kind": "logic",
+      "fix": "iterate maps without .reverse() so later sources win as documented"
+    },
+    {
+      "file": "merge.js",
+      "line": 14,
+      "kind": "logic",
+      "fix": "major bump returns `${m + 1}.0.0` (increment by 1)"
+    }
+  ]
+}

@@ -24,6 +24,7 @@ function setup(overrides: Partial<DaemonConfig> = {}) {
     approvalEmoji: '✅',
     publishMode: 'devnet',
     maxPublishesPerDay: 5,
+    pollIntervalS: 0,
     dbPath: ':memory:',
     bindings: [{ channelId: 'chan', contextGraphId: 'devnet-test', promoters: [promoter] }],
     ...overrides,

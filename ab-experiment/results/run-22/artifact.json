@@ -1,0 +1,28 @@
+{
+  "conflicts": [
+    {
+      "service": "schema-registry",
+      "field": "port",
+      "winning_value": "9139",
+      "winning_note": "N3"
+    },
+    {
+      "service": "quote-engine",
+      "field": "version",
+      "winning_value": "2.8.5",
+      "winning_note": "N3"
+    },
+    {
+      "service": "rate-limiter",
+      "field": "port",
+      "winning_value": "9093",
+      "winning_note": "N3"
+    },
+    {
+      "service": "doc-store",
+      "field": "port",
+      "winning_value": "9537",
+      "winning_note": "N3"
+    }
+  ]
+}

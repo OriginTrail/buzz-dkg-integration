@@ -1,0 +1,9 @@
+{
+  "order": [
+    "batch-indexer",
+    "auth-gateway",
+    "quote-engine",
+    "event-router",
+    "ledger-sync"
+  ]
+}

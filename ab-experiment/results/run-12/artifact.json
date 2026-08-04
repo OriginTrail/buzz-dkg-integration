@@ -1,0 +1,34 @@
+{
+  "defects": [
+    {
+      "file": "pager.js",
+      "line": 14,
+      "kind": "wrong-rounding",
+      "fix": "return Math.ceil(total / n);"
+    },
+    {
+      "file": "window.js",
+      "line": 4,
+      "kind": "off-by-one",
+      "fix": "loop condition i + w <= series.length"
+    },
+    {
+      "file": "window.js",
+      "line": 16,
+      "kind": "missing-await",
+      "fix": "const r = await src.fetch();"
+    },
+    {
+      "file": "merge.js",
+      "line": 4,
+      "kind": "wrong-precedence",
+      "fix": "iterate maps in order (drop .reverse()) so later sources win"
+    },
+    {
+      "file": "merge.js",
+      "line": 14,
+      "kind": "wrong-increment",
+      "fix": "return `${m + 1}.0.0`;"
+    }
+  ]
+}

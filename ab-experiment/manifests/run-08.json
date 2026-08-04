@@ -1,0 +1,22 @@
+{
+  "run": 8,
+  "team": "T1",
+  "slot": 4,
+  "leg": 2,
+  "family": "multi-hop",
+  "taskId": "multi-hop-p1y",
+  "taskDigest": "fbb31e008530fed63cf625bbc0358fbe36afd6530bccf8591e23438d069479d9",
+  "regime": "SCROLLBACK",
+  "model": "claude (Buzz claude runtime via claude-agent-acp; identical for every run)",
+  "teamSize": 3,
+  "maxRounds": 8,
+  "tokenBudgetPerAgent": 200000,
+  "isolation": "fresh disposable agent instances + fresh keys + fresh private channel per run; instances destroyed after run",
+  "armConfig": {
+    "context": "immutable seed corpus + growing run transcript",
+    "cgAccess": "DENIED (no client, no credentials, graph egress blocked)"
+  },
+  "canaryToken": "CANARY-CGONLY-ced8786716b7",
+  "canaryPlacement": "planted only in the CG snapshot — its appearance in any output/log = leakage invalidation",
+  "accountingBoundary": "native per-turn input+output tokens for all team agents + orchestration prompts + (CG arm) query prompts/answers/retries; CG build cost accounted separately as marginal vs fully-loaded per prereg §3"
+}

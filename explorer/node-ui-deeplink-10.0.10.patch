@@ -1,0 +1,108 @@
+diff --git a/packages/node-ui/src/ui/App.tsx b/packages/node-ui/src/ui/App.tsx
+index a8ef2d44b..ab99f3f40 100644
+--- a/packages/node-ui/src/ui/App.tsx
++++ b/packages/node-ui/src/ui/App.tsx
+@@ -12,6 +12,7 @@ import { api } from './api-wrapper.js';
+ import { CONTEXT_GRAPH_PRIMER_TAB } from './lib/contextGraphPrimer.js';
+ import { applyTheme } from './lib/applyTheme.js';
+ import { useVisibilityPolling } from './hooks/useVisibilityPolling.js';
++import { useDeepLink } from './hooks/useDeepLink.js';
+ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts.js';
+ import { useShellRouting } from './hooks/useShellRouting.js';
+ import { MockModeBanner } from './components/MockModeBanner.js';
+@@ -133,6 +134,7 @@ function AppShell() {
+   useLiveStatus();
+   useKeyboardShortcuts();
+   useShellRouting();
++  useDeepLink();
+   const { leftCollapsed, rightCollapsed, bottomCollapsed, theme, leftWidth, rightWidth, setLeftWidth, setRightWidth, setBottomHeight } = useLayoutStore();
+   const [, setVpTick] = useState(0);
+ 
+diff --git a/packages/node-ui/src/ui/hooks/useDeepLink.ts b/packages/node-ui/src/ui/hooks/useDeepLink.ts
+new file mode 100644
+index 000000000..f4bcae8e7
+--- /dev/null
++++ b/packages/node-ui/src/ui/hooks/useDeepLink.ts
+@@ -0,0 +1,68 @@
++import { useEffect } from 'react';
++import { useTabsStore } from '../stores/tabs.js';
++
++/**
++ * URL deep-linking into the node UI. External surfaces (chat receipts, docs,
++ * other tools) can land a viewer on a specific Context Graph, memory layer,
++ * or entity by linking:
++ *
++ *   /ui/?cg=<contextGraphId>                      → the CG's project tab
++ *   /ui/?cg=<id>&layer=swm                        → that CG's SWM layer view
++ *   /ui/?cg=<id>&entity=<entityUri>               → the entity detail, opened
++ *                                                   inside the project tab via
++ *                                                   the existing
++ *                                                   `v10:open-entity` event
++ *
++ * The entity dispatch retries briefly because the ProjectView mounts (and
++ * attaches its listener) only after the tab opens; the `v10:open-entity-ack`
++ * event stops the retries as soon as a listener has actually handled it, so
++ * a user closing the detail is never fought by a stale retry loop.
++ */
++export function useDeepLink(): void {
++  const openTab = useTabsStore((s) => s.openTab);
++
++  useEffect(() => {
++    const params = new URLSearchParams(window.location.search);
++    const cg = params.get('cg');
++    if (!cg) return;
++    const layer = params.get('layer');
++    const entity = params.get('entity');
++
++    const shortName = cg.split('/').pop() || cg;
++    openTab({ id: `project:${cg}`, label: shortName.slice(0, 24), closable: true });
++
++    if (entity) {
++      let tries = 0;
++      let done = false;
++      const onAck = () => {
++        done = true;
++        window.removeEventListener('v10:open-entity-ack', onAck);
++      };
++      window.addEventListener('v10:open-entity-ack', onAck);
++      const timer = window.setInterval(() => {
++        if (done || tries >= 12) {
++          window.clearInterval(timer);
++          window.removeEventListener('v10:open-entity-ack', onAck);
++          return;
++        }
++        tries += 1;
++        window.dispatchEvent(
++          new CustomEvent('v10:open-entity', {
++            detail: { contextGraphId: cg, entityUri: entity },
++          }),
++        );
++      }, 500);
++    } else if (layer === 'wm' || layer === 'swm' || layer === 'vm') {
++      openTab({
++        id: `${layer}:${cg}`,
++        label: `${layer.toUpperCase()} · ${shortName.slice(0, 16)}`,
++        closable: true,
++      });
++    }
++
++    // Strip the params so a manual reload returns to the user's own state
++    // instead of re-running the deep link.
++    window.history.replaceState(null, '', window.location.pathname);
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, []);
++}
+diff --git a/packages/node-ui/src/ui/views/ProjectView.tsx b/packages/node-ui/src/ui/views/ProjectView.tsx
+index 35be5d525..17707367e 100644
+--- a/packages/node-ui/src/ui/views/ProjectView.tsx
++++ b/packages/node-ui/src/ui/views/ProjectView.tsx
+@@ -323,6 +323,9 @@ export function ProjectView({ contextGraphId }: ProjectViewProps) {
+       if (typeof detail.entityUri !== 'string') return;
+       setSelectedLayerContext(null);
+       openEntityDetail(detail.entityUri);
++      // Ack so URL deep-link retry loops (useDeepLink) stop as soon as a
++      // mounted listener has actually handled the open.
++      window.dispatchEvent(new CustomEvent('v10:open-entity-ack'));
+     };
+     window.addEventListener('v10:open-entity', handler);
+     return () => window.removeEventListener('v10:open-entity', handler);

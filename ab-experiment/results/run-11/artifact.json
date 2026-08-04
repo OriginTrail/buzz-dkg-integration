@@ -1,0 +1,34 @@
+{
+  "defects": [
+    {
+      "file": "merge.js",
+      "line": 4,
+      "kind": "wrong-precedence",
+      "fix": "iterate maps without .reverse() so later sources win"
+    },
+    {
+      "file": "merge.js",
+      "line": 14,
+      "kind": "wrong-arithmetic",
+      "fix": "major bump should be `${m+1}.0.0`"
+    },
+    {
+      "file": "window.js",
+      "line": 4,
+      "kind": "off-by-one",
+      "fix": "use i+w<=series.length to include the final window"
+    },
+    {
+      "file": "window.js",
+      "line": 16,
+      "kind": "missing-await",
+      "fix": "const r = await src.fetch()"
+    },
+    {
+      "file": "pager.js",
+      "line": 14,
+      "kind": "wrong-rounding",
+      "fix": "use Math.ceil(total/n) to count the partial page"
+    }
+  ]
+}

@@ -1,0 +1,162 @@
+[
+  {
+    "agent": "b699ead31d3cbb43c0cc9e2d9916ec4087965d249a419f356e1d0d616cd3b0f2",
+    "at": 1785792747,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "8d8103a3-7b25-43eb-b27b-1622c5068562",
+    "sessionId": "eca1db59-469e-4f6f-8b69-7172e3f685d7",
+    "turnId": "f5888dff-0936-45ae-b4f1-a09e645c4ac6",
+    "turnSeq": 1,
+    "timestamp": "2026-08-03T21:32:27.780Z",
+    "turn": null,
+    "cumulative": {
+      "inputTokens": 52468,
+      "outputTokens": 536,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": false,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "6026ea0a58d1a207971fcc2ebf1561bf19ef4aa88904f7e177641d90f2c0baa4",
+    "at": 1785792747,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "8d8103a3-7b25-43eb-b27b-1622c5068562",
+    "sessionId": "16f3a4c0-32e6-4696-bafa-486bc6a9d9e4",
+    "turnId": "46f9ac84-ff7a-4518-a59e-cc109fd48a2d",
+    "turnSeq": 1,
+    "timestamp": "2026-08-03T21:32:27.783Z",
+    "turn": null,
+    "cumulative": {
+      "inputTokens": 52849,
+      "outputTokens": 548,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": false,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "744d7105b074c4428aac44a589313d575d51252e79a091975df34d5dc805416f",
+    "at": 1785792747,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "8d8103a3-7b25-43eb-b27b-1622c5068562",
+    "sessionId": "4ff4e02f-7776-4714-93c9-0d3caf2ff215",
+    "turnId": "c543f75c-c673-45f2-9000-9a70d716eb70",
+    "turnSeq": 1,
+    "timestamp": "2026-08-03T21:32:27.839Z",
+    "turn": null,
+    "cumulative": {
+      "inputTokens": 26090,
+      "outputTokens": 461,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": false,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "744d7105b074c4428aac44a589313d575d51252e79a091975df34d5dc805416f",
+    "at": 1785792784,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "8d8103a3-7b25-43eb-b27b-1622c5068562",
+    "sessionId": "4ff4e02f-7776-4714-93c9-0d3caf2ff215",
+    "turnId": "96327deb-5f9c-492c-b2de-41d99b4c0ec4",
+    "turnSeq": 2,
+    "timestamp": "2026-08-03T21:33:04.229Z",
+    "turn": {
+      "inputTokens": 84104,
+      "outputTokens": 2004,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "cumulative": {
+      "inputTokens": 110194,
+      "outputTokens": 2465,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": true,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "6026ea0a58d1a207971fcc2ebf1561bf19ef4aa88904f7e177641d90f2c0baa4",
+    "at": 1785792794,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "8d8103a3-7b25-43eb-b27b-1622c5068562",
+    "sessionId": "16f3a4c0-32e6-4696-bafa-486bc6a9d9e4",
+    "turnId": "0a8f897e-7259-4647-9395-d7451e0d7590",
+    "turnSeq": 2,
+    "timestamp": "2026-08-03T21:33:14.774Z",
+    "turn": {
+      "inputTokens": 94717,
+      "outputTokens": 3224,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "cumulative": {
+      "inputTokens": 147566,
+      "outputTokens": 3772,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": true,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "744d7105b074c4428aac44a589313d575d51252e79a091975df34d5dc805416f",
+    "at": 1785792800,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "8d8103a3-7b25-43eb-b27b-1622c5068562",
+    "sessionId": "4ff4e02f-7776-4714-93c9-0d3caf2ff215",
+    "turnId": "874f4148-67c0-4bd8-a3b5-f34402d61fde",
+    "turnSeq": 3,
+    "timestamp": "2026-08-03T21:33:20.758Z",
+    "turn": {
+      "inputTokens": 76909,
+      "outputTokens": 727,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "cumulative": {
+      "inputTokens": 187103,
+      "outputTokens": 3192,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": true,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "b699ead31d3cbb43c0cc9e2d9916ec4087965d249a419f356e1d0d616cd3b0f2",
+    "at": 1785792804,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "8d8103a3-7b25-43eb-b27b-1622c5068562",
+    "sessionId": "eca1db59-469e-4f6f-8b69-7172e3f685d7",
+    "turnId": "743b56bd-cde2-4ab0-962b-0fa9983839ca",
+    "turnSeq": 2,
+    "timestamp": "2026-08-03T21:33:24.741Z",
+    "turn": {
+      "inputTokens": 87980,
+      "outputTokens": 2355,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "cumulative": {
+      "inputTokens": 140448,
+      "outputTokens": 2891,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": true,
+    "stopReason": "end_turn"
+  }
+]

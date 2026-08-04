@@ -64,6 +64,7 @@ export function parseBindings(raw: string): ChannelBinding[] {
             normalizePubkey(String(p), `bindings[${i}].promoters[${j}]`),
           )
         : [],
+      ...(b.explorerUrl ? { explorerUrl: String(b.explorerUrl).replace(/\/$/, '') } : {}),
     };
   });
 }
@@ -86,6 +87,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
       `BDI_MAX_PUBLISHES_PER_DAY must be a non-negative number, got '${env.BDI_MAX_PUBLISHES_PER_DAY}'`,
     );
   }
+  const pollIntervalS = Number(env.BDI_POLL_INTERVAL_S ?? 0);
+  if (!Number.isFinite(pollIntervalS) || pollIntervalS < 0) {
+    throw new Error(
+      `BDI_POLL_INTERVAL_S must be a non-negative number, got '${env.BDI_POLL_INTERVAL_S}'`,
+    );
+  }
   return {
     relayHttpUrl: (env.BDI_BUZZ_HTTP ?? 'http://127.0.0.1:9440').replace(/\/$/, ''),
     relayWsUrl:
@@ -97,7 +104,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     approvalEmoji: env.BDI_APPROVAL_EMOJI ?? '✅',
     publishMode,
     maxPublishesPerDay,
+    pollIntervalS,
     dbPath: env.BDI_DB_PATH ?? './data/daemon.db',
     bindings: parseBindings(readFileSync(required('BDI_BINDINGS_PATH', env), 'utf8')),
+    ...(env.BDI_EXPLORER_URL ? { explorerUrl: env.BDI_EXPLORER_URL.replace(/\/$/, '') } : {}),
   };
 }

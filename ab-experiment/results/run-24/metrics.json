@@ -1,0 +1,137 @@
+[
+  {
+    "agent": "b98d503864f3be32595311171109ea2dabdebff30fadfc1cdc40682b564c9381",
+    "at": 1785794457,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "c35e9e75-6423-4d83-afe7-64ff67354fd0",
+    "sessionId": "06bece0a-466c-43ea-8b00-daaa12cd58c5",
+    "turnId": "f3f18dba-a235-4c29-84ad-c6272d36261f",
+    "turnSeq": 1,
+    "timestamp": "2026-08-03T22:00:57.424Z",
+    "turn": null,
+    "cumulative": {
+      "inputTokens": 53877,
+      "outputTokens": 983,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": false,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "b6aee7eb01f97aaa3cff56b7ac567eae1c689d92ba2d2e069e0c2ad78c98cb00",
+    "at": 1785794457,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "c35e9e75-6423-4d83-afe7-64ff67354fd0",
+    "sessionId": "55965c8e-0cf8-474f-850f-e4c225828b80",
+    "turnId": "e1b8a086-8992-49c2-8c7b-e672f03d6967",
+    "turnSeq": 1,
+    "timestamp": "2026-08-03T22:00:57.428Z",
+    "turn": null,
+    "cumulative": {
+      "inputTokens": 54146,
+      "outputTokens": 733,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": false,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "b6aee7eb01f97aaa3cff56b7ac567eae1c689d92ba2d2e069e0c2ad78c98cb00",
+    "at": 1785794477,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "c35e9e75-6423-4d83-afe7-64ff67354fd0",
+    "sessionId": "55965c8e-0cf8-474f-850f-e4c225828b80",
+    "turnId": "ecce285f-82c7-459e-8081-ce64bd1e8fa6",
+    "turnSeq": 2,
+    "timestamp": "2026-08-03T22:01:17.291Z",
+    "turn": {
+      "inputTokens": 78684,
+      "outputTokens": 1212,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "cumulative": {
+      "inputTokens": 132830,
+      "outputTokens": 1945,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": true,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "feb1faa9c5f795b46b5a9d39a5862cf5029adab226b47f618def53bf3eb4fa01",
+    "at": 1785794481,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "c35e9e75-6423-4d83-afe7-64ff67354fd0",
+    "sessionId": "adf33be4-d96e-4828-adc6-d3ba3d0bb294",
+    "turnId": "4980dd63-e806-4e34-9d88-ef2bf2c19818",
+    "turnSeq": 1,
+    "timestamp": "2026-08-03T22:01:21.058Z",
+    "turn": null,
+    "cumulative": {
+      "inputTokens": 96994,
+      "outputTokens": 1753,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": false,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "b98d503864f3be32595311171109ea2dabdebff30fadfc1cdc40682b564c9381",
+    "at": 1785794485,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "c35e9e75-6423-4d83-afe7-64ff67354fd0",
+    "sessionId": "06bece0a-466c-43ea-8b00-daaa12cd58c5",
+    "turnId": "aef8593a-ace9-40c8-a49a-f953fd6140fa",
+    "turnSeq": 2,
+    "timestamp": "2026-08-03T22:01:25.879Z",
+    "turn": {
+      "inputTokens": 72218,
+      "outputTokens": 989,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "cumulative": {
+      "inputTokens": 126095,
+      "outputTokens": 1972,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": true,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "b6aee7eb01f97aaa3cff56b7ac567eae1c689d92ba2d2e069e0c2ad78c98cb00",
+    "at": 1785794488,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "c35e9e75-6423-4d83-afe7-64ff67354fd0",
+    "sessionId": "55965c8e-0cf8-474f-850f-e4c225828b80",
+    "turnId": "856beff5-c6eb-4091-996c-2c1ad343c969",
+    "turnSeq": 3,
+    "timestamp": "2026-08-03T22:01:28.433Z",
+    "turn": {
+      "inputTokens": 50611,
+      "outputTokens": 67,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "cumulative": {
+      "inputTokens": 183441,
+      "outputTokens": 2012,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": true,
+    "stopReason": "end_turn"
+  }
+]

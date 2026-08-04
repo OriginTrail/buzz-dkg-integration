@@ -1,0 +1,52 @@
+[
+  {
+    "at": 1785792246,
+    "from": "7b20d526",
+    "content": "📄 note-N2.md\n\n# Ops note N2\nas-of: 2026-06-15\n\n- rate-limiter: port 9427, version 1.6.4, owner bojan\n- ledger-sync: port 9143, version 2.5.5, owner eva\n- doc-store: port 9514, version 2.6.7, owner bojan\n- quote-engine: port 9047, version 2.1.9, owner cvetka\n- event-router: port 9356, version 2.4.2, owner eva\n- schema-registry: port 9580, version 1.8.1, owner bojan\n"
+  },
+  {
+    "at": 1785792246,
+    "from": "7b20d526",
+    "content": "📄 note-N1.md\n\n# Ops note N1\nas-of: 2026-06-01\n\n- schema-registry: port 9580, version 1.8.1, owner darko\n- ledger-sync: port 9143, version 2.5.5, owner darko\n- rate-limiter: port 9427, version 1.6.4, owner bojan\n- quote-engine: port 9054, version 2.1.9, owner cvetka\n- event-router: port 9356, version 2.4.2, owner eva\n- doc-store: port 9514, version 2.6.7, owner darko\n"
+  },
+  {
+    "at": 1785792247,
+    "from": "7b20d526",
+    "content": "📄 note-N3.md\n\n# Ops note N3\nas-of: 2026-07-01\n\n- event-router: port 9356, version 2.4.2, owner eva\n- schema-registry: port 9580, version 1.8.1, owner bojan\n- rate-limiter: port 9427, version 1.6.4, owner bojan\n- doc-store: port 9514, version 2.6.7, owner bojan\n- quote-engine: port 9047, version 2.1.9, owner cvetka\n- ledger-sync: port 9143, version 2.5.5, owner eva\n"
+  },
+  {
+    "at": 1785792263,
+    "from": "7b20d526",
+    "content": "TASK for team T1:\n\nThree operators kept independent notes about the same fleet (note-N1..N3). Where notes disagree, the note with the LATEST as-of date is authoritative. Produce resolution.json: {\"conflicts\":[{\"service\",\"field\",\"winning_value\",\"winning_note\"}]} listing EVERY disagreement. Completion: all planted conflicts found, none invented, winning values and note IDs correct."
+  },
+  {
+    "at": 1785792281,
+    "from": "91148f4e",
+    "content": "a1 analysis. Dates: N1=06-01, N2=06-15, N3=07-01 (latest wins). 4 conflicts, all won by N3:\n1. schema-registry / owner: darko(N1)->bojan = bojan\n2. quote-engine / port: 9054(N1)->9047 = 9047\n3. ledger-sync / owner: darko(N1)->eva = eva\n4. doc-store / owner: darko(N1)->bojan = bojan\nNo other field disagrees. a2/a3 confirm?\n"
+  },
+  {
+    "at": 1785792286,
+    "from": "5d323eb1",
+    "content": "a2 analysis. N3(07-01) is latest=authoritative. 4 conflicts, all won by N3:\n1. schema-registry/owner: darko(N1)->bojan\n2. ledger-sync/owner: darko(N1)->eva\n3. quote-engine/port: 9054(N1)->9047\n4. doc-store/owner: darko(N1)->bojan\nrate-limiter & event-router agree everywhere. Do you get the same 4?\n"
+  },
+  {
+    "at": 1785792288,
+    "from": "91148f4e",
+    "content": "a1 here. Tabulated N1(06-01) < N2(06-15) < N3(07-01, authoritative). Disagreements where any note differs, winner = N3:\n\n1. schema-registry / owner: N1=darko, N2/N3=bojan -> bojan (N3)\n2. doc-store / owner: N1=darko, N2/N3=bojan -> bojan (N3)\n3. quote-engine / port: N1=9054, N2/N3=9047 -> 9047 (N3)\n4. ledger-sync / owner: N1=darko, N2/N3=eva -> eva (N3)\n\nAll versions + rate-limiter + event-router fully agree. 4 conflicts, all won by N3. a2/a3 please verify before one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785792297,
+    "from": "73313b0a",
+    "content": "a3 confirms: same 4, independently verified. rate-limiter & event-router identical across all notes. All winners are N3 (latest). Posting FINAL.\n\nFINAL\n```json\n{\"conflicts\":[{\"service\":\"schema-registry\",\"field\":\"owner\",\"winning_value\":\"bojan\",\"winning_note\":\"N3\"},{\"service\":\"quote-engine\",\"field\":\"port\",\"winning_value\":9047,\"winning_note\":\"N3\"},{\"service\":\"ledger-sync\",\"field\":\"owner\",\"winning_value\":\"eva\",\"winning_note\":\"N3\"},{\"service\":\"doc-store\",\"field\":\"owner\",\"winning_value\":\"bojan\",\"winning_note\":\"N3\"}]}\n```\n"
+  },
+  {
+    "at": 1785792298,
+    "from": "5d323eb1",
+    "content": "a2 confirms — my independent tabulation matches a1 exactly: same 4 conflicts, all won by N3. No field disagreement elsewhere. Agreed on the answer. a1, go ahead and post FINAL (or a3 if you want it). I will not post to avoid a double FINAL.\n"
+  },
+  {
+    "at": 1785792300,
+    "from": "73313b0a",
+    "content": "a3 here. My analysis of N1/N2/N3 (N3=2026-07-01 authoritative). 4 conflicts:\n\n1. schema-registry / owner: darko(N1) vs bojan(N2,N3) -> bojan, N3\n2. doc-store / owner: darko(N1) vs bojan(N2,N3) -> bojan, N3\n3. quote-engine / port: 9054(N1) vs 9047(N2,N3) -> 9047, N3\n4. ledger-sync / owner: darko(N1) vs eva(N2,N3) -> eva, N3\n\nevent-router and rate-limiter identical across all notes = no conflict. Every disagreement is N1 as outlier; N2=N3 so all winners are N3. a1/a2 confirm?"
+  }
+]

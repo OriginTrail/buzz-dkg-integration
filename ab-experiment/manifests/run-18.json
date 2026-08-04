@@ -1,0 +1,22 @@
+{
+  "run": 18,
+  "team": "T3",
+  "slot": 1,
+  "leg": 2,
+  "family": "defect-hunt",
+  "taskId": "defect-hunt-p3y",
+  "taskDigest": "886ff0a9ece8e3f4d871442f671ac8e84950f20621ea5897df67ab56e86bb6b0",
+  "regime": "CG",
+  "model": "claude (Buzz claude runtime via claude-agent-acp; identical for every run)",
+  "teamSize": 3,
+  "maxRounds": 8,
+  "tokenBudgetPerAgent": 200000,
+  "isolation": "fresh disposable agent instances + fresh keys + fresh private channel per run; instances destroyed after run",
+  "armConfig": {
+    "context": "empty history; snapshot-pinned scoped CG query client only",
+    "transcriptAccess": "DENIED (no history subscription/read)"
+  },
+  "canaryToken": "CANARY-TRANSCRIPT-1759ef3e0b7c",
+  "canaryPlacement": "planted only in the channel transcript pre-seed — its appearance in any output/log = leakage invalidation",
+  "accountingBoundary": "native per-turn input+output tokens for all team agents + orchestration prompts + (CG arm) query prompts/answers/retries; CG build cost accounted separately as marginal vs fully-loaded per prereg §3"
+}

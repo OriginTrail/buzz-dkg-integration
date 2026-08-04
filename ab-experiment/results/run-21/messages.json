@@ -1,0 +1,57 @@
+[
+  {
+    "at": 1785794147,
+    "from": "7b20d526",
+    "content": "📄 note-N1.md\n\n# Ops note N1\nas-of: 2026-06-01\n\n- quote-engine: port 9059, version 3.7.8, owner darko\n- auth-gateway: port 9719, version 1.5.6, owner darko\n- event-router: port 9817, version 2.6.9, owner darko\n- schema-registry: port 9441, version 2.4.1, owner cvetka\n- rate-limiter: port 9792, version 2.5.3, owner eva\n- batch-indexer: port 9223, version 1.9.0, owner cvetka\n"
+  },
+  {
+    "at": 1785794148,
+    "from": "7b20d526",
+    "content": "📄 note-N3.md\n\n# Ops note N3\nas-of: 2026-07-01\n\n- rate-limiter: port 9792, version 2.5.2, owner eva\n- auth-gateway: port 9719, version 1.5.6, owner darko\n- schema-registry: port 9441, version 2.4.1, owner cvetka\n- quote-engine: port 9059, version 3.7.8, owner darko\n- event-router: port 9817, version 2.6.9, owner ana\n- batch-indexer: port 9223, version 1.9.0, owner cvetka\n"
+  },
+  {
+    "at": 1785794148,
+    "from": "7b20d526",
+    "content": "📄 note-N2.md\n\n# Ops note N2\nas-of: 2026-06-15\n\n- auth-gateway: port 9719, version 1.5.6, owner darko\n- event-router: port 9817, version 2.6.9, owner ana\n- schema-registry: port 9441, version 2.4.2, owner cvetka\n- batch-indexer: port 9223, version 1.9.0, owner cvetka\n- quote-engine: port 9059, version 3.7.9, owner darko\n- rate-limiter: port 9792, version 2.5.2, owner eva\n"
+  },
+  {
+    "at": 1785794165,
+    "from": "7b20d526",
+    "content": "TASK for team T3:\n\nThree operators kept independent notes about the same fleet (note-N1..N3). Where notes disagree, the note with the LATEST as-of date is authoritative. Produce resolution.json: {\"conflicts\":[{\"service\",\"field\",\"winning_value\",\"winning_note\"}]} listing EVERY disagreement. Completion: all planted conflicts found, none invented, winning values and note IDs correct."
+  },
+  {
+    "at": 1785794188,
+    "from": "400eabbc",
+    "content": "a1 analysis. Dates: N1=06-01, N2=06-15, N3=07-01 (latest wins). Comparing per field, I find 4 disagreements:\n\n1. quote-engine/version: N1=3.7.8, N2=3.7.9, N3=3.7.8 -> N3 3.7.8\n2. event-router/owner: N1=darko, N2/N3=ana -> N3 ana\n3. schema-registry/version: N1=2.4.1, N2=2.4.2, N3=2.4.1 -> N3 2.4.1\n4. rate-limiter/version: N1=2.5.3, N2/N3=2.5.2 -> N3 2.5.2\n\nAll other fields (ports, remaining owners/versions, auth-gateway, batch-indexer) agree. Winning note is N3 for all. Teammates verify?\n"
+  },
+  {
+    "at": 1785794188,
+    "from": "1243017e",
+    "content": "a2 analysis. Dates: N1=06-01, N2=06-15, N3=07-01 (latest→authoritative). Disagreements found:\n\n1. quote-engine/version: N1=3.7.8,N2=3.7.9,N3=3.7.8 → 3.7.8 (N3)\n2. event-router/owner: N1=darko,N2=ana,N3=ana → ana (N3)\n3. schema-registry/version: N1=2.4.1,N2=2.4.2,N3=2.4.1 → 2.4.1 (N3)\n4. rate-limiter/version: N1=2.5.3,N2=2.5.2,N3=2.5.2 → 2.5.2 (N3)\n\nAll ports/owners else agree. 4 conflicts total. Agree?"
+  },
+  {
+    "at": 1785794192,
+    "from": "400eabbc",
+    "content": "a1 analysis. N3 (2026-07-01) is latest, present for all 6 services, so it wins every disagreement.\n\nConflicts found (4):\n- quote-engine.version: N1/N3=3.7.8, N2=3.7.9 -> N3 3.7.8\n- event-router.owner: N1=darko, N2/N3=ana -> N3 ana\n- schema-registry.version: N1/N3=2.4.1, N2=2.4.2 -> N3 2.4.1\n- rate-limiter.version: N1=2.5.3, N2/N3=2.5.2 -> N3 2.5.2\n\nauth-gateway, batch-indexer: no disagreement. Ports/owners otherwise agree. Verify?\n"
+  },
+  {
+    "at": 1785794194,
+    "from": "1658b4e1",
+    "content": "T3/a3 analysis. Authority order by as-of: N1(06-01) < N2(06-15) < N3(07-01). N3 is latest and lists all 6 services, so every winner = N3.\n\nDisagreements across notes (4):\n1. quote-engine / version: N1=3.7.8, N2=3.7.9, N3=3.7.8 → 3.7.8 (N3)\n2. event-router / owner: N1=darko, N2/N3=ana → ana (N3)\n3. schema-registry / version: N1=2.4.1, N2=2.4.2, N3=2.4.1 → 2.4.1 (N3)\n4. rate-limiter / version: N1=2.5.3, N2/N3=2.5.2 → 2.5.2 (N3)\n\nauth-gateway + batch-indexer fully agree. Ports/owners else consistent. a1/a2 confirm?"
+  },
+  {
+    "at": 1785794196,
+    "from": "1243017e",
+    "content": "a2 analysis. 4 conflicts (N3 latest, wins all):\n- quote-engine/version: N2=3.7.9 vs 3.7.8 → 3.7.8 (N3)\n- event-router/owner: N1=darko → ana (N3)\n- schema-registry/version: N2=2.4.2 → 2.4.1 (N3)\n- rate-limiter/version: N1=2.5.3 → 2.5.2 (N3)\nauth-gateway & batch-indexer fully agree; all ports agree. Please verify — who posts FINAL?"
+  },
+  {
+    "at": 1785794202,
+    "from": "1243017e",
+    "content": "a1 and a2 match exactly — 4 conflicts, all won by N3. Posting FINAL.\n\nFINAL\n```json\n{\"conflicts\":[{\"service\":\"quote-engine\",\"field\":\"version\",\"winning_value\":\"3.7.8\",\"winning_note\":\"N3\"},{\"service\":\"event-router\",\"field\":\"owner\",\"winning_value\":\"ana\",\"winning_note\":\"N3\"},{\"service\":\"schema-registry\",\"field\":\"version\",\"winning_value\":\"2.4.1\",\"winning_note\":\"N3\"},{\"service\":\"rate-limiter\",\"field\":\"version\",\"winning_value\":\"2.5.2\",\"winning_note\":\"N3\"}]}\n```\n"
+  },
+  {
+    "at": 1785794205,
+    "from": "1658b4e1",
+    "content": "a3 independently confirms the same 4 conflicts. Posting FINAL.\n\nFINAL\n```json\n{\n  \"conflicts\": [\n    {\"service\": \"quote-engine\", \"field\": \"version\", \"winning_value\": \"3.7.8\", \"winning_note\": \"N3\"},\n    {\"service\": \"event-router\", \"field\": \"owner\", \"winning_value\": \"ana\", \"winning_note\": \"N3\"},\n    {\"service\": \"schema-registry\", \"field\": \"version\", \"winning_value\": \"2.4.1\", \"winning_note\": \"N3\"},\n    {\"service\": \"rate-limiter\", \"field\": \"version\", \"winning_value\": \"2.5.2\", \"winning_note\": \"N3\"}\n  ]\n}\n```\n"
+  }
+]
