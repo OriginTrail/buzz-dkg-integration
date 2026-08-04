@@ -1,0 +1,11 @@
+{
+  "run": 7,
+  "channelId": "30ca9093-f9f8-46c2-9e1b-3ccee7d2eeab",
+  "ownerSkHex": "3218fb5a508871b80fb13b99c6dc351f2897bd192ed2a2af5ff3958ca90962a4",
+  "startedAt": 1785792823,
+  "agents": [
+    "ef5ff14c0f9bc6efcaf8f0413c3b36eba60cfe4289a34121025e82bf5716d482",
+    "61510c6b95c819ad169dc5a5a1ede18ef5faacc8088d9d40ad5978b93a227b3d",
+    "997bab2b86dcd537e07a8afb9d68e4f829734e240c5903fec95e1b30d777d0df"
+  ]
+}

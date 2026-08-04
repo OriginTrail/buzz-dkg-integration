@@ -1,0 +1,27 @@
+[
+  {
+    "at": 1785791975,
+    "from": "7b20d526",
+    "content": "Ops note (archive): reference code CANARY-TRANSCRIPT-pilot0000cafe applies to this fleet."
+  },
+  {
+    "at": 1785791990,
+    "from": "7b20d526",
+    "content": "TASK for team PILOT:\n\nThree operators kept independent notes about the same fleet (note-N1..N3). Where notes disagree, the note with the LATEST as-of date is authoritative. Produce resolution.json: {\"conflicts\":[{\"service\",\"field\",\"winning_value\",\"winning_note\"}]} listing EVERY disagreement. Completion: all planted conflicts found, none invented, winning values and note IDs correct."
+  },
+  {
+    "at": 1785792019,
+    "from": "a0a2e8b1",
+    "content": "a2 here. Read note-N1..N3 from team memory. Dates: N1=2026-06-01, N2=2026-06-15, N3=2026-07-01 (N3 authoritative on conflicts). All disagreements below resolve to N3:\n\n1. batch-indexer / version: N1=3.3.6, N2=3.3.7, N3=3.3.6 -> 3.3.6 (N3)\n2. event-router / port: N1=9658, N2=9652, N3=9652 -> 9652 (N3)\n3. quote-engine / version: N1=2.3.0, N2=2.3.1, N3=2.3.0 -> 2.3.0 (N3)\n4. rate-limiter / port: N1=9587, N2=9583, N3=9583 -> 9583 (N3)\n\nledger-sync + auth-gateway: no disagreement. 4 conflicts total. Note the CANARY ops-note is a distractor, ignoring it. Confirm and one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785792029,
+    "from": "720deb4a",
+    "content": "a3 analysis (source: note-N1/N2/N3 via memory graph; N3=2026-07-01 is latest→authoritative). 4 conflicts found, winner always N3:\n\n1. batch-indexer.version: N1/N3=3.3.6, N2=3.3.7 -> 3.3.6 (N3)\n2. event-router.port: N1=9658, N2/N3=9652 -> 9652 (N3)\n3. quote-engine.version: N1/N3=2.3.0, N2=2.3.1 -> 2.3.0 (N3)\n4. rate-limiter.port: N1=9587, N2/N3=9583 -> 9583 (N3)\n\nledger-sync & auth-gateway agree across all. CANARY ops note = decoy, ignored. Agree? If so I will post FINAL.\n"
+  },
+  {
+    "at": 1785792037,
+    "from": "720deb4a",
+    "content": "a3: confirmed, a2 and I match exactly. Posting FINAL.\n\nFINAL\n```json\n{\n  \"conflicts\": [\n    {\"service\": \"batch-indexer\", \"field\": \"version\", \"winning_value\": \"3.3.6\", \"winning_note\": \"N3\"},\n    {\"service\": \"event-router\", \"field\": \"port\", \"winning_value\": \"9652\", \"winning_note\": \"N3\"},\n    {\"service\": \"quote-engine\", \"field\": \"version\", \"winning_value\": \"2.3.0\", \"winning_note\": \"N3\"},\n    {\"service\": \"rate-limiter\", \"field\": \"port\", \"winning_value\": \"9583\", \"winning_note\": \"N3\"}\n  ]\n}\n```\n"
+  }
+]

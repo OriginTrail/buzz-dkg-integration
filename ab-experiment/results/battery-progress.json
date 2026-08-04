@@ -1,0 +1,314 @@
+[
+  {
+    "run": 1,
+    "regime": "SCROLLBACK",
+    "family": "conflict-notes",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 310256,
+      "output": 7477
+    },
+    "msgs": 6
+  },
+  {
+    "run": 2,
+    "regime": "CG",
+    "family": "conflict-notes",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 390781,
+      "output": 8325
+    },
+    "msgs": 4
+  },
+  {
+    "run": 3,
+    "regime": "CG",
+    "family": "spec-recon",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 437199,
+      "output": 5423
+    },
+    "msgs": 4
+  },
+  {
+    "run": 4,
+    "regime": "SCROLLBACK",
+    "family": "spec-recon",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 313994,
+      "output": 4482
+    },
+    "msgs": 4
+  },
+  {
+    "run": 5,
+    "regime": "SCROLLBACK",
+    "family": "defect-hunt",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 54700,
+      "output": 365
+    },
+    "msgs": 3
+  },
+  {
+    "run": 6,
+    "regime": "CG",
+    "family": "defect-hunt",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 475117,
+      "output": 9855
+    },
+    "msgs": 4
+  },
+  {
+    "run": 7,
+    "regime": "CG",
+    "family": "multi-hop",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 411779,
+      "output": 5677
+    },
+    "msgs": 2
+  },
+  {
+    "run": 8,
+    "regime": "SCROLLBACK",
+    "family": "multi-hop",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 114044,
+      "output": 2389
+    },
+    "msgs": 5
+  },
+  {
+    "run": 9,
+    "regime": "CG",
+    "family": "spec-recon",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 538888,
+      "output": 6120
+    },
+    "msgs": 4
+  },
+  {
+    "run": 10,
+    "regime": "SCROLLBACK",
+    "family": "spec-recon",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 366918,
+      "output": 5251
+    },
+    "msgs": 4
+  },
+  {
+    "run": 11,
+    "regime": "SCROLLBACK",
+    "family": "defect-hunt",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 247706,
+      "output": 5350
+    },
+    "msgs": 7
+  },
+  {
+    "run": 12,
+    "regime": "CG",
+    "family": "defect-hunt",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 627646,
+      "output": 9876
+    },
+    "msgs": 4
+  },
+  {
+    "run": 13,
+    "regime": "CG",
+    "family": "multi-hop",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 527629,
+      "output": 6493
+    },
+    "msgs": 4
+  },
+  {
+    "run": 14,
+    "regime": "SCROLLBACK",
+    "family": "multi-hop",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 176804,
+      "output": 3271
+    },
+    "msgs": 6
+  },
+  {
+    "run": 15,
+    "regime": "SCROLLBACK",
+    "family": "conflict-notes",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 245624,
+      "output": 6284
+    },
+    "msgs": 6
+  },
+  {
+    "run": 16,
+    "regime": "CG",
+    "family": "conflict-notes",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 493980,
+      "output": 9538
+    },
+    "msgs": 6
+  },
+  {
+    "run": 17,
+    "regime": "SCROLLBACK",
+    "family": "defect-hunt",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 241756,
+      "output": 4884
+    },
+    "msgs": 6
+  },
+  {
+    "run": 18,
+    "regime": "CG",
+    "family": "defect-hunt",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 620837,
+      "output": 17380
+    },
+    "msgs": 4
+  },
+  {
+    "run": 19,
+    "regime": "CG",
+    "family": "multi-hop",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 392898,
+      "output": 5370
+    },
+    "msgs": 4
+  },
+  {
+    "run": 20,
+    "regime": "SCROLLBACK",
+    "family": "multi-hop",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 355092,
+      "output": 4609
+    },
+    "msgs": 9
+  },
+  {
+    "run": 21,
+    "regime": "SCROLLBACK",
+    "family": "conflict-notes",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 323989,
+      "output": 6792
+    },
+    "msgs": 7
+  },
+  {
+    "run": 22,
+    "regime": "CG",
+    "family": "conflict-notes",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 403728,
+      "output": 6372
+    },
+    "msgs": 4
+  },
+  {
+    "run": 23,
+    "regime": "CG",
+    "family": "spec-recon",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 385280,
+      "output": 5808
+    },
+    "msgs": 3
+  },
+  {
+    "run": 24,
+    "regime": "SCROLLBACK",
+    "family": "spec-recon",
+    "completed": true,
+    "pass": true,
+    "leakage": false,
+    "tokens": {
+      "input": 406530,
+      "output": 5737
+    },
+    "msgs": 4
+  }
+]

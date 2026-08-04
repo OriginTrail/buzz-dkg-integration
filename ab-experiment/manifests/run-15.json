@@ -1,0 +1,22 @@
+{
+  "run": 15,
+  "team": "T2",
+  "slot": 4,
+  "leg": 1,
+  "family": "conflict-notes",
+  "taskId": "conflict-notes-p2x",
+  "taskDigest": "af7d13c06f6487f386991da7dd36a694c9318d08037433e0524398d0ed127c41",
+  "regime": "SCROLLBACK",
+  "model": "claude (Buzz claude runtime via claude-agent-acp; identical for every run)",
+  "teamSize": 3,
+  "maxRounds": 8,
+  "tokenBudgetPerAgent": 200000,
+  "isolation": "fresh disposable agent instances + fresh keys + fresh private channel per run; instances destroyed after run",
+  "armConfig": {
+    "context": "immutable seed corpus + growing run transcript",
+    "cgAccess": "DENIED (no client, no credentials, graph egress blocked)"
+  },
+  "canaryToken": "CANARY-CGONLY-25c449ea54e3",
+  "canaryPlacement": "planted only in the CG snapshot — its appearance in any output/log = leakage invalidation",
+  "accountingBoundary": "native per-turn input+output tokens for all team agents + orchestration prompts + (CG arm) query prompts/answers/retries; CG build cost accounted separately as marginal vs fully-loaded per prereg §3"
+}

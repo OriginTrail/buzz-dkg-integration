@@ -1,0 +1,137 @@
+[
+  {
+    "agent": "a0a2e8b1d50a04d414e7158df5a7b91752d9580acba3043c455362904f233a20",
+    "at": 1785791991,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "eb7f23ab-d091-4266-ade7-ec8d39ebe275",
+    "sessionId": "a16f546a-7657-4769-b090-deca30d874b2",
+    "turnId": "c7d7fcce-dcad-4cb2-95d8-b7de290ed93c",
+    "turnSeq": 1,
+    "timestamp": "2026-08-03T21:19:51.009Z",
+    "turn": null,
+    "cumulative": {
+      "inputTokens": 2,
+      "outputTokens": 572,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": false,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "13ee027bfeb737589c28165afdd09a30026f6c4a82423d0020f2718587ed39f0",
+    "at": 1785791991,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "eb7f23ab-d091-4266-ade7-ec8d39ebe275",
+    "sessionId": "43602c55-412a-453b-bbc5-8a40db7fa87b",
+    "turnId": "df5efeb6-46d6-4baa-88d3-ffa45389c471",
+    "turnSeq": 1,
+    "timestamp": "2026-08-03T21:19:51.066Z",
+    "turn": null,
+    "cumulative": {
+      "inputTokens": 2,
+      "outputTokens": 335,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": false,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "720deb4a9990c4696182371e3becfad9be8a2bf591d2c5b57b18aedeb0a74e01",
+    "at": 1785791991,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "eb7f23ab-d091-4266-ade7-ec8d39ebe275",
+    "sessionId": "e3141028-6a7e-46f0-bd7a-0c7b59b0a58c",
+    "turnId": "4dfa1737-38fb-4289-994a-e29d05c5f78a",
+    "turnSeq": 1,
+    "timestamp": "2026-08-03T21:19:51.065Z",
+    "turn": null,
+    "cumulative": {
+      "inputTokens": 2,
+      "outputTokens": 309,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": false,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "13ee027bfeb737589c28165afdd09a30026f6c4a82423d0020f2718587ed39f0",
+    "at": 1785792029,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "eb7f23ab-d091-4266-ade7-ec8d39ebe275",
+    "sessionId": "43602c55-412a-453b-bbc5-8a40db7fa87b",
+    "turnId": "603850ca-2bc0-4cf0-a141-4d0dafe48fb6",
+    "turnSeq": 2,
+    "timestamp": "2026-08-03T21:20:29.962Z",
+    "turn": {
+      "inputTokens": 6,
+      "outputTokens": 1862,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "cumulative": {
+      "inputTokens": 8,
+      "outputTokens": 2197,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": true,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "a0a2e8b1d50a04d414e7158df5a7b91752d9580acba3043c455362904f233a20",
+    "at": 1785792042,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "eb7f23ab-d091-4266-ade7-ec8d39ebe275",
+    "sessionId": "a16f546a-7657-4769-b090-deca30d874b2",
+    "turnId": "955ecf4d-48f5-42c4-9b7f-4555a2fd13e0",
+    "turnSeq": 2,
+    "timestamp": "2026-08-03T21:20:42.953Z",
+    "turn": {
+      "inputTokens": 8,
+      "outputTokens": 2148,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "cumulative": {
+      "inputTokens": 10,
+      "outputTokens": 2720,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": true,
+    "stopReason": "end_turn"
+  },
+  {
+    "agent": "720deb4a9990c4696182371e3becfad9be8a2bf591d2c5b57b18aedeb0a74e01",
+    "at": 1785792043,
+    "harness": "claude-acp-usage-shim.mjs",
+    "model": "claude",
+    "channelId": "eb7f23ab-d091-4266-ade7-ec8d39ebe275",
+    "sessionId": "e3141028-6a7e-46f0-bd7a-0c7b59b0a58c",
+    "turnId": "bb8d845d-56d4-4276-b5da-7a258d21fb6a",
+    "turnSeq": 2,
+    "timestamp": "2026-08-03T21:20:43.767Z",
+    "turn": {
+      "inputTokens": 9,
+      "outputTokens": 3377,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "cumulative": {
+      "inputTokens": 11,
+      "outputTokens": 3686,
+      "totalTokens": null,
+      "costUsd": null
+    },
+    "deltaReliable": true,
+    "stopReason": "end_turn"
+  }
+]

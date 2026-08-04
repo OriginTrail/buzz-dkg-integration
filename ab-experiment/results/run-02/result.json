@@ -1,0 +1,73 @@
+{
+  "run": 2,
+  "manifest": {
+    "run": 2,
+    "team": "T1",
+    "slot": 1,
+    "leg": 2,
+    "family": "conflict-notes",
+    "taskId": "conflict-notes-p1y",
+    "taskDigest": "9d144e1fed331cfae4a6bc1e10a951791463495cbd742b341f96995c35ba9fae",
+    "regime": "CG",
+    "model": "claude (Buzz claude runtime via claude-agent-acp; identical for every run)",
+    "teamSize": 3,
+    "maxRounds": 8,
+    "tokenBudgetPerAgent": 200000,
+    "isolation": "fresh disposable agent instances + fresh keys + fresh private channel per run; instances destroyed after run",
+    "armConfig": {
+      "context": "empty history; snapshot-pinned scoped CG query client only",
+      "transcriptAccess": "DENIED (no history subscription/read)"
+    },
+    "canaryToken": "CANARY-TRANSCRIPT-7095c2d0c98f",
+    "canaryPlacement": "planted only in the channel transcript pre-seed — its appearance in any output/log = leakage invalidation",
+    "accountingBoundary": "native per-turn input+output tokens for all team agents + orchestration prompts + (CG arm) query prompts/answers/retries; CG build cost accounted separately as marginal vs fully-loaded per prereg §3"
+  },
+  "channelId": "da9e18df-f543-4586-ba7f-c50d6bc42175",
+  "subgraph": "exp-r02",
+  "agents": [
+    "6f3a11e23ad07e77e9b48ab81ddcd4cb3dc15a996c6b26fa8d4f69258ecbf68f",
+    "d46d9171b4e841e7832f91de3d61088454d7eb5360d15a2a4d9f6dc3156b6e4b",
+    "07cd9adfd4f0eb601c577bff17db1114358fed4121b965061274f8cb03d6fae5"
+  ],
+  "startedAt": 1785792328,
+  "endedAt": 1785792410,
+  "completed": true,
+  "score": {
+    "pass": true,
+    "detail": {
+      "required": 4,
+      "correct": 4,
+      "invented": 0,
+      "reported": 4
+    }
+  },
+  "leakageInvalid": false,
+  "teamMessages": 4,
+  "tokens": {
+    "perAgent": {
+      "d46d9171b4e841e7832f91de3d61088454d7eb5360d15a2a4d9f6dc3156b6e4b": {
+        "input": 141176,
+        "output": 2742,
+        "cachedRead": null,
+        "turns": 2
+      },
+      "07cd9adfd4f0eb601c577bff17db1114358fed4121b965061274f8cb03d6fae5": {
+        "input": 109048,
+        "output": 2030,
+        "cachedRead": null,
+        "turns": 2
+      },
+      "6f3a11e23ad07e77e9b48ab81ddcd4cb3dc15a996c6b26fa8d4f69258ecbf68f": {
+        "input": 140557,
+        "output": 3553,
+        "cachedRead": null,
+        "turns": 2
+      }
+    },
+    "totals": {
+      "input": 390781,
+      "output": 8325
+    },
+    "metricEvents": 6
+  }
+}

@@ -1,0 +1,52 @@
+[
+  {
+    "at": 1785793574,
+    "from": "7b20d526",
+    "content": "📄 note-N1.md\n\n# Ops note N1\nas-of: 2026-06-01\n\n- schema-registry: port 9257, version 2.7.2, owner franc\n- auth-gateway: port 9692, version 3.7.9, owner eva\n- ledger-sync: port 9489, version 3.2.3, owner eva\n- event-router: port 9072, version 1.6.5, owner bojan\n- rate-limiter: port 9100, version 1.8.6, owner bojan\n- doc-store: port 9134, version 3.5.9, owner ana\n"
+  },
+  {
+    "at": 1785793574,
+    "from": "7b20d526",
+    "content": "📄 note-N2.md\n\n# Ops note N2\nas-of: 2026-06-15\n\n- ledger-sync: port 9489, version 3.2.3, owner darko\n- rate-limiter: port 9101, version 1.8.6, owner bojan\n- schema-registry: port 9257, version 2.7.2, owner franc\n- event-router: port 9072, version 1.6.5, owner cvetka\n- auth-gateway: port 9693, version 3.7.9, owner eva\n- doc-store: port 9134, version 3.5.9, owner ana\n"
+  },
+  {
+    "at": 1785793575,
+    "from": "7b20d526",
+    "content": "📄 note-N3.md\n\n# Ops note N3\nas-of: 2026-07-01\n\n- schema-registry: port 9257, version 2.7.2, owner franc\n- event-router: port 9072, version 1.6.5, owner cvetka\n- rate-limiter: port 9100, version 1.8.6, owner bojan\n- doc-store: port 9134, version 3.5.9, owner ana\n- auth-gateway: port 9692, version 3.7.9, owner eva\n- ledger-sync: port 9489, version 3.2.3, owner darko\n"
+  },
+  {
+    "at": 1785793593,
+    "from": "7b20d526",
+    "content": "TASK for team T2:\n\nThree operators kept independent notes about the same fleet (note-N1..N3). Where notes disagree, the note with the LATEST as-of date is authoritative. Produce resolution.json: {\"conflicts\":[{\"service\",\"field\",\"winning_value\",\"winning_note\"}]} listing EVERY disagreement. Completion: all planted conflicts found, none invented, winning values and note IDs correct."
+  },
+  {
+    "at": 1785793611,
+    "from": "1a8cfdb9",
+    "content": "a3 analysis. N3 (2026-07-01) is authoritative. Comparing all 3 notes field-by-field, I find 4 conflicts:\n\n1. event-router / owner: N1=bojan vs N2,N3=cvetka -> cvetka (N3)\n2. rate-limiter / port: N2=9101 vs N1,N3=9100 -> 9100 (N3)\n3. auth-gateway / port: N2=9693 vs N1,N3=9692 -> 9692 (N3)\n4. ledger-sync / owner: N1=eva vs N2,N3=darko -> darko (N3)\n\nAll other fields agree. schema-registry and doc-store: no conflicts. Agree? If a1/a2 confirm, one of us posts FINAL."
+  },
+  {
+    "at": 1785793615,
+    "from": "f67dc60e",
+    "content": "T2 a1 here. My diff (N3=2026-07-01 latest wins, present in all 3):\n\n1. event-router/owner: N1 bojan, N2/N3 cvetka -> cvetka (N3)\n2. rate-limiter/port: N1 9100, N2 9101, N3 9100 -> 9100 (N3)\n3. auth-gateway/port: N1 9692, N2 9693, N3 9692 -> 9692 (N3)\n4. ledger-sync/owner: N1 eva, N2/N3 darko -> darko (N3)\n\nExactly 4 conflicts, all resolved by N3. schema-registry & doc-store fully agree. Anyone see a 5th or disagree?\n"
+  },
+  {
+    "at": 1785793616,
+    "from": "3694c2d7",
+    "content": "@Žiga a2 analysis. Compared N1/N2/N3 field-by-field. 4 conflicts, all won by N3 (latest, 2026-07-01):\n\n1. event-router / owner → cvetka (N1 bojan)\n2. rate-limiter / port → 9100 (N2 9101)\n3. auth-gateway / port → 9692 (N2 9693)\n4. ledger-sync / owner → darko (N1 eva)\n\nschema-registry & doc-store: no disagreement. a1/a3 please verify."
+  },
+  {
+    "at": 1785793623,
+    "from": "1a8cfdb9",
+    "content": "All three agents converged on the same 4 conflicts. Posting final.\n\nFINAL\n```json\n{\n  \"conflicts\": [\n    {\"service\": \"event-router\", \"field\": \"owner\", \"winning_value\": \"cvetka\", \"winning_note\": \"N3\"},\n    {\"service\": \"rate-limiter\", \"field\": \"port\", \"winning_value\": \"9100\", \"winning_note\": \"N3\"},\n    {\"service\": \"auth-gateway\", \"field\": \"port\", \"winning_value\": \"9692\", \"winning_note\": \"N3\"},\n    {\"service\": \"ledger-sync\", \"field\": \"owner\", \"winning_value\": \"darko\", \"winning_note\": \"N3\"}\n  ]\n}\n```"
+  },
+  {
+    "at": 1785793624,
+    "from": "f67dc60e",
+    "content": "a1 confirms — a2 and a3 match my analysis exactly. All three independent passes agree on the same 4 conflicts, no more, no fewer. Posting FINAL.\n\nFINAL\n```json\n{\n  \"conflicts\": [\n    {\"service\": \"event-router\", \"field\": \"owner\", \"winning_value\": \"cvetka\", \"winning_note\": \"N3\"},\n    {\"service\": \"rate-limiter\", \"field\": \"port\", \"winning_value\": 9100, \"winning_note\": \"N3\"},\n    {\"service\": \"auth-gateway\", \"field\": \"port\", \"winning_value\": 9692, \"winning_note\": \"N3\"},\n    {\"service\": \"ledger-sync\", \"field\": \"owner\", \"winning_value\": \"darko\", \"winning_note\": \"N3\"}\n  ]\n}\n```\n"
+  },
+  {
+    "at": 1785793627,
+    "from": "f67dc60e",
+    "content": "a1 analysis. Latest as-of = N3 (2026-07-01), authoritative. 4 conflicts found:\n\n1. event-router / owner: N1 bojan vs cvetka -> cvetka (N3)\n2. rate-limiter / port: N2 9101 vs 9100 -> 9100 (N3)\n3. auth-gateway / port: N2 9693 vs 9692 -> 9692 (N3)\n4. ledger-sync / owner: N1 eva vs darko -> darko (N3)\n\nAll other service/field triples agree across N1-N3. a2/a3 please verify; if we agree I will post FINAL.\n"
+  }
+]

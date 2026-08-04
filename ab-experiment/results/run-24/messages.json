@@ -1,0 +1,37 @@
+[
+  {
+    "at": 1785794429,
+    "from": "7b20d526",
+    "content": "📄 change-request.md\n\n# Change request CR-7 for rate-limiter\nPriority guidance: performance-related raises are APPROVED (max_payload_kb, timeout_ms, auth_scheme); resource-amplifying raises are REJECTED (retry_count, batch_size) per incident RCA-12.\n\nProposed:\n- max_payload_kb: 347\n- timeout_ms: 2946\n- retry_count: 7\n- auth_scheme: nostr-nip98\n- batch_size: 147\n"
+  },
+  {
+    "at": 1785794430,
+    "from": "7b20d526",
+    "content": "📄 spec-v1.md\n\n# rate-limiter spec v1\n- max_payload_kb: 64\n- timeout_ms: 828\n- retry_count: 1\n- auth_scheme: hmac-v1\n- batch_size: 20\n- transport: https\n- encoding: json\n"
+  },
+  {
+    "at": 1785794447,
+    "from": "7b20d526",
+    "content": "TASK for team T3:\n\nMerge change-request.md into spec-v1.md following the CR's own priority guidance exactly. Produce merged-spec.json with the final value of every parameter. Completion: all 5 contested parameters resolved per the stated approval rules; transport/encoding unchanged."
+  },
+  {
+    "at": 1785794457,
+    "from": "feb1faa9",
+    "content": "a1 here. My merge per CR-7 priority guidance:\n\nAPPROVED (raise): max_payload_kb 64→347, timeout_ms 828→2946, auth_scheme hmac-v1→nostr-nip98.\nREJECTED (keep original per RCA-12): retry_count=1, batch_size=20.\nUnchanged: transport=https, encoding=json.\n\nAll 5 contested resolved. a2/a3, confirm and one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785794469,
+    "from": "b98d5038",
+    "content": "a3 verified independently — a1's merge is correct.\n\nPerf raises APPROVED: max_payload_kb 347, timeout_ms 2946, auth_scheme nostr-nip98.\nAmplifying raises REJECTED per RCA-12, keep original: retry_count 1, batch_size 20.\nUnchanged: transport https, encoding json.\n\nAll 5 contested resolved. a1, go ahead and post FINAL — no objection from me.\n"
+  },
+  {
+    "at": 1785794470,
+    "from": "b6aee7eb",
+    "content": "Verified a1's merge — matches CR-7 guidance exactly.\n\nAPPROVED perf raises: max_payload_kb 64→347, timeout_ms 828→2946, auth_scheme hmac-v1→nostr-nip98.\nREJECTED per RCA-12 (keep original): retry_count=1, batch_size=20.\nUnchanged: transport=https, encoding=json.\n\nAll 5 contested + 2 static resolved. a1, you proposed it — go ahead and post FINAL.\n"
+  },
+  {
+    "at": 1785794485,
+    "from": "feb1faa9",
+    "content": "Team converged (a2 + a3 verified). Posting the artifact.\n\nFINAL\n```json\n{\n  \"max_payload_kb\": 347,\n  \"timeout_ms\": 2946,\n  \"retry_count\": 1,\n  \"auth_scheme\": \"nostr-nip98\",\n  \"batch_size\": 20,\n  \"transport\": \"https\",\n  \"encoding\": \"json\"\n}\n```\n"
+  }
+]

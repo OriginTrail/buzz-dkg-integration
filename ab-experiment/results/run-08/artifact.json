@@ -1,0 +1,15 @@
+{
+  "order": [
+    "batch-indexer",
+    "quote-engine",
+    "ledger-sync",
+    "doc-store",
+    "auth-gateway"
+  ],
+  "citations": {
+    "batch-indexer<quote-engine": "doc-2",
+    "quote-engine<ledger-sync": "doc-1",
+    "ledger-sync<doc-store": "doc-4",
+    "doc-store<auth-gateway": "doc-3"
+  }
+}

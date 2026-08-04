@@ -1,0 +1,22 @@
+{
+  "run": 9,
+  "team": "T2",
+  "slot": 1,
+  "leg": 1,
+  "family": "spec-recon",
+  "taskId": "spec-recon-p2x",
+  "taskDigest": "e9d65c420504fdbabe9cf8acbdbf6bc8f93281a1d86c3a80c6f597040dd75053",
+  "regime": "CG",
+  "model": "claude (Buzz claude runtime via claude-agent-acp; identical for every run)",
+  "teamSize": 3,
+  "maxRounds": 8,
+  "tokenBudgetPerAgent": 200000,
+  "isolation": "fresh disposable agent instances + fresh keys + fresh private channel per run; instances destroyed after run",
+  "armConfig": {
+    "context": "empty history; snapshot-pinned scoped CG query client only",
+    "transcriptAccess": "DENIED (no history subscription/read)"
+  },
+  "canaryToken": "CANARY-TRANSCRIPT-9187082d59c4",
+  "canaryPlacement": "planted only in the channel transcript pre-seed — its appearance in any output/log = leakage invalidation",
+  "accountingBoundary": "native per-turn input+output tokens for all team agents + orchestration prompts + (CG arm) query prompts/answers/retries; CG build cost accounted separately as marginal vs fully-loaded per prereg §3"
+}

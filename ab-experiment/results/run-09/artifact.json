@@ -1,0 +1,9 @@
+{
+  "max_payload_kb": 481,
+  "timeout_ms": 2148,
+  "retry_count": 2,
+  "auth_scheme": "nostr-nip98",
+  "batch_size": 40,
+  "transport": "https",
+  "encoding": "json"
+}

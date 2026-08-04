@@ -1,0 +1,52 @@
+[
+  {
+    "at": 1785793759,
+    "from": "7b20d526",
+    "content": "📄 merge.js\n\n// merge maps; later sources win\nexport function mergeAll(...maps) {\n  const out = {};\n  for (const m of maps.reverse()) {                  // L4 DEFECT: reverse makes EARLIER win\n    Object.assign(out, m);\n  }\n  return out;\n}\nexport function diffKeys(a, b) {\n  return Object.keys(a).filter((k) => !(k in b));    // L10 decoy\n}\nexport function bump(ver, kind = 'patch') {\n  const [m, n, p] = ver.split('.').map(Number);\n  if (kind === 'major') return `${m + 2}.0.0`;  // L14 DEFECT: major bumps by 2 (must be 1)\n  return `${m}.${n}.${p + 1}`;\n}\n"
+  },
+  {
+    "at": 1785793760,
+    "from": "7b20d526",
+    "content": "📄 window.js\n\n// sliding-window average over series\nexport function winAvg(series, w) {\n  const out = [];\n  for (let i = 0; i + w < series.length; i++) {      // L4 DEFECT: skips final window (<=)\n    let s = 0;\n    for (let j = i; j < i + w; j++) s += series[j];\n    out.push(s / w);\n  }\n  return out;\n}\n// clamp (decoy: unusual but correct order)\nexport function clamp(x, lo, hi) {\n  return Math.min(Math.max(x, lo), hi);              // L13 decoy\n}\nexport async function fetchSeries(src) {\n  const r = src.fetch();                             // L16 DEFECT: missing await\n  return r.values;\n}\n"
+  },
+  {
+    "at": 1785793760,
+    "from": "7b20d526",
+    "content": "📄 pager.js\n\n// paginate items into pages of size n\nexport function paginate(items, n) {\n  const pages = [];\n  for (let i = 0; i <= items.length - 1; i += n) {   // L4\n    pages.push(items.slice(i, i + n));\n  }\n  return pages;\n}\n// returns the LAST page (decoy: looks off-by-one, is correct)\nexport function lastPage(pages) {\n  return pages[pages.length - 1];                    // L11 decoy\n}\nexport function pageCount(total, n) {\n  return Math.floor(total / n);                      // L14 DEFECT: drops partial page (ceil)\n}\n"
+  },
+  {
+    "at": 1785793777,
+    "from": "7b20d526",
+    "content": "TASK for team T3:\n\nAudit pager.js, window.js, merge.js. Produce defects.json: {\"defects\":[{\"file\",\"line\",\"kind\",\"fix\"}]}. Exactly the real defects — flagging correct-but-suspicious code counts against you. Completion: scored precision/recall against a sealed key; decoys must NOT be flagged."
+  },
+  {
+    "at": 1785793793,
+    "from": "ee8ddf6f",
+    "content": "a3 audit — 5 real defects, decoys excluded:\n\n- pager.js L14 pageCount: Math.floor drops partial page → Math.ceil(total/n)\n- window.js L4 winAvg: i+w<len skips final window → i+w<=len\n- window.js L16 fetchSeries: missing await → const r = await src.fetch()\n- merge.js L4 mergeAll: .reverse() makes EARLIER win → drop .reverse()\n- merge.js L14 bump: m+2 on major → m+1\n\nExcluded decoys: paginate L4, clamp L13, lastPage L11, diffKeys L10 (all correct). Agree? One of us posts FINAL."
+  },
+  {
+    "at": 1785793795,
+    "from": "ecd9453e",
+    "content": "a2 audit — 5 real defects, all decoys excluded:\n\n1. merge.js L4 — mergeAll: `maps.reverse()` makes EARLIER win; drop reverse (later should win)\n2. merge.js L14 — bump major: `m+2` should be `m+1`\n3. window.js L4 — winAvg: `i+w < length` skips final window; use `<=`\n4. window.js L16 — fetchSeries: missing `await` on `src.fetch()`\n5. pager.js L14 — pageCount: `Math.floor` drops partial page; use `Math.ceil`\n\nDecoys correctly NOT flagged: merge L10 diffKeys, window L13 clamp, pager L4 loop, pager L11 lastPage. Agree?\n"
+  },
+  {
+    "at": 1785793806,
+    "from": "ecd9453e",
+    "content": "a2 here. Verified all 3 files independently (labels match code behavior):\n\n**Real defects (5):**\n- merge.js L4: `maps.reverse()` inverts precedence — EARLIER sources win, contradicts \"later wins\"\n- merge.js L14: major bump does `m+2` should be `m+1`\n- window.js L4: `i+w < len` skips the final full window (needs `<=`)\n- window.js L16: `src.fetch()` missing `await` — returns Promise, `.values` undefined\n- pager.js L14: `Math.floor` drops partial page (needs `ceil`)\n\n**Decoys (correct):** merge.js L10 diffKeys, window.js L13 clamp, pager.js L11 lastPage, pager.js L4 loop.\n\nNo explicit schema was posted. Propose artifact: {\"defects\":[{\"file\",\"line\",\"fix\"}]}. Agree? Then one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785793807,
+    "from": "ecd9453e",
+    "content": "Consensus with a3 — identical 5 defects, identical decoy exclusions. Posting FINAL.\n\nFINAL\n```json\n{\n  \"defects\": [\n    {\"file\": \"pager.js\", \"line\": 14, \"kind\": \"off-by-one\", \"fix\": \"pageCount: use Math.ceil(total / n) to include the partial page\"},\n    {\"file\": \"window.js\", \"line\": 4, \"kind\": \"off-by-one\", \"fix\": \"winAvg loop: use i + w <= series.length so the final window is included\"},\n    {\"file\": \"window.js\", \"line\": 16, \"kind\": \"missing-await\", \"fix\": \"fetchSeries: const r = await src.fetch()\"},\n    {\"file\": \"merge.js\", \"line\": 4, \"kind\": \"logic\", \"fix\": \"mergeAll: drop .reverse() so later sources win\"},\n    {\"file\": \"merge.js\", \"line\": 14, \"kind\": \"logic\", \"fix\": \"bump major: return `${m + 1}.0.0`\"}\n  ]\n}\n```\n"
+  },
+  {
+    "at": 1785793811,
+    "from": "170d4aec",
+    "content": "a1 audit complete. 5 real defects:\n\n- merge.js L4: `.reverse()` makes EARLIER win (spec: later wins) -> drop reverse\n- merge.js L14: major returns `${m+2}` -> should be m+1\n- window.js L4: `i+w < len` skips final window -> `<=`\n- window.js L16: missing await -> `await src.fetch()`\n- pager.js L14: `Math.floor` drops partial page -> `Math.ceil`\n\nDecoys NOT flagged: merge L10 diffKeys, window L13 clamp, pager L11 lastPage. Also pager L4 (`i<=len-1`) is correct. a2/a3 verify; if no objection I post FINAL.\n"
+  },
+  {
+    "at": 1785793817,
+    "from": "ee8ddf6f",
+    "content": ""
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "order": [
+    "quote-engine",
+    "event-router",
+    "doc-store",
+    "batch-indexer",
+    "schema-registry"
+  ]
+}

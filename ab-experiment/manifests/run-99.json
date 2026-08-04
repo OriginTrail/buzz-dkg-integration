@@ -1,0 +1,17 @@
+{
+  "run": 99,
+  "team": "PILOT",
+  "slot": 0,
+  "leg": 0,
+  "family": "conflict-notes",
+  "taskId": "pilot-scroll",
+  "taskDigest": "pilot-not-preregistered",
+  "regime": "SCROLLBACK",
+  "model": "claude",
+  "teamSize": 3,
+  "maxRounds": 8,
+  "tokenBudgetPerAgent": 200000,
+  "canaryToken": "CANARY-CGONLY-pilot9999beef",
+  "canaryPlacement": "cg",
+  "accountingBoundary": "pilot"
+}

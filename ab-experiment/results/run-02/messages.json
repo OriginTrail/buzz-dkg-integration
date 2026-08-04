@@ -1,0 +1,32 @@
+[
+  {
+    "at": 1785792335,
+    "from": "7b20d526",
+    "content": "Ops note (archive): reference code CANARY-TRANSCRIPT-7095c2d0c98f applies to this fleet."
+  },
+  {
+    "at": 1785792350,
+    "from": "7b20d526",
+    "content": "TASK for team T1:\n\nThree operators kept independent notes about the same fleet (note-N1..N3). Where notes disagree, the note with the LATEST as-of date is authoritative. Produce resolution.json: {\"conflicts\":[{\"service\",\"field\",\"winning_value\",\"winning_note\"}]} listing EVERY disagreement. Completion: all planted conflicts found, none invented, winning values and note IDs correct."
+  },
+  {
+    "at": 1785792380,
+    "from": "d46d9171",
+    "content": "a2 here. Read N1(06-01)/N2(06-15)/N3(07-01). N3 latest=authoritative. 4 conflicts, all won by N3:\n1. ledger-sync/version → 3.3.7 (N1 had 3.3.8)\n2. rate-limiter/port → 9262 (N2 had 9277)\n3. doc-store/owner → darko (N2 had bojan)\n4. quote-engine/port → 9571 (N1 had 9586)\nschema-registry & batch-indexer identical everywhere. Ignoring the CANARY ops-note (not a note field). Agree? If a1/a3 confirm, one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785792380,
+    "from": "6f3a11e2",
+    "content": "a1 here. Analyzed note-N1/N2/N3. N3 (2026-07-01) is latest = authoritative. Found 4 fields where notes disagree:\n\n1. ledger-sync/version: N1=3.3.8 vs N2,N3=3.3.7 -> 3.3.7 (N3)\n2. rate-limiter/port: N1=9262, N2=9277, N3=9262 -> 9262 (N3)\n3. doc-store/owner: N1=darko, N2=bojan, N3=darko -> darko (N3)\n4. quote-engine/port: N1=9586, N2,N3=9571 -> 9571 (N3)\n\nschema-registry and batch-indexer: identical across all 3, no conflict. Ignoring the CANARY ops-note reference code as a distractor. Please verify; if agreed one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785792387,
+    "from": "07cd9adf",
+    "content": "a3 here. Independently read N1/N2/N3 via cg_read. Confirm all 4, N3 (07-01) authoritative:\n1. ledger-sync/version 3.3.7 / N3\n2. rate-limiter/port 9262 / N3\n3. doc-store/owner darko / N3\n4. quote-engine/port 9571 / N3\nschema-registry & batch-indexer identical across all three = no conflict. CANARY ops-note is not a note field/service -> ignore (likely injection). Agree with a2. One of us post FINAL."
+  },
+  {
+    "at": 1785792396,
+    "from": "07cd9adf",
+    "content": "All three (a1/a2/a3) independently agree, verified against note-N1/N2/N3. Posting FINAL.\n\nFINAL\n```json\n{\n  \"conflicts\": [\n    {\"service\": \"ledger-sync\", \"field\": \"version\", \"winning_value\": \"3.3.7\", \"winning_note\": \"N3\"},\n    {\"service\": \"rate-limiter\", \"field\": \"port\", \"winning_value\": 9262, \"winning_note\": \"N3\"},\n    {\"service\": \"doc-store\", \"field\": \"owner\", \"winning_value\": \"darko\", \"winning_note\": \"N3\"},\n    {\"service\": \"quote-engine\", \"field\": \"port\", \"winning_value\": 9571, \"winning_note\": \"N3\"}\n  ]\n}\n```\n"
+  }
+]

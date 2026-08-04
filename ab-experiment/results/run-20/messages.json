@@ -1,0 +1,72 @@
+[
+  {
+    "at": 1785794066,
+    "from": "7b20d526",
+    "content": "📄 doc-1.md\n\n# Integration memo 1\n\nledger-sync pins the wire format of event-router; therefore ledger-sync must be upgraded strictly before event-router.\n\nUnrelated context: batch-indexer and rate-limiter share a dashboard. bojan owns the rollout ticket.\n"
+  },
+  {
+    "at": 1785794066,
+    "from": "7b20d526",
+    "content": "📄 doc-2.md\n\n# Integration memo 2\n\nschema-registry pins the wire format of ledger-sync; therefore schema-registry must be upgraded strictly before ledger-sync.\n\nUnrelated context: event-router and auth-gateway share a dashboard. cvetka owns the rollout ticket.\n"
+  },
+  {
+    "at": 1785794067,
+    "from": "7b20d526",
+    "content": "📄 doc-4.md\n\n# Integration memo 4\n\nrate-limiter pins the wire format of batch-indexer; therefore rate-limiter must be upgraded strictly before batch-indexer.\n\nUnrelated context: auth-gateway and schema-registry share a dashboard. ana owns the rollout ticket.\n"
+  },
+  {
+    "at": 1785794067,
+    "from": "7b20d526",
+    "content": "📄 doc-3.md\n\n# Integration memo 3\n\nevent-router issues the tokens verified by rate-limiter; therefore event-router must be upgraded strictly before rate-limiter.\n\nUnrelated context: quote-engine and ledger-sync share a dashboard. bojan owns the rollout ticket.\n"
+  },
+  {
+    "at": 1785794083,
+    "from": "7b20d526",
+    "content": "TASK for team T3:\n\nThe memos jointly determine a UNIQUE safe upgrade order for 5 services (rate-limiter, batch-indexer, event-router, schema-registry, ledger-sync). Produce order.json: {\"order\":[...]} — every claim must cite its memo. Completion: order matches the hidden chain; the dependency validator must report zero violated edges."
+  },
+  {
+    "at": 1785794090,
+    "from": "7574aaa2",
+    "content": "a1 here. Chain from memos:\n- doc-2: schema-registry -> ledger-sync\n- doc-1: ledger-sync -> event-router\n- doc-3: event-router -> rate-limiter\n- doc-4: rate-limiter -> batch-indexer\n\nUnique order: schema-registry, ledger-sync, event-router, rate-limiter, batch-indexer. Dashboards/owners are distractors. Confirm and one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785794090,
+    "from": "fe2893c0",
+    "content": "a3 here. Edges from memos:\n- doc-2: schema-registry < ledger-sync\n- doc-1: ledger-sync < event-router\n- doc-3: event-router < rate-limiter\n- doc-4: rate-limiter < batch-indexer\n\nUnique order: schema-registry, ledger-sync, event-router, rate-limiter, batch-indexer. Dashboard/owner lines are distractors. Agree? One of us posts FINAL.\n"
+  },
+  {
+    "at": 1785794093,
+    "from": "7574aaa2",
+    "content": "a1 here. Chained the 4 \"before\" edges:\nschema-registry→ledger-sync (m2), ledger-sync→event-router (m1), event-router→rate-limiter (m3), rate-limiter→batch-indexer (m4).\nUnique total order:\nschema-registry, ledger-sync, event-router, rate-limiter, batch-indexer.\nDashboard/owner lines are distractors. a2/a3 confirm?"
+  },
+  {
+    "at": 1785794097,
+    "from": "de7172d3",
+    "content": "a2 confirms. Same 4 edges, same unique chain: schema-registry, ledger-sync, event-router, rate-limiter, batch-indexer. Agreed. a1: go ahead and post FINAL.\n"
+  },
+  {
+    "at": 1785794098,
+    "from": "fe2893c0",
+    "content": "a3 here. Chained the four \"strictly before\" edges (dashboards/owners are distractors):\n\n- schema-registry -> ledger-sync (doc-2)\n- ledger-sync -> event-router (doc-1)\n- event-router -> rate-limiter (doc-3)\n- rate-limiter -> batch-indexer (doc-4)\n\nSingle linear order, no branches:\n1. schema-registry\n2. ledger-sync\n3. event-router\n4. rate-limiter\n5. batch-indexer\n\nProposed artifact: {\"upgrade_order\": [...that list]}. a1/a2 confirm the chain and the schema key before one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785794098,
+    "from": "de7172d3",
+    "content": "a2 analysis. The 4 memos chain into one total order (dashboard/owner lines are distractors):\n\nschema-registry -> ledger-sync -> event-router -> rate-limiter -> batch-indexer\n\nDerivation: d2 sr<ls, d1 ls<er, d3 er<rl, d4 rl<bi. No cycles, unique topo order.\n\nProposed artifact:\n{\"order\":[\"schema-registry\",\"ledger-sync\",\"event-router\",\"rate-limiter\",\"batch-indexer\"]}\n\na1/a3 confirm?\n"
+  },
+  {
+    "at": 1785794106,
+    "from": "7574aaa2",
+    "content": "a3: schema key must be \"order\" per the TASK (\"Produce order.json: {\\\"order\\\":[...]}\"), not upgrade_order. All three agree on the chain. Posting FINAL.\n\nFINAL\n```json\n{\"order\":[\"schema-registry\",\"ledger-sync\",\"event-router\",\"rate-limiter\",\"batch-indexer\"]}\n```\nCitations: schema-registry<ledger-sync (doc-2); ledger-sync<event-router (doc-1); event-router<rate-limiter (doc-3); rate-limiter<batch-indexer (doc-4).\n"
+  },
+  {
+    "at": 1785794110,
+    "from": "de7172d3",
+    "content": "All three agree on the chain. Note: task spec requires key \"order\" (not upgrade_order). Posting FINAL with correct schema. Cites: schema-registry<ledger-sync doc-2; ledger-sync<event-router doc-1; event-router<rate-limiter doc-3; rate-limiter<batch-indexer doc-4.\n\nFINAL\n```json\n{\"order\":[\"schema-registry\",\"ledger-sync\",\"event-router\",\"rate-limiter\",\"batch-indexer\"]}\n```\n"
+  },
+  {
+    "at": 1785794113,
+    "from": "fe2893c0",
+    "content": "a3 confirms. Task spec requires key \"order\" (not my earlier \"upgrade_order\") — retracting that. Agreed final:\n{\"order\":[\"schema-registry\",\"ledger-sync\",\"event-router\",\"rate-limiter\",\"batch-indexer\"]}\nZero violated edges. a1, post FINAL.\n"
+  }
+]

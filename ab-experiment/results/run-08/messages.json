@@ -1,0 +1,52 @@
+[
+  {
+    "at": 1785792935,
+    "from": "7b20d526",
+    "content": "📄 doc-1.md\n\n# Integration memo 1\n\nquote-engine pins the wire format of ledger-sync; therefore quote-engine must be upgraded strictly before ledger-sync.\n\nUnrelated context: auth-gateway and event-router share a dashboard. bojan owns the rollout ticket.\n"
+  },
+  {
+    "at": 1785792936,
+    "from": "7b20d526",
+    "content": "📄 doc-3.md\n\n# Integration memo 3\n\ndoc-store consumes the schema published by auth-gateway; therefore doc-store must be upgraded strictly before auth-gateway.\n\nUnrelated context: schema-registry and quote-engine share a dashboard. eva owns the rollout ticket.\n"
+  },
+  {
+    "at": 1785792936,
+    "from": "7b20d526",
+    "content": "📄 doc-2.md\n\n# Integration memo 2\n\nbatch-indexer consumes the schema published by quote-engine; therefore batch-indexer must be upgraded strictly before quote-engine.\n\nUnrelated context: doc-store and ledger-sync share a dashboard. franc owns the rollout ticket.\n"
+  },
+  {
+    "at": 1785792937,
+    "from": "7b20d526",
+    "content": "📄 doc-4.md\n\n# Integration memo 4\n\nledger-sync holds the migration lock required by doc-store; therefore ledger-sync must be upgraded strictly before doc-store.\n\nUnrelated context: quote-engine and schema-registry share a dashboard. darko owns the rollout ticket.\n"
+  },
+  {
+    "at": 1785792953,
+    "from": "7b20d526",
+    "content": "TASK for team T1:\n\nThe memos jointly determine a UNIQUE safe upgrade order for 5 services (auth-gateway, ledger-sync, batch-indexer, quote-engine, doc-store). Produce order.json: {\"order\":[...]} — every claim must cite its memo. Completion: order matches the hidden chain; the dependency validator must report zero violated edges."
+  },
+  {
+    "at": 1785792967,
+    "from": "725902f0",
+    "content": "a1 here. Derived the unique chain from the 4 edges:\n\n- batch-indexer → quote-engine (doc-2)\n- quote-engine → ledger-sync (doc-1)\n- ledger-sync → doc-store (doc-4)\n- doc-store → auth-gateway (doc-3)\n\nOrder: batch-indexer, quote-engine, ledger-sync, doc-store, auth-gateway. All 5 services, 0 free edges. The \"dashboard/owner\" lines are decoys.\n\nAnyone see a violation? If we agree, one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785792968,
+    "from": "754ad120",
+    "content": "a3 here. Chain from the 4 memos:\n\n- doc-2: batch-indexer -> quote-engine\n- doc-1: quote-engine -> ledger-sync\n- doc-4: ledger-sync -> doc-store\n- doc-3: doc-store -> auth-gateway\n\nUnique topo order: batch-indexer, quote-engine, ledger-sync, doc-store, auth-gateway. All 5 covered, no gaps/cycles. Agree? One of us posts FINAL.\n"
+  },
+  {
+    "at": 1785792969,
+    "from": "c8a9b2b7",
+    "content": "a2 here. The 4 edges (X strictly before Y):\n- batch-indexer→quote-engine [doc-2]\n- quote-engine→ledger-sync [doc-1]\n- ledger-sync→doc-store [doc-4]\n- doc-store→auth-gateway [doc-3]\n\nUnique total order: batch-indexer, quote-engine, ledger-sync, doc-store, auth-gateway. Dashboard/owner lines are decoy context. a1/a3 — confirm and one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785792974,
+    "from": "754ad120",
+    "content": "a3 here. Topo sort of the 4 edges:\n- batch-indexer→quote-engine (memo2)\n- quote-engine→ledger-sync (memo1)\n- ledger-sync→doc-store (memo4)\n- doc-store→auth-gateway (memo3)\n\nUnique chain: batch-indexer, quote-engine, ledger-sync, doc-store, auth-gateway. Dashboard/owner lines are noise. Concur?\n"
+  },
+  {
+    "at": 1785792977,
+    "from": "754ad120",
+    "content": "All three converged on the same unique order. Posting FINAL.\n\nFINAL\n```json\n{\n  \"order\": [\n    \"batch-indexer\",\n    \"quote-engine\",\n    \"ledger-sync\",\n    \"doc-store\",\n    \"auth-gateway\"\n  ],\n  \"citations\": {\n    \"batch-indexer<quote-engine\": \"doc-2\",\n    \"quote-engine<ledger-sync\": \"doc-1\",\n    \"ledger-sync<doc-store\": \"doc-4\",\n    \"doc-store<auth-gateway\": \"doc-3\"\n  }\n}\n```\n"
+  }
+]

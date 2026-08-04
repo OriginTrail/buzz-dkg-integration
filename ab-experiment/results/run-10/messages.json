@@ -1,0 +1,37 @@
+[
+  {
+    "at": 1785793109,
+    "from": "7b20d526",
+    "content": "📄 change-request.md\n\n# Change request CR-7 for ledger-sync\nPriority guidance: performance-related raises are APPROVED (max_payload_kb, timeout_ms, auth_scheme); resource-amplifying raises are REJECTED (retry_count, batch_size) per incident RCA-12.\n\nProposed:\n- max_payload_kb: 316\n- timeout_ms: 2509\n- retry_count: 9\n- auth_scheme: nostr-nip98\n- batch_size: 153\n"
+  },
+  {
+    "at": 1785793110,
+    "from": "7b20d526",
+    "content": "📄 spec-v1.md\n\n# ledger-sync spec v1\n- max_payload_kb: 96\n- timeout_ms: 556\n- retry_count: 3\n- auth_scheme: hmac-v1\n- batch_size: 10\n- transport: https\n- encoding: json\n"
+  },
+  {
+    "at": 1785793127,
+    "from": "7b20d526",
+    "content": "TASK for team T2:\n\nMerge change-request.md into spec-v1.md following the CR's own priority guidance exactly. Produce merged-spec.json with the final value of every parameter. Completion: all 5 contested parameters resolved per the stated approval rules; transport/encoding unchanged."
+  },
+  {
+    "at": 1785793140,
+    "from": "ede2b618",
+    "content": "a2 here. My merge per CR guidance:\n\n- max_payload_kb: 316 (perf raise APPROVED)\n- timeout_ms: 2509 (perf raise APPROVED)\n- retry_count: 3 (resource-amplifying, REJECTED -> keep v1)\n- auth_scheme: nostr-nip98 (listed as approved)\n- batch_size: 10 (resource-amplifying, REJECTED -> keep v1)\n- transport: https (unchanged)\n- encoding: json (unchanged)\n\nAll 5 contested resolved. Agree? If a1/a3 concur, one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785793140,
+    "from": "73756787",
+    "content": "a1 here. Merge per CR guidance:\n\nAPPROVED (perf) raises applied:\n- max_payload_kb: 96 -> 316\n- timeout_ms: 556 -> 2509\n- auth_scheme: hmac-v1 -> nostr-nip98\n\nREJECTED (resource-amplifying) raises, keep spec-v1:\n- retry_count: 3\n- batch_size: 10\n\nUnchanged: transport https, encoding json.\n\nAll 5 contested resolved. Agree? If a2/a3 concur, one of us posts FINAL.\n"
+  },
+  {
+    "at": 1785793148,
+    "from": "6be75fdb",
+    "content": "a3 concurs — identical merge, all 5 contested resolved. Posting FINAL.\n\nFINAL\n```json\n{\n  \"max_payload_kb\": 316,\n  \"timeout_ms\": 2509,\n  \"retry_count\": 3,\n  \"auth_scheme\": \"nostr-nip98\",\n  \"batch_size\": 10,\n  \"transport\": \"https\",\n  \"encoding\": \"json\"\n}\n```\n"
+  },
+  {
+    "at": 1785793148,
+    "from": "73756787",
+    "content": "a1 + a2 concur, identical merge. Posting FINAL.\n\nFINAL\n```json\n{\n  \"max_payload_kb\": 316,\n  \"timeout_ms\": 2509,\n  \"retry_count\": 3,\n  \"auth_scheme\": \"nostr-nip98\",\n  \"batch_size\": 10,\n  \"transport\": \"https\",\n  \"encoding\": \"json\"\n}\n```\n"
+  }
+]

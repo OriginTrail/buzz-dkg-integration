@@ -1,0 +1,28 @@
+{
+  "conflicts": [
+    {
+      "service": "quote-engine",
+      "field": "version",
+      "winning_value": "3.7.8",
+      "winning_note": "N3"
+    },
+    {
+      "service": "event-router",
+      "field": "owner",
+      "winning_value": "ana",
+      "winning_note": "N3"
+    },
+    {
+      "service": "schema-registry",
+      "field": "version",
+      "winning_value": "2.4.1",
+      "winning_note": "N3"
+    },
+    {
+      "service": "rate-limiter",
+      "field": "version",
+      "winning_value": "2.5.2",
+      "winning_note": "N3"
+    }
+  ]
+}

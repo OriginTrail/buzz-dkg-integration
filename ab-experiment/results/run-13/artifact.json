@@ -1,0 +1,9 @@
+{
+  "order": [
+    "auth-gateway",
+    "ledger-sync",
+    "event-router",
+    "rate-limiter",
+    "schema-registry"
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "defects": [
+    {
+      "file": "merge.js",
+      "line": 4,
+      "kind": "logic-inversion",
+      "fix": "remove .reverse(); iterate maps in order so later sources win via Object.assign"
+    },
+    {
+      "file": "pager.js",
+      "line": 14,
+      "kind": "off-by-one",
+      "fix": "Math.ceil(total / n) to include the partial final page"
+    },
+    {
+      "file": "window.js",
+      "line": 4,
+      "kind": "off-by-one",
+      "fix": "loop condition i + w <= series.length to include the final window"
+    },
+    {
+      "file": "window.js",
+      "line": 16,
+      "kind": "missing-await",
+      "fix": "const r = await src.fetch()"
+    }
+  ]
+}

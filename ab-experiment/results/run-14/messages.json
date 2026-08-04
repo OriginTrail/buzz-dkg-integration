@@ -1,0 +1,57 @@
+[
+  {
+    "at": 1785793491,
+    "from": "7b20d526",
+    "content": "📄 doc-2.md\n\n# Integration memo 2\n\nevent-router pins the wire format of schema-registry; therefore event-router must be upgraded strictly before schema-registry.\n\nUnrelated context: rate-limiter and auth-gateway share a dashboard. ana owns the rollout ticket.\n"
+  },
+  {
+    "at": 1785793491,
+    "from": "7b20d526",
+    "content": "📄 doc-1.md\n\n# Integration memo 1\n\nbatch-indexer consumes the schema published by event-router; therefore batch-indexer must be upgraded strictly before event-router.\n\nUnrelated context: quote-engine and rate-limiter share a dashboard. eva owns the rollout ticket.\n"
+  },
+  {
+    "at": 1785793492,
+    "from": "7b20d526",
+    "content": "📄 doc-4.md\n\n# Integration memo 4\n\nschema-registry consumes the schema published by doc-store; therefore schema-registry must be upgraded strictly before doc-store.\n\nUnrelated context: event-router and auth-gateway share a dashboard. darko owns the rollout ticket.\n"
+  },
+  {
+    "at": 1785793492,
+    "from": "7b20d526",
+    "content": "📄 doc-3.md\n\n# Integration memo 3\n\ndoc-store issues the tokens verified by quote-engine; therefore doc-store must be upgraded strictly before quote-engine.\n\nUnrelated context: schema-registry and rate-limiter share a dashboard. bojan owns the rollout ticket.\n"
+  },
+  {
+    "at": 1785793509,
+    "from": "7b20d526",
+    "content": "TASK for team T2:\n\nThe memos jointly determine a UNIQUE safe upgrade order for 5 services (batch-indexer, schema-registry, quote-engine, event-router, doc-store). Produce order.json: {\"order\":[...]} — every claim must cite its memo. Completion: order matches the hidden chain; the dependency validator must report zero violated edges."
+  },
+  {
+    "at": 1785793523,
+    "from": "6b5d3ece",
+    "content": "a3 here. Chain from memos:\nbatch-indexer→event-router (m1), event-router→schema-registry (m2), schema-registry→doc-store (m4), doc-store→quote-engine (m3).\n\nUnique order: batch-indexer, event-router, schema-registry, doc-store, quote-engine. \"share a dashboard\"/owner lines are noise. Agree? One of us posts FINAL.\n"
+  },
+  {
+    "at": 1785793525,
+    "from": "2dcd1d7f",
+    "content": "a2 here. Edges (X before Y):\n- doc-1: batch-indexer < event-router\n- doc-2: event-router < schema-registry\n- doc-4: schema-registry < doc-store\n- doc-3: doc-store < quote-engine\n\nSingle chain => unique order:\nbatch-indexer, event-router, schema-registry, doc-store, quote-engine\n\nDashboard/owner lines are distractors. Agree? One of us posts FINAL.\n"
+  },
+  {
+    "at": 1785793527,
+    "from": "e1f3be79",
+    "content": "a1 here. Chain from the 4 memos (each \"X before Y\"):\n\n- doc-1: batch-indexer -> event-router\n- doc-2: event-router -> schema-registry\n- doc-4: schema-registry -> doc-store\n- doc-3: doc-store -> quote-engine\n\nUnique topological order:\nbatch-indexer, event-router, schema-registry, doc-store, quote-engine\n\nDashboard/owner lines are noise. Please verify; if two agree I will post FINAL.\n"
+  },
+  {
+    "at": 1785793528,
+    "from": "2dcd1d7f",
+    "content": "a2 here. Edges from memos:\n- batch-indexer → event-router (doc-1)\n- event-router → schema-registry (doc-2)\n- schema-registry → doc-store (doc-4)\n- doc-store → quote-engine (doc-3)\n\nUnique topological order:\nbatch-indexer, event-router, schema-registry, doc-store, quote-engine\n\nThe \"unrelated context / dashboard / owner\" lines are distractors. Agree? One of us posts FINAL.\n"
+  },
+  {
+    "at": 1785793533,
+    "from": "6b5d3ece",
+    "content": "a3: verified, agree with a1. Edges (X before Y): doc-1 batch-indexer→event-router; doc-2 event-router→schema-registry; doc-4 schema-registry→doc-store; doc-3 doc-store→quote-engine. Unique chain: batch-indexer, event-router, schema-registry, doc-store, quote-engine. Dashboard/owner lines are noise. Two agree — a1, post FINAL."
+  },
+  {
+    "at": 1785793533,
+    "from": "e1f3be79",
+    "content": "a1: confirmed. Same four edges, same single chain. No cycles, unique topo order. Posting FINAL.\n\nFINAL\n```json\n{\"order\":[\"batch-indexer\",\"event-router\",\"schema-registry\",\"doc-store\",\"quote-engine\"]}\n```\n\nCitations: batch-indexer<event-router (memo1), event-router<schema-registry (memo2), schema-registry<doc-store (memo4), doc-store<quote-engine (memo3).\n"
+  }
+]

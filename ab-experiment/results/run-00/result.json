@@ -1,0 +1,68 @@
+{
+  "run": 0,
+  "manifest": {
+    "run": 0,
+    "team": "PILOT",
+    "slot": 0,
+    "leg": 0,
+    "family": "conflict-notes",
+    "taskId": "pilot-cg",
+    "taskDigest": "pilot-not-preregistered",
+    "regime": "CG",
+    "model": "claude",
+    "teamSize": 3,
+    "maxRounds": 8,
+    "tokenBudgetPerAgent": 200000,
+    "canaryToken": "CANARY-TRANSCRIPT-pilot0000cafe",
+    "canaryPlacement": "transcript",
+    "accountingBoundary": "pilot"
+  },
+  "channelId": "eb7f23ab-d091-4266-ade7-ec8d39ebe275",
+  "subgraph": "exp-r00",
+  "agents": [
+    "13ee027bfeb737589c28165afdd09a30026f6c4a82423d0020f2718587ed39f0",
+    "a0a2e8b1d50a04d414e7158df5a7b91752d9580acba3043c455362904f233a20",
+    "720deb4a9990c4696182371e3becfad9be8a2bf591d2c5b57b18aedeb0a74e01"
+  ],
+  "startedAt": 1785791968,
+  "endedAt": 1785792051,
+  "completed": true,
+  "score": {
+    "pass": true,
+    "detail": {
+      "required": 4,
+      "correct": 4,
+      "invented": 0,
+      "reported": 4
+    }
+  },
+  "leakageInvalid": false,
+  "teamMessages": 3,
+  "tokens": {
+    "perAgent": {
+      "a0a2e8b1d50a04d414e7158df5a7b91752d9580acba3043c455362904f233a20": {
+        "input": 10,
+        "output": 2720,
+        "cachedRead": null,
+        "turns": 2
+      },
+      "13ee027bfeb737589c28165afdd09a30026f6c4a82423d0020f2718587ed39f0": {
+        "input": 8,
+        "output": 2197,
+        "cachedRead": null,
+        "turns": 2
+      },
+      "720deb4a9990c4696182371e3becfad9be8a2bf591d2c5b57b18aedeb0a74e01": {
+        "input": 11,
+        "output": 3686,
+        "cachedRead": null,
+        "turns": 2
+      }
+    },
+    "totals": {
+      "input": 29,
+      "output": 8603
+    },
+    "metricEvents": 6
+  }
+}
