@@ -132,6 +132,31 @@ describe('existing-relay bootstrap reconciliation', () => {
     await expect(bootstrapExistingRelay(h.config, { buzz: h.buzz, dkg })).rejects.toThrow(/not visible/);
   });
 
+  it('rejects a binding conflict before membership, profile, or DKG mutation', async () => {
+    const h = harness();
+    h.channels.push({ id: channelId, name: h.config.channelName });
+    writeFileSync(
+      h.config.bindingsPath,
+      `${JSON.stringify([
+        {
+          channelId,
+          contextGraphId: 'different-context-graph',
+          promoters: [ownerPubkey],
+        },
+      ])}\n`,
+    );
+
+    await expect(
+      bootstrapExistingRelay(h.config, { buzz: h.buzz, dkg: h.dkg }),
+    ).rejects.toThrow(/already bound/);
+    expect(h.calls).toEqual({
+      createChannel: 0,
+      addBot: 0,
+      publishProfile: 0,
+      createGraph: 0,
+    });
+  });
+
   it('rejects an invalid Context Graph access policy before side effects', () => {
     const runtimeDir = mkdtempSync(join(tmpdir(), 'bdi-existing-config-'));
     const tokenPath = join(runtimeDir, 'auth.token');

@@ -1,29 +1,31 @@
 #!/usr/bin/env node
 
-import { createHash, randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { getPublicKey } from 'nostr-tools/pure';
 import { nip19 } from 'nostr-tools';
 import { DkgApiClient } from '../src/dkg/http.mjs';
+import {
+  bindingMappingKey,
+  defaultContextGraphId,
+  mergeBinding,
+  parseBindingArray,
+  parseTokenFile,
+  readJsonFile,
+  reconcileResolvedBootstrap,
+  validateContextGraphId,
+} from './bootstrap/core.mjs';
+
+export { bindingMappingKey, defaultContextGraphId, mergeBinding, parseTokenFile };
 
 const execFileAsync = promisify(execFile);
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const REPO_ROOT = dirname(dirname(SCRIPT_PATH));
 const HEX_64 = /^[0-9a-f]{64}$/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const CG_ID = /^[\w:/.@-]+$/u;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 let redactionValues = [];
@@ -103,16 +105,6 @@ function pathFrom(value, fallback) {
   return resolve(process.cwd(), value || fallback);
 }
 
-export function parseTokenFile(raw) {
-  const token = String(raw)
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith('#'))
-    .pop();
-  if (!token) fail('DKG token file contains no token');
-  return token;
-}
-
 function secretBytes(raw, envName) {
   const value = required(raw, envName);
   if (HEX_64.test(value)) return Uint8Array.from(Buffer.from(value, 'hex'));
@@ -131,22 +123,6 @@ export function publicKeyFromSecret(raw, envName = 'secret key') {
   return getPublicKey(secretBytes(raw, envName)).toLowerCase();
 }
 
-function normalizePublicKey(raw, label) {
-  const value = required(raw, label);
-  if (HEX_64.test(value)) return value.toLowerCase();
-  if (value.startsWith('npub1')) {
-    try {
-      const decoded = nip19.decode(value);
-      if (decoded.type === 'npub' && typeof decoded.data === 'string') {
-        return decoded.data.toLowerCase();
-      }
-    } catch {
-      // Fall through to the value-free error below.
-    }
-  }
-  fail(`${label} must be a 64-character hex key or npub`);
-}
-
 function validateHttpUrl(raw, name) {
   let url;
   try {
@@ -156,108 +132,6 @@ function validateHttpUrl(raw, name) {
   }
   if (!['http:', 'https:'].includes(url.protocol)) fail(`${name} must use http or https`);
   return url.toString().replace(/\/$/, '');
-}
-
-export function normalizeRelayOrigin(raw) {
-  const url = new URL(validateHttpUrl(raw, 'Buzz relay URL'));
-  return url.origin.toLowerCase();
-}
-
-export function bindingMappingKey(relayUrl, channelId) {
-  if (!UUID.test(channelId)) fail('Buzz channel ID is not a UUID');
-  return createHash('sha256')
-    .update('buzz-dkg-binding-v1')
-    .update('\0')
-    .update(normalizeRelayOrigin(relayUrl))
-    .update('\0')
-    .update(channelId.toLowerCase())
-    .digest('hex');
-}
-
-export function defaultContextGraphId(relayUrl, channelId) {
-  return `buzz-${bindingMappingKey(relayUrl, channelId)}`;
-}
-
-function validateContextGraphId(value) {
-  const id = required(value, 'context graph ID');
-  if (id.length > 256 || !CG_ID.test(id) || id.split('/').some((part) => part.startsWith('_'))) {
-    fail('context graph ID is not valid for DKG v10');
-  }
-  return id;
-}
-
-function readJsonIfPresent(path, label) {
-  if (!existsSync(path)) return null;
-  try {
-    return JSON.parse(readFileSync(path, 'utf8'));
-  } catch {
-    fail(`${label} is not valid JSON: ${path}`);
-  }
-}
-
-function atomicWriteJson(path, value) {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temp = join(dirname(path), `.${randomBytes(8).toString('hex')}.${process.pid}.tmp`);
-  try {
-    writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-      flag: 'wx',
-    });
-    renameSync(temp, path);
-    chmodSync(path, 0o600);
-  } catch (error) {
-    try {
-      if (existsSync(temp)) unlinkSync(temp);
-    } catch {
-      // Preserve the original write failure.
-    }
-    throw error;
-  }
-}
-
-function validateBinding(binding, index) {
-  if (!binding || typeof binding !== 'object') fail(`bindings[${index}] must be an object`);
-  const channelId = required(binding.channelId, `bindings[${index}].channelId`);
-  if (!UUID.test(channelId)) fail(`bindings[${index}].channelId is not a UUID`);
-  const contextGraphId = validateContextGraphId(binding.contextGraphId);
-  const promoters = Array.isArray(binding.promoters) ? binding.promoters : [];
-  return {
-    channelId: channelId.toLowerCase(),
-    contextGraphId,
-    promoters: [
-      ...new Set(
-        promoters.map((pubkey, promoterIndex) =>
-          normalizePublicKey(pubkey, `bindings[${index}].promoters[${promoterIndex}]`),
-        ),
-      ),
-    ].sort(),
-  };
-}
-
-export function mergeBinding(rawBindings, desired) {
-  if (!Array.isArray(rawBindings)) fail('bindings file must contain a JSON array');
-  const normalized = rawBindings.map(validateBinding);
-  const seen = new Set();
-  for (const binding of normalized) {
-    if (seen.has(binding.channelId))
-      fail(`bindings file has duplicate channel ${binding.channelId}`);
-    seen.add(binding.channelId);
-    if (
-      binding.contextGraphId === desired.contextGraphId &&
-      binding.channelId !== desired.channelId
-    ) {
-      fail(`context graph '${desired.contextGraphId}' is already bound to another channel`);
-    }
-  }
-
-  const index = normalized.findIndex((binding) => binding.channelId === desired.channelId);
-  if (index >= 0 && normalized[index].contextGraphId !== desired.contextGraphId) {
-    fail(`channel '${desired.channelId}' is already bound to a different context graph`);
-  }
-  if (index >= 0) normalized[index] = validateBinding(desired, index);
-  else normalized.push(validateBinding(desired, normalized.length));
-  return normalized;
 }
 
 function loadConfig(options, env = process.env) {
@@ -559,22 +433,6 @@ async function ensureMembership(buzz, channelId, servicePubkey) {
   return 'added';
 }
 
-async function ensureContextGraph(dkg, contextGraphId, config) {
-  await dkg.status();
-  const before = await dkg.exists(contextGraphId);
-  if (before?.exists === true) return 'existing';
-  if (before?.exists !== false)
-    fail('DKG context graph existence probe returned an unexpected shape');
-  try {
-    await dkg.create(contextGraphId, config);
-  } catch (error) {
-    if (error?.status !== 409) throw error;
-  }
-  const after = await dkg.exists(contextGraphId);
-  if (after?.exists !== true) fail('DKG context graph create was not visible on read-back');
-  return 'created';
-}
-
 function validatePriorState(state, desired) {
   if (!state) return;
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
@@ -596,21 +454,13 @@ function validatePriorState(state, desired) {
 
 export async function bootstrap(config, dependencies = {}) {
   mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
-  const priorState = readJsonIfPresent(config.statePath, 'bootstrap state');
+  const priorState = readJsonFile(config.statePath, 'bootstrap state');
   validatePriorState(priorState, config);
-  const oldBindings = readJsonIfPresent(config.bindingsPath, 'bindings file') ?? [];
-  if (!Array.isArray(oldBindings)) fail('bindings file must contain a JSON array');
+  const oldBindings = readJsonFile(config.bindingsPath, 'bindings file') ?? [];
   // Validate the complete existing file before making any external mutation.
   // mergeBinding performs the duplicate-channel check; a harmless sentinel
   // binding is not needed because validation itself is sufficient here.
-  const normalizedOldBindings = oldBindings.map(validateBinding);
-  const seenChannels = new Set();
-  for (const binding of normalizedOldBindings) {
-    if (seenChannels.has(binding.channelId)) {
-      fail(`bindings file has duplicate channel ${binding.channelId}`);
-    }
-    seenChannels.add(binding.channelId);
-  }
+  const normalizedOldBindings = parseBindingArray(oldBindings, { strict: true });
 
   const buzz = dependencies.buzz ?? new BuzzCli(config);
   const dkg = dependencies.dkg ?? new DkgHttp(config);
@@ -645,17 +495,6 @@ export async function bootstrap(config, dependencies = {}) {
     contextGraphId,
     promoters: [...config.promoterPubkeys].sort(),
   };
-  // Detect an imported-binding conflict before adding the service or creating
-  // a graph. The returned value is committed only after both read-backs pass.
-  const bindings = mergeBinding(oldBindings, desiredBinding);
-  const membershipAction = await ensureMembership(buzz, channelId, config.servicePubkey);
-  const contextGraphAction = await ensureContextGraph(dkg, contextGraphId, {
-    ...config,
-    channelId,
-  });
-
-  atomicWriteJson(config.bindingsPath, bindings);
-
   const publicState = {
     channelId,
     contextGraphId,
@@ -663,7 +502,16 @@ export async function bootstrap(config, dependencies = {}) {
     servicePubkey: config.servicePubkey,
     promoterPubkeys: [...config.promoterPubkeys].sort(),
   };
-  atomicWriteJson(config.statePath, publicState);
+  const actions = await reconcileResolvedBootstrap({
+    statePath: config.statePath,
+    bindingsPath: config.bindingsPath,
+    binding: desiredBinding,
+    provisionalState: publicState,
+    completeState: publicState,
+    ensureMembership: () => ensureMembership(buzz, channelId, config.servicePubkey),
+    dkg,
+    graphConfig: { ...config, channelId },
+  });
 
   return {
     ok: true,
@@ -672,8 +520,8 @@ export async function bootstrap(config, dependencies = {}) {
     statePath: config.statePath,
     actions: {
       channel: channel.action,
-      serviceMembership: membershipAction,
-      contextGraph: contextGraphAction,
+      serviceMembership: actions.serviceMembership,
+      contextGraph: actions.contextGraph,
       bindings: 'written',
     },
   };
