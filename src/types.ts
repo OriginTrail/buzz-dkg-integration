@@ -78,11 +78,15 @@ export interface EvidenceRecord {
 
 export type PublishMode = 'disabled' | 'devnet' | 'mainnet';
 
+/** Normalized, non-empty labels Buzz may render for a service mention. */
+export type MentionLabels = readonly [string, ...string[]];
+
 export interface DaemonConfig {
   relayHttpUrl: string;
   relayWsUrl: string;
   serviceSecretKeyHex: string;
-  mentionHandle: string; // e.g. "dkg" — matched as @<handle> in kind-9 content
+  /** Non-empty labels Buzz may render when the service is selected as a mention. */
+  mentionLabels: MentionLabels;
   dkgApiUrl: string;
   dkgToken: string;
   approvalEmoji: string;

@@ -9,6 +9,7 @@ import { getPublicKey } from 'nostr-tools/pure';
 import { nip19 } from 'nostr-tools';
 import { DkgClient } from '../src/dkg/http.mjs';
 import {
+  assertContextGraphBindingAvailable,
   bindingMappingKey,
   defaultContextGraphId,
   mergeBinding,
@@ -482,7 +483,33 @@ export async function bootstrap(config, dependencies = {}) {
   // binding is not needed because validation itself is sufficient here.
   const normalizedOldBindings = parseBindingArray(oldBindings, { strict: true });
 
+  const requestedId = config.requestedContextGraphId
+    ? validateContextGraphId(config.requestedContextGraphId)
+    : null;
+  const stateId = priorState?.contextGraphId
+    ? validateContextGraphId(priorState.contextGraphId)
+    : null;
+  if (requestedId && stateId && requestedId !== stateId) {
+    fail('requested context graph conflicts with bootstrap state');
+  }
+
   const buzz = dependencies.buzz ?? new BuzzCli(config);
+  let preflightChannelId = priorState?.channelId || null;
+  if (!preflightChannelId) {
+    const matches = await buzz.searchExact(config.channelName, true);
+    if (!Array.isArray(matches)) fail('Buzz channel search returned an unexpected shape');
+    if (matches.length > 1) {
+      fail(`more than one Buzz channel is named '${config.channelName}'; refusing an ambiguous bind`);
+    }
+    preflightChannelId = matches[0]?.channel_id?.toLowerCase() || null;
+  }
+  if (requestedId || stateId) {
+    assertContextGraphBindingAvailable(
+      normalizedOldBindings,
+      stateId || requestedId,
+      preflightChannelId,
+    );
+  }
   const dkg =
     dependencies.dkg ??
     new DkgClient({
@@ -494,15 +521,6 @@ export async function bootstrap(config, dependencies = {}) {
   const channelId = channel.channelId;
   const existingBinding = normalizedOldBindings.find((binding) => binding.channelId === channelId);
 
-  const requestedId = config.requestedContextGraphId
-    ? validateContextGraphId(config.requestedContextGraphId)
-    : null;
-  const stateId = priorState?.contextGraphId
-    ? validateContextGraphId(priorState.contextGraphId)
-    : null;
-  if (requestedId && stateId && requestedId !== stateId) {
-    fail('requested context graph conflicts with bootstrap state');
-  }
   if (existingBinding && stateId && existingBinding.contextGraphId !== stateId) {
     fail('bindings file conflicts with bootstrap state');
   }
@@ -513,6 +531,7 @@ export async function bootstrap(config, dependencies = {}) {
   const contextGraphId = validateContextGraphId(
     stateId ||
       existingBinding?.contextGraphId ||
+      requestedId ||
       defaultContextGraphId(config.buzzHttp, channelId),
   );
   const desiredBinding = {
