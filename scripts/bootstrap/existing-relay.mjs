@@ -162,7 +162,7 @@ function hasBotMembership(event, servicePubkey) {
       (tag) =>
         tag[0] === 'p' &&
         String(tag[1]).toLowerCase() === servicePubkey &&
-        String(tag[2]).toLowerCase() === 'bot',
+        String(tag[3] || tag[2]).toLowerCase() === 'bot',
     ),
   );
 }
