@@ -176,6 +176,20 @@ export function mergeBinding(rawBindings, desired) {
   return normalized;
 }
 
+/** Reject a requested/prior graph collision before a profile creates a channel. */
+export function assertContextGraphBindingAvailable(rawBindings, contextGraphId, channelId = null) {
+  const normalized = parseBindingArray(rawBindings, { strict: true });
+  const graphId = validateContextGraphId(contextGraphId);
+  const allowedChannel = channelId ? String(channelId).toLowerCase() : null;
+  const conflict = normalized.find(
+    (binding) =>
+      binding.contextGraphId === graphId && binding.channelId !== allowedChannel,
+  );
+  if (conflict) {
+    throw new Error(`context graph '${graphId}' is already bound to another channel`);
+  }
+}
+
 async function ensureContextGraph(dkg, contextGraphId, graphPayload) {
   await dkg.status();
   const before = await dkg.contextGraphExists(contextGraphId);

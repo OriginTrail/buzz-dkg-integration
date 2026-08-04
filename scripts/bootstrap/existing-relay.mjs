@@ -4,6 +4,7 @@ import { getPublicKey } from 'nostr-tools/pure';
 import { BuzzClient } from '../../phase0/bridge/lib/nostr.mjs';
 import { DkgClient } from '../../src/dkg/http.mjs';
 import {
+  assertContextGraphBindingAvailable,
   defaultContextGraphId,
   parseTokenFile,
   readJsonFile,
@@ -44,6 +45,7 @@ export class ExistingRelayBuzzAdapter {
       .map((event) => ({
         id: event.tags.find((tag) => tag[0] === 'd')?.[1],
         name: event.tags.find((tag) => tag[0] === 'name')?.[1],
+        visibility: event.tags.find((tag) => tag[0] === 'visibility')?.[1],
       }))
       .filter((channel) => channel.name === name && UUID.test(channel.id || ''));
   }
@@ -55,6 +57,7 @@ export class ExistingRelayBuzzAdapter {
     return {
       id: event.tags.find((tag) => tag[0] === 'd')?.[1],
       name: event.tags.find((tag) => tag[0] === 'name')?.[1],
+      visibility: event.tags.find((tag) => tag[0] === 'visibility')?.[1],
     };
   }
 
@@ -100,11 +103,15 @@ async function ensureChannel(config, buzz, prior) {
     const channel = await buzz.getChannel(prior.channelId);
     if (!channel) throw new Error(`bootstrap channel ${prior.channelId} no longer exists`);
     if (channel.name !== config.channelName) throw new Error('bootstrap channel name drift detected');
+    ensureChannelVisibility(config, channel);
     return { channelId: prior.channelId.toLowerCase(), action: 'existing' };
   }
   const matches = await buzz.findChannels(config.channelName);
   if (matches.length > 1) throw new Error(`multiple Buzz channels are named '${config.channelName}'`);
-  if (matches.length === 1) return { channelId: matches[0].id.toLowerCase(), action: 'existing' };
+  if (matches.length === 1) {
+    ensureChannelVisibility(config, matches[0]);
+    return { channelId: matches[0].id.toLowerCase(), action: 'existing' };
+  }
   accepted(await buzz.createChannel(config), 'Buzz channel create');
   const discovered = await poll('relay-assigned channel metadata', async () => {
     const found = await buzz.findChannels(config.channelName);
@@ -112,6 +119,15 @@ async function ensureChannel(config, buzz, prior) {
     return found[0] || null;
   });
   return { channelId: discovered.id.toLowerCase(), action: 'created' };
+}
+
+function ensureChannelVisibility(config, channel) {
+  const actual = channel.visibility === 'public' ? 'open' : channel.visibility;
+  if (actual !== config.channelVisibility) {
+    throw new Error(
+      `existing Buzz channel has visibility '${actual || 'unknown'}', expected '${config.channelVisibility}'`,
+    );
+  }
 }
 
 function hasBotMembership(event, servicePubkey) {
@@ -163,6 +179,18 @@ export async function bootstrapExistingRelay(config, dependencies = {}) {
   const prior = readJsonFile(config.statePath, 'bootstrap state');
   if (prior?.ownerPubkey && prior.ownerPubkey !== config.ownerPubkey) throw new Error('owner identity drift detected');
   if (prior?.servicePubkey && prior.servicePubkey !== config.servicePubkey) throw new Error('service identity drift detected');
+  if (prior?.contextGraphId && config.requestedContextGraphId && prior.contextGraphId !== config.requestedContextGraphId) {
+    throw new Error('requested Context Graph conflicts with bootstrap state');
+  }
+  const existingBindings = readJsonFile(config.bindingsPath, 'bindings file') ?? [];
+  const preselectedContextGraphId = prior?.contextGraphId || config.requestedContextGraphId;
+  if (preselectedContextGraphId) {
+    assertContextGraphBindingAvailable(
+      existingBindings,
+      preselectedContextGraphId,
+      prior?.channelId,
+    );
+  }
   const buzz = dependencies.buzz ?? new ExistingRelayBuzzAdapter(config);
   const dkg = dependencies.dkg ?? new DkgClient({ baseUrl: config.dkgApi, token: config.token });
   const channel = await ensureChannel(config, buzz, prior);
@@ -171,10 +199,6 @@ export async function bootstrapExistingRelay(config, dependencies = {}) {
   const contextGraphId = validateContextGraphId(
     prior?.contextGraphId || config.requestedContextGraphId || derivedId,
   );
-  if (prior?.contextGraphId && config.requestedContextGraphId && prior.contextGraphId !== config.requestedContextGraphId) {
-    throw new Error('requested Context Graph conflicts with bootstrap state');
-  }
-
   const binding = {
     channelId,
     contextGraphId,
