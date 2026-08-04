@@ -56,3 +56,6 @@ jobs:
 
       - name: Check formatting
         run: npm run format:check
+
+      - name: Build installer release bundle
+        run: ./scripts/build-release-bundle.sh linux x64 ci "$RUNNER_TEMP/release"
