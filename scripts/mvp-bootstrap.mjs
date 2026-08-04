@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { getPublicKey } from 'nostr-tools/pure';
 import { nip19 } from 'nostr-tools';
+import { DkgHttpTransport } from '../src/dkg/http.mjs';
 
 const execFileAsync = promisify(execFile);
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -432,44 +433,9 @@ class BuzzCli {
   }
 }
 
-export class DkgHttp {
+export class DkgHttp extends DkgHttpTransport {
   constructor(config) {
-    this.baseUrl = config.dkgApi;
-    this.token = config.dkgToken;
-  }
-
-  async request(method, path, body) {
-    let response;
-    try {
-      response = await fetch(`${this.baseUrl}${path}`, {
-        method,
-        headers: {
-          authorization: `Bearer ${this.token}`,
-          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-        },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
-      });
-    } catch (error) {
-      fail(`dkg ${method} ${path} failed: ${String(error?.message || error)}`);
-    }
-    const text = await response.text();
-    let payload = null;
-    if (text) {
-      try {
-        payload = JSON.parse(text);
-      } catch {
-        payload = { error: 'non-JSON response' };
-      }
-    }
-    if (!response.ok) {
-      const error = new Error(
-        `dkg ${method} ${path} returned ${response.status}: ${JSON.stringify(payload).slice(0, 400)}`,
-      );
-      error.status = response.status;
-      throw error;
-    }
-    return payload;
+    super({ baseUrl: config.dkgApi, token: config.dkgToken, timeoutMs: DEFAULT_TIMEOUT_MS });
   }
 
   status() {
