@@ -1,4 +1,5 @@
 import type { Quad } from '../types.ts';
+import { DkgHttpTransport } from './http.mjs';
 
 /**
  * DKG v10 daemon HTTP adapter — Gate A-verified routes only (docs/audit/dkg-audit.md
@@ -29,57 +30,9 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 /** vm/publish is synchronous on-chain, so it needs a longer ceiling. */
 const PUBLISH_TIMEOUT_MS = 180_000;
 
-export class DkgClient {
-  #base: string;
-  #token: string;
-
+export class DkgClient extends DkgHttpTransport {
   constructor(opts: { baseUrl: string; token: string }) {
-    this.#base = opts.baseUrl.replace(/\/$/, '');
-    this.#token = opts.token;
-  }
-
-  async request<T>(
-    method: string,
-    path: string,
-    body?: unknown,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
-  ): Promise<T> {
-    let res: Response;
-    try {
-      res = await fetch(`${this.#base}${path}`, {
-        method,
-        headers: {
-          ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-          authorization: `Bearer ${this.#token}`,
-        },
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (err) {
-      if ((err as Error).name === 'TimeoutError') {
-        throw new Error(`dkg ${method} ${path} timed out after ${timeoutMs}ms`);
-      }
-      throw err;
-    }
-    const text = await res.text();
-    let json: any;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      json = { raw: text };
-    }
-    if (!res.ok) {
-      const err = new Error(
-        `dkg ${method} ${path} ${res.status}: ${text.slice(0, 400)}`,
-      ) as Error & {
-        status?: number;
-        body?: unknown;
-      };
-      err.status = res.status;
-      err.body = json;
-      throw err;
-    }
-    return json as T;
+    super({ ...opts, timeoutMs: DEFAULT_TIMEOUT_MS });
   }
 
   status(): Promise<{
