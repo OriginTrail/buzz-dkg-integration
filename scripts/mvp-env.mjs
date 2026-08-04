@@ -9,6 +9,36 @@ const REQUIRED_SECRET_NAMES = [
   'BDI_SPIKE_PROMOTER_KEY',
 ];
 
+const SAFE_HOST_ENV_NAMES = new Set([
+  'CI',
+  'COLORTERM',
+  'COREPACK_HOME',
+  'DOCKER_CONFIG',
+  'DOCKER_CONTEXT',
+  'DOCKER_HOST',
+  'FORCE_COLOR',
+  'HOME',
+  'LANG',
+  'LOGNAME',
+  'NO_COLOR',
+  'PATH',
+  'PNPM_HOME',
+  'SHELL',
+  'TERM',
+  'TMP',
+  'TMPDIR',
+  'TEMP',
+  'USER',
+]);
+
+function safeHostEnvironment(processEnv) {
+  return Object.fromEntries(
+    Object.entries(processEnv).filter(
+      ([name]) => SAFE_HOST_ENV_NAMES.has(name) || name.startsWith('LC_'),
+    ),
+  );
+}
+
 function requireSecrets(secrets) {
   for (const name of REQUIRED_SECRET_NAMES) {
     if (!secrets?.[name]) throw new Error(`M0 secrets are missing ${name}`);
@@ -21,7 +51,7 @@ function requireSecrets(secrets) {
  * prevents read/stop paths from accidentally inheriting daemon credentials or
  * publication settings from one all-purpose environment object.
  */
-export function buildMvpEnvironments(input) {
+export function buildBaseMvpEnvironments(input) {
   const {
     processEnv,
     nodePath,
@@ -39,7 +69,7 @@ export function buildMvpEnvironments(input) {
     dkgNodes,
   } = input;
   const base = {
-    ...processEnv,
+    ...safeHostEnvironment(processEnv),
     PATH: nodePath,
     COMPOSE_PROJECT_NAME: project,
     BDI_MVP_STATE_DIR: stateDir,
@@ -60,7 +90,20 @@ export function buildMvpEnvironments(input) {
     DEVNET_OXIGRAPH_SERVER_PORT_6: '7932',
     UI_PORT: '5573',
   };
-  if (!input.secrets) return { base, dkg };
+  return { base, dkg };
+}
+
+export function buildCredentialedMvpEnvironments(input) {
+  const {
+    processEnv,
+    dkgTokenPath,
+    bindingsPath,
+    daemonDbPath,
+    buzzHttp,
+    buzzWs,
+    dkgApi,
+  } = input;
+  const { base, dkg } = buildBaseMvpEnvironments(input);
 
   const secrets = requireSecrets(input.secrets);
   const integration = {

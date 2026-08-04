@@ -1,5 +1,5 @@
 import type { Quad } from '../types.ts';
-import { DkgHttpTransport } from './http.mjs';
+import { DkgApiClient } from './http.mjs';
 
 /**
  * DKG v10 daemon HTTP adapter — Gate A-verified routes only (docs/audit/dkg-audit.md
@@ -30,18 +30,23 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 /** vm/publish is synchronous on-chain, so it needs a longer ceiling. */
 const PUBLISH_TIMEOUT_MS = 180_000;
 
-export class DkgClient extends DkgHttpTransport {
+export class DkgClient extends DkgApiClient {
   constructor(opts: { baseUrl: string; token: string }) {
     super({ ...opts, timeoutMs: DEFAULT_TIMEOUT_MS });
   }
 
-  status(): Promise<{
+  override status(): Promise<{
     version: string;
     chain?: { chainId?: string };
     hasIdentity?: boolean;
     [k: string]: unknown;
   }> {
-    return this.request('GET', '/api/status');
+    return super.status() as Promise<{
+      version: string;
+      chain?: { chainId?: string };
+      hasIdentity?: boolean;
+      [k: string]: unknown;
+    }>;
   }
 
   listContextGraphs(): Promise<{ contextGraphs: { id: string; onChainId?: string }[] }> {
@@ -49,8 +54,8 @@ export class DkgClient extends DkgHttpTransport {
   }
 
   /** Narrow existence probe — the broad list route has a scan budget and can 500 on large nodes. */
-  contextGraphExists(id: string): Promise<{ exists: boolean }> {
-    return this.request('GET', `/api/context-graph/exists?id=${encodeURIComponent(id)}`);
+  override contextGraphExists(id: string): Promise<{ exists: boolean }> {
+    return super.contextGraphExists(id);
   }
 
   createKa(
