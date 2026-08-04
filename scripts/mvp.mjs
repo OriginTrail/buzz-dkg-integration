@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { spawn, spawnSync } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
   closeSync,
@@ -27,6 +27,9 @@ import {
   buildCredentialedMvpEnvironments,
 } from './mvp-env.mjs';
 import { createLifecycleLockManager } from './mvp-lock.mjs';
+import { createDkgDeploymentRecovery } from './mvp-dkg-recovery.mjs';
+import { createMvpDaemonManager } from './mvp-daemon.mjs';
+import { startBuzzDependencies } from './mvp-orchestration.mjs';
 import { DkgClient } from '../src/dkg/http.mjs';
 
 const EXPECTED_DKG_VERSION = '10.0.11';
@@ -129,190 +132,6 @@ function run(command, args, options = {}) {
   return result;
 }
 
-function redactDevnetLine(line) {
-  return line
-    .replace(/(Shared devnet auth token:\s*)\S+/u, '$1<redacted>')
-    .replace(/(Auth token:\s*)\S+/u, '$1<redacted>')
-    .replace(/(Authorization: Bearer\s+)[^'"\s]+/gu, '$1<redacted>');
-}
-
-function snapshotFile(path) {
-  if (!existsSync(path)) return { existed: false };
-  const fileStat = lstatSync(path);
-  if (!fileStat.isFile() || fileStat.isSymbolicLink()) {
-    throw new Error(`refusing to replace non-regular DKG deployment path: ${path}`);
-  }
-  return { existed: true, contents: readFileSync(path), mode: fileStat.mode & 0o777 };
-}
-
-function restoreFile(path, snapshot) {
-  if (snapshot.existed) {
-    atomicWrite(path, snapshot.contents, snapshot.mode);
-    return;
-  }
-  if (!existsSync(path)) return;
-  const fileStat = lstatSync(path);
-  if (!fileStat.isFile() || fileStat.isSymbolicLink()) {
-    throw new Error(`refusing to remove non-regular generated DKG deployment path: ${path}`);
-  }
-  unlinkSync(path);
-}
-
-function readDkgDeploymentRecoveryMeta() {
-  assertControlOwnership();
-  const metaStat = lstatMaybe(dkgDeploymentBackupMetaPath);
-  if (!metaStat) return null;
-  if (!metaStat.isFile() || metaStat.isSymbolicLink()) {
-    throw new Error(`invalid DKG deployment recovery metadata: ${dkgDeploymentBackupMetaPath}`);
-  }
-  let meta;
-  try {
-    meta = JSON.parse(readFileSync(dkgDeploymentBackupMetaPath, 'utf8'));
-  } catch {
-    throw new Error(`invalid DKG deployment recovery metadata: ${dkgDeploymentBackupMetaPath}`);
-  }
-  if (
-    meta.version !== 2 ||
-    meta.path !== dkgDeploymentPath ||
-    typeof meta.existed !== 'boolean' ||
-    !Number.isInteger(meta.ownerPid) ||
-    meta.ownerPid < 1 ||
-    !(meta.childPid === null || (Number.isInteger(meta.childPid) && meta.childPid > 0))
-  ) {
-    throw new Error(`DKG deployment recovery metadata does not match this checkout`);
-  }
-  return meta;
-}
-
-function persistDkgDeploymentSnapshot() {
-  assertStateOwnership();
-  assertControlOwnership();
-  if (existsSync(dkgDeploymentBackupMetaPath)) {
-    throw new Error(`pending DKG deployment recovery exists at ${dkgDeploymentBackupMetaPath}`);
-  }
-  const snapshot = snapshotFile(dkgDeploymentPath);
-  let sha256 = null;
-  if (snapshot.existed) {
-    sha256 = createHash('sha256').update(snapshot.contents).digest('hex');
-    atomicWrite(dkgDeploymentBackupPath, snapshot.contents, 0o600);
-  }
-  atomicWrite(
-    dkgDeploymentBackupMetaPath,
-    `${JSON.stringify({
-      version: 2,
-      path: dkgDeploymentPath,
-      existed: snapshot.existed,
-      mode: snapshot.mode ?? null,
-      sha256,
-      ownerPid: process.pid,
-      childPid: null,
-    })}\n`,
-    0o600,
-  );
-}
-
-function recordDkgDeploymentChild(childPid) {
-  const meta = readDkgDeploymentRecoveryMeta();
-  if (!meta || meta.ownerPid !== process.pid || meta.childPid !== null) {
-    throw new Error('cannot attach the DKG devnet child to its recovery record');
-  }
-  atomicWrite(dkgDeploymentBackupMetaPath, `${JSON.stringify({ ...meta, childPid })}\n`, 0o600);
-}
-
-function recoverPendingDkgDeployment(options = {}) {
-  const meta = readDkgDeploymentRecoveryMeta();
-  if (!meta) return false;
-  assertStateOwnership();
-  const currentOwner = options.currentOwner === true && meta.ownerPid === process.pid;
-  if (!currentOwner && processAlive(meta.ownerPid)) {
-    throw new Error(
-      `DKG deployment snapshot belongs to active launcher PID ${meta.ownerPid}; recovery refused`,
-    );
-  }
-  if (meta.childPid === null && !currentOwner) {
-    throw new Error(
-      'stale DKG recovery has no recorded devnet child PID; recovery is indeterminate and refused',
-    );
-  }
-  const childConfirmedDead =
-    options.completedChildPid !== undefined && options.completedChildPid === meta.childPid;
-  if (meta.childPid !== null && !childConfirmedDead && processAlive(meta.childPid)) {
-    throw new Error(
-      `DKG deployment snapshot belongs to active devnet child PID ${meta.childPid}; recovery refused`,
-    );
-  }
-  let snapshot = { existed: false };
-  if (meta.existed) {
-    const backupStat = lstatMaybe(dkgDeploymentBackupPath);
-    if (!backupStat?.isFile() || backupStat.isSymbolicLink()) {
-      throw new Error(`DKG deployment recovery backup is missing or unsafe`);
-    }
-    const contents = readFileSync(dkgDeploymentBackupPath);
-    const digest = createHash('sha256').update(contents).digest('hex');
-    if (digest !== meta.sha256 || !Number.isInteger(meta.mode)) {
-      throw new Error(`DKG deployment recovery backup failed integrity validation`);
-    }
-    snapshot = { existed: true, contents, mode: meta.mode };
-  }
-  restoreFile(dkgDeploymentPath, snapshot);
-  // Remove metadata first: a crash after this point can leave only an inert
-  // orphan backup, never a recovery record pointing at a missing backup.
-  unlinkSync(dkgDeploymentBackupMetaPath);
-  if (existsSync(dkgDeploymentBackupPath)) unlinkSync(dkgDeploymentBackupPath);
-  console.log('[buzz-dkg] restored the sibling DKG checkout deployment artifact');
-  return true;
-}
-
-/** Stream upstream devnet progress without exposing its generated bearer token. */
-async function runDevnetStart(env) {
-  // The upstream source devnet rewrites this tracked deployment artifact.
-  // Preserve the exact pre-run bytes (including any user diff) and restore them
-  // even when startup fails, keeping the sibling checkout untouched.
-  persistDkgDeploymentSnapshot();
-  let completedChildPid;
-  try {
-    await new Promise((resolveRun, rejectRun) => {
-      const child = spawn(join(dkgRepo, 'scripts', 'devnet.sh'), ['start', String(dkgNodes)], {
-        cwd: dkgRepo,
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      if (child.pid) recordDkgDeploymentChild(child.pid);
-      const forward = (source, destination) => {
-        let buffered = '';
-        source.setEncoding('utf8');
-        source.on('data', (chunk) => {
-          buffered += chunk;
-          const lines = buffered.split('\n');
-          buffered = lines.pop() || '';
-          for (const line of lines) destination.write(`${redactDevnetLine(line)}\n`);
-        });
-        source.on('end', () => {
-          if (buffered) destination.write(redactDevnetLine(buffered));
-        });
-      };
-      forward(child.stdout, process.stdout);
-      forward(child.stderr, process.stderr);
-      child.once('error', (error) =>
-        rejectRun(new Error(`could not start DKG devnet: ${error.message}`)),
-      );
-      child.once('close', (code, signal) => {
-        completedChildPid = child.pid;
-        if (code === 0) resolveRun();
-        else {
-          rejectRun(
-            new Error(
-              `DKG devnet exited with ${signal ? `signal ${signal}` : `status ${code ?? 'unknown'}`}`,
-            ),
-          );
-        }
-      });
-    });
-  } finally {
-    recoverPendingDkgDeployment({ currentOwner: true, completedChildPid });
-  }
-}
-
 function ensureRuntimeVersion() {
   const [major, minor] = process.versions.node.split('.').map(Number);
   const supported = (major === 22 && minor >= 13) || (major === 23 && minor >= 4) || major > 23;
@@ -398,6 +217,19 @@ function processIdentity(pid) {
   return result.status === 0 && result.stdout.trim() ? result.stdout.trim() : null;
 }
 
+const dkgDeploymentRecovery = createDkgDeploymentRecovery({
+  deploymentPath: dkgDeploymentPath,
+  backupPath: dkgDeploymentBackupPath,
+  metadataPath: dkgDeploymentBackupMetaPath,
+  dkgRepo,
+  dkgNodes,
+  processAlive,
+  assertStateOwnership,
+  assertControlOwnership,
+});
+const recoverPendingDkgDeployment = dkgDeploymentRecovery.recover;
+const runDevnetStart = dkgDeploymentRecovery.runDevnetStart;
+
 const lifecycleLock = createLifecycleLockManager({
   lockDir: lifecycleLockDir,
   ownerPath: lifecycleLockOwnerPath,
@@ -405,7 +237,7 @@ const lifecycleLock = createLifecycleLockManager({
   repo,
   processAlive,
   processIdentity,
-  readRecovery: readDkgDeploymentRecoveryMeta,
+  readRecovery: dkgDeploymentRecovery.readMetadata,
   recover: recoverPendingDkgDeployment,
 });
 
@@ -509,25 +341,31 @@ function readSecretsIfPresent() {
 function runtimeEnvironmentInput() {
   const shimDir = ensureNodeShim();
   return {
-    processEnv: process.env,
-    nodePath: `${shimDir}:${process.env.PATH || ''}`,
-    project: PROJECT,
-    stateDir,
-    dkgRepo,
-    dkgDevnetDir,
-    dkgTokenPath,
-    bindingsPath,
-    daemonDbPath,
-    buzzHttp: BUZZ_HTTP,
-    buzzWs: BUZZ_WS,
-    dkgApi: DKG_API,
-    dkgDockerPrefix: DKG_DOCKER_PREFIX,
-    dkgNodes,
+    base: {
+      host: {
+        processEnv: process.env,
+        nodePath: `${shimDir}:${process.env.PATH || ''}`,
+        project: PROJECT,
+        stateDir,
+        dkgRepo,
+      },
+      dkg: { dkgDevnetDir, dkgDockerPrefix: DKG_DOCKER_PREFIX, dkgNodes },
+    },
+    integration: {
+      processEnv: process.env,
+      dkgTokenPath,
+      bindingsPath,
+      daemonDbPath,
+      buzzHttp: BUZZ_HTTP,
+      buzzWs: BUZZ_WS,
+      dkgApi: DKG_API,
+      buzzCli: process.env.BDI_BUZZ_CLI || 'buzz',
+    },
   };
 }
 
 function runtimeBaseEnvironments() {
-  return buildBaseMvpEnvironments(runtimeEnvironmentInput());
+  return buildBaseMvpEnvironments(runtimeEnvironmentInput().base);
 }
 
 function runtimeCredentialedEnvironments(secrets) {
@@ -843,12 +681,6 @@ function ensureDkgBuild(env) {
     throw new Error('DKG runtime build completed without packages/cli/dist/cli.js');
 }
 
-function readPid() {
-  if (!existsSync(daemonPidPath)) return null;
-  const raw = readFileSync(daemonPidPath, 'utf8').trim();
-  return /^\d+$/.test(raw) ? Number(raw) : null;
-}
-
 function processAlive(pid) {
   if (!pid) return false;
   try {
@@ -859,73 +691,21 @@ function processAlive(pid) {
   }
 }
 
-function daemonOwned(pid) {
-  if (!processAlive(pid)) return false;
-  const result = run('ps', ['-p', String(pid), '-o', 'command='], {
-    capture: true,
-    allowFailure: true,
-  });
-  return result.status === 0 && result.stdout.includes(join(repo, 'src', 'index.ts'));
-}
-
-async function startDaemon(env) {
-  const existing = readPid();
-  if (daemonOwned(existing)) {
-    console.log(`[buzz-dkg] integration daemon already running (PID ${existing})`);
-    return;
-  }
-  if (processAlive(existing)) {
-    throw new Error(
-      `daemon PID file points to unrelated live PID ${existing}; refusing to replace it`,
-    );
-  }
-  rmSync(daemonPidPath, { force: true });
-  if (!existsSync(bindingsPath)) throw new Error(`bootstrap did not create ${bindingsPath}`);
-  const offset = existsSync(daemonLogPath) ? statSync(daemonLogPath).size : 0;
-  const fd = openSync(daemonLogPath, 'a', 0o600);
-  const child = spawn(
-    process.execPath,
-    ['--experimental-strip-types', join(repo, 'src', 'index.ts')],
-    { cwd: repo, env, detached: true, stdio: ['ignore', fd, fd] },
-  );
-  closeSync(fd);
-  child.unref();
-  if (!child.pid) throw new Error('integration daemon did not return a PID');
-  atomicWrite(daemonPidPath, `${child.pid}\n`, 0o600);
-  await waitUntil(
-    'integration daemon',
-    () => {
-      if (!processAlive(child.pid)) {
-        const tail = tailText(daemonLogPath, 8).join('\n');
-        throw new Error(`daemon exited during startup${tail ? `; see ${daemonLogPath}` : ''}`);
-      }
-      const appended = readFileSync(daemonLogPath, 'utf8').slice(offset);
-      return appended.includes('"message":"daemon started"');
-    },
-    30_000,
-    250,
-  );
-  console.log(`[buzz-dkg] integration daemon ready (PID ${child.pid}, publish mode disabled)`);
-}
-
-async function stopDaemon() {
-  const pid = readPid();
-  if (!pid) return;
-  if (!processAlive(pid)) {
-    rmSync(daemonPidPath, { force: true });
-    return;
-  }
-  if (!daemonOwned(pid)) {
-    throw new Error(`refusing to stop unrelated PID ${pid} from ${daemonPidPath}`);
-  }
-  process.kill(pid, 'SIGTERM');
-  const deadline = Date.now() + 10_000;
-  while (processAlive(pid) && Date.now() < deadline) {
-    await new Promise((resolveWait) => setTimeout(resolveWait, 200));
-  }
-  if (processAlive(pid) && daemonOwned(pid)) process.kill(pid, 'SIGKILL');
-  rmSync(daemonPidPath, { force: true });
-}
+const daemonManager = createMvpDaemonManager({
+  repo,
+  pidPath: daemonPidPath,
+  logPath: daemonLogPath,
+  bindingsPath,
+  processAlive,
+  run,
+  atomicWrite,
+  waitUntil,
+  tailText,
+});
+const readPid = daemonManager.readPid;
+const daemonOwned = daemonManager.daemonOwned;
+const startDaemon = daemonManager.start;
+const stopDaemon = daemonManager.stop;
 
 async function up() {
   ensureRuntimeVersion();
@@ -938,15 +718,16 @@ async function up() {
   await preflightPorts(dkgOwned);
   claimDkgState();
 
-  // Finish all local runtime preparation before the first service mutation.
-  // A native dependency/build failure must not leave a partial Compose stack.
-  ensureDkgBuild(env.dkg);
-
-  console.log('[buzz-dkg] starting isolated Buzz dependencies on 127.0.0.1:9440');
-  run('docker', composeArgs('up', '-d', 'postgres', 'redis', 'minio', 'minio-init', 'relay'), {
-    env: env.compose,
+  await startBuzzDependencies({
+    prepareDkg: () => ensureDkgBuild(env.dkg),
+    startBuzz: () => {
+      console.log('[buzz-dkg] starting isolated Buzz dependencies on 127.0.0.1:9440');
+      run('docker', composeArgs('up', '-d', 'postgres', 'redis', 'minio', 'minio-init', 'relay'), {
+        env: env.compose,
+      });
+    },
+    waitForBuzz: () => waitUntil('Buzz relay', () => tcpOpen(9440), 150_000),
   });
-  await waitUntil('Buzz relay', () => tcpOpen(9440), 150_000);
 
   let status;
   if (await tcpOpen(9420)) {
