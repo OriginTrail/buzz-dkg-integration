@@ -1,0 +1,50 @@
+name: Release installer bundle
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+          cache: npm
+      - name: Build release bundle
+        run: ./scripts/build-release-bundle.sh linux ${{ matrix.arch }} "${GITHUB_REF_NAME#v}" "$RUNNER_TEMP/release"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: buzz-dkg-linux-${{ matrix.arch }}
+          path: ${{ runner.temp }}/release/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: buzz-dkg-linux-*
+          path: ${{ runner.temp }}/release
+          merge-multiple: true
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          install.sh
+          "$RUNNER_TEMP"/release/*
+          --repo "$GITHUB_REPOSITORY"
+          --generate-notes
+          --verify-tag

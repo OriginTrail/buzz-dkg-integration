@@ -103,6 +103,52 @@ path — is off-chain and free.
 
 Node docs: [OriginTrail/dkg](https://github.com/OriginTrail/dkg).
 
+## Buzz-first installer preview
+
+The Beta V1a installer starts from a Buzz Relay that is already serving a
+community. On a supported Linux relay host, a tagged release is installed and
+started with one command:
+
+```bash
+curl -fsSL https://github.com/OriginTrail/buzz-dkg-integration/releases/latest/download/install.sh | sudo sh
+```
+
+The bootstrap detects `linux/x64` or `linux/arm64`, downloads the corresponding
+versioned bundle and checksum, verifies it, atomically activates the CLI under
+`/usr/local/bin/buzz-dkg`, and reconnects the guided installer to `/dev/tty`.
+The CLI remains available after setup:
+
+```bash
+sudo buzz-dkg plan
+sudo buzz-dkg status
+sudo buzz-dkg logs
+sudo buzz-dkg smoke
+sudo buzz-dkg remove
+```
+
+The guided installer discovers common containerized Buzz Relay deployments or
+accepts `--relay wss://community.example.com`. It validates and adopts that
+endpoint without replacing the relay process, database, identity, domain, or
+TLS configuration. It then reuses a compatible DKG node on `127.0.0.1:9200`,
+or invokes the supported DKG npm installer and setup wizard for an Edge
+(default) or Core node. Finally it creates the managed Web of Trust channel and
+Context Graph, starts the integration sidecar with Verifiable Memory disabled,
+and runs an end-to-end smoke check.
+
+For automation or a relay that cannot be inferred from its container metadata:
+
+```bash
+sudo buzz-dkg install \
+  --relay wss://community.example.com \
+  --dkg-role edge
+```
+
+`remove` stops only the integration sidecar. It does not delete Buzz history,
+integration state, DKG state, or an operator-managed node. Release bundles pin
+their own Node runtime; the host does not need Node.js preinstalled. Until the
+first installer tag is published, the `releases/latest/download` URL above is
+expected to return 404.
+
 ## Local one-command M0
 
 The M0 launcher packages a pinned Buzz relay, an isolated one-node DKG 10.0.11
