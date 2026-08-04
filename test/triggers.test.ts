@@ -3,7 +3,7 @@ import { classify } from '../src/triggers/detect.ts';
 import { hexId, makeEvent } from './helpers.ts';
 
 const servicePubkey = hexId('svc');
-const opts = { servicePubkey, mentionHandle: 'dkg' };
+const opts = { servicePubkey, mentionLabels: ['DKG Memory', 'dkg'] as const };
 const target = hexId('target');
 
 describe('trigger classification', () => {
@@ -89,6 +89,72 @@ describe('trigger classification', () => {
       type: 'ask',
       question: 'what did we decide about the store backend?',
     });
+  });
+
+  it('classifies the multi-word display name emitted by Buzz mention autocomplete', () => {
+    const t = classify(
+      makeEvent({
+        kind: 9,
+        content: '@DKG Memory distill this please',
+        tags: [
+          ['h', 'chan'],
+          ['p', servicePubkey],
+          ['e', target, '', 'reply'],
+        ],
+      }),
+      opts,
+    );
+    expect(t).toMatchObject({ type: 'distill', channelId: 'chan', targetEventId: target });
+  });
+
+  it('tolerates presentation whitespace inside a multi-word display name', () => {
+    const t = classify(
+      makeEvent({
+        kind: 9,
+        content: '@DKG  Memory distill this please',
+        tags: [
+          ['h', 'chan'],
+          ['p', servicePubkey],
+          ['e', target, '', 'reply'],
+        ],
+      }),
+      opts,
+    );
+    expect(t).toMatchObject({ type: 'distill', channelId: 'chan', targetEventId: target });
+  });
+
+  it('does not treat arbitrary labels as the service even when another p tag mentions it', () => {
+    expect(
+      classify(
+        makeEvent({
+          kind: 9,
+          content: '@someone distill this',
+          tags: [
+            ['h', 'chan'],
+            ['p', servicePubkey],
+            ['e', target, '', 'reply'],
+          ],
+        }),
+        opts,
+      ),
+    ).toBeNull();
+  });
+
+  it('ignores the configured display name when the p tag is not the service', () => {
+    expect(
+      classify(
+        makeEvent({
+          kind: 9,
+          content: '@DKG Memory distill this',
+          tags: [
+            ['h', 'chan'],
+            ['p', hexId('other')],
+            ['e', target, '', 'reply'],
+          ],
+        }),
+        opts,
+      ),
+    ).toBeNull();
   });
 
   it('ignores mentions without a p tag for the service (client-side handle collisions)', () => {
