@@ -432,7 +432,7 @@ class BuzzCli {
   }
 }
 
-class DkgHttp {
+export class DkgHttp {
   constructor(config) {
     this.baseUrl = config.dkgApi;
     this.token = config.dkgToken;
@@ -484,15 +484,20 @@ class DkgHttp {
   }
 
   create(contextGraphId, config) {
-    return this.request('POST', '/api/context-graph/create', {
-      id: contextGraphId,
-      name: `Buzz: ${config.channelName}`,
-      description: `Local M0 graph for Buzz channel ${config.channelName} (${config.channelId})`,
-      accessPolicy: config.channelVisibility === 'private' ? 1 : 0,
-      publishPolicy: 0,
-      register: false,
-    });
+    return this.request('POST', '/api/context-graph/create', contextGraphCreatePayload(contextGraphId, config));
   }
+}
+
+export function contextGraphCreatePayload(contextGraphId, config) {
+  return {
+    id: contextGraphId,
+    name: `Buzz: ${config.channelName}`,
+    description: `Local M0 graph for Buzz channel ${config.channelName} (${config.channelId})`,
+    accessPolicy: config.channelVisibility === 'private' ? 1 : 0,
+    // M0 is strictly off-chain: do not expose either field as ambient config.
+    publishPolicy: 0,
+    register: false,
+  };
 }
 
 function writeAccepted(payload, operation) {
