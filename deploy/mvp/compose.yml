@@ -85,7 +85,7 @@ services:
 
   relay:
     # Current audited Buzz commit 318fbf8, pinned by immutable manifest digest.
-    image: ghcr.io/block/buzz:sha-318fbf8@sha256:5544939bbb2faa70032b322ba11c578ead685a3abf6fa4596a9e7b839715960e
+    image: ${BUZZ_RELAY_IMAGE:-ghcr.io/block/buzz:sha-318fbf8@sha256:5544939bbb2faa70032b322ba11c578ead685a3abf6fa4596a9e7b839715960e}
     environment:
       BUZZ_BIND_ADDR: 0.0.0.0:3000
       BUZZ_HEALTH_PORT: '8080'
