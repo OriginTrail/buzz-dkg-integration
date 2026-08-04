@@ -27,6 +27,7 @@ import {
   buildCredentialedMvpEnvironments,
 } from './mvp-env.mjs';
 import { createLifecycleLockManager } from './mvp-lock.mjs';
+import { DkgClient } from '../src/dkg/http.mjs';
 
 const EXPECTED_DKG_VERSION = '10.0.11';
 const PROJECT = 'buzz-dkg-m0';
@@ -755,17 +756,12 @@ async function waitUntil(label, probe, timeoutMs = 120_000, intervalMs = 1_000) 
   throw new Error(`timed out waiting for ${label}${detail}`);
 }
 
-async function fetchJson(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    signal: AbortSignal.timeout(options.timeoutMs || 3_000),
-  });
-  if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`);
-  return response.json();
-}
-
 async function dkgStatus() {
-  return fetchJson(`${DKG_API}/api/status`);
+  return new DkgClient({
+    baseUrl: DKG_API,
+    token: existsSync(dkgTokenPath) ? readToken() : undefined,
+    timeoutMs: 3_000,
+  }).status();
 }
 
 function validateDkgStatus(status) {
@@ -795,9 +791,11 @@ function readToken() {
 }
 
 async function validateContextGraph() {
-  const result = await fetchJson(`${DKG_API}/api/context-graph/exists?id=devnet-test`, {
-    headers: { Authorization: `Bearer ${readToken()}` },
-  });
+  const result = await new DkgClient({
+    baseUrl: DKG_API,
+    token: readToken(),
+    timeoutMs: 3_000,
+  }).contextGraphExists('devnet-test');
   if (result.exists !== true) throw new Error('DKG context graph devnet-test is absent');
 }
 

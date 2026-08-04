@@ -16,7 +16,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { getPublicKey } from 'nostr-tools/pure';
 import { nip19 } from 'nostr-tools';
-import { DkgApiClient } from '../src/dkg/http.mjs';
+import { DkgClient } from '../src/dkg/http.mjs';
 
 const execFileAsync = promisify(execFile);
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -431,23 +431,18 @@ class BuzzCli {
       'bot',
     ]);
   }
-}
 
-export class DkgHttp extends DkgApiClient {
-  constructor(config) {
-    super({ baseUrl: config.dkgApi, token: config.dkgToken, timeoutMs: DEFAULT_TIMEOUT_MS });
-  }
-
-  status() {
-    return super.status();
-  }
-
-  exists(contextGraphId) {
-    return this.contextGraphExists(contextGraphId);
-  }
-
-  create(contextGraphId, config) {
-    return this.createContextGraph(contextGraphCreatePayload(contextGraphId, config));
+  addMember(channelId, pubkey) {
+    return this.run([
+      'channels',
+      'add-member',
+      '--channel',
+      channelId,
+      '--pubkey',
+      pubkey,
+      '--role',
+      'member',
+    ]);
   }
 }
 
@@ -559,18 +554,44 @@ async function ensureMembership(buzz, channelId, servicePubkey) {
   return 'added';
 }
 
+async function ensurePromoterMemberships(buzz, config, channelId) {
+  if (config.channelVisibility !== 'private') return [];
+  const results = [];
+  for (const pubkey of config.promoterPubkeys) {
+    if (pubkey === config.ownerPubkey) {
+      results.push({ pubkey, action: 'owner' });
+      continue;
+    }
+    if (pubkey === config.servicePubkey) {
+      results.push({ pubkey, action: 'service-bot' });
+      continue;
+    }
+    const hasMember = (members) =>
+      Array.isArray(members) &&
+      members.some((member) => String(member.pubkey).toLowerCase() === pubkey);
+    if (hasMember(await buzz.members(channelId))) {
+      results.push({ pubkey, action: 'existing' });
+      continue;
+    }
+    writeAccepted(await buzz.addMember(channelId, pubkey), 'Buzz promoter membership');
+    await poll(() => buzz.members(channelId), hasMember, `Buzz promoter membership ${pubkey}`);
+    results.push({ pubkey, action: 'added' });
+  }
+  return results;
+}
+
 async function ensureContextGraph(dkg, contextGraphId, config) {
   await dkg.status();
-  const before = await dkg.exists(contextGraphId);
+  const before = await dkg.contextGraphExists(contextGraphId);
   if (before?.exists === true) return 'existing';
   if (before?.exists !== false)
     fail('DKG context graph existence probe returned an unexpected shape');
   try {
-    await dkg.create(contextGraphId, config);
+    await dkg.createContextGraph(contextGraphCreatePayload(contextGraphId, config));
   } catch (error) {
     if (error?.status !== 409) throw error;
   }
-  const after = await dkg.exists(contextGraphId);
+  const after = await dkg.contextGraphExists(contextGraphId);
   if (after?.exists !== true) fail('DKG context graph create was not visible on read-back');
   return 'created';
 }
@@ -613,7 +634,13 @@ export async function bootstrap(config, dependencies = {}) {
   }
 
   const buzz = dependencies.buzz ?? new BuzzCli(config);
-  const dkg = dependencies.dkg ?? new DkgHttp(config);
+  const dkg =
+    dependencies.dkg ??
+    new DkgClient({
+      baseUrl: config.dkgApi,
+      token: config.dkgToken,
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+    });
   const channel = await ensureChannel(config, buzz, priorState);
   const channelId = channel.channelId;
   const existingBinding = normalizedOldBindings.find((binding) => binding.channelId === channelId);
@@ -649,6 +676,7 @@ export async function bootstrap(config, dependencies = {}) {
   // a graph. The returned value is committed only after both read-backs pass.
   const bindings = mergeBinding(oldBindings, desiredBinding);
   const membershipAction = await ensureMembership(buzz, channelId, config.servicePubkey);
+  const promoterMembershipActions = await ensurePromoterMemberships(buzz, config, channelId);
   const contextGraphAction = await ensureContextGraph(dkg, contextGraphId, {
     ...config,
     channelId,
@@ -673,6 +701,7 @@ export async function bootstrap(config, dependencies = {}) {
     actions: {
       channel: channel.action,
       serviceMembership: membershipAction,
+      promoterMemberships: promoterMembershipActions,
       contextGraph: contextGraphAction,
       bindings: 'written',
     },
