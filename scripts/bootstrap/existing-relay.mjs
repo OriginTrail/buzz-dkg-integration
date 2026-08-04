@@ -34,6 +34,31 @@ async function poll(label, fn, attempts = 40) {
   throw new Error(`timed out waiting for ${label}`);
 }
 
+function tagValue(event, name) {
+  return event.tags.find((tag) => tag[0] === name)?.[1];
+}
+
+function hasMarker(event, name) {
+  return event.tags.some((tag) => tag[0] === name);
+}
+
+export function channelFromMetadataEvent(event) {
+  const explicitVisibility = tagValue(event, 'visibility');
+  const visibility = hasMarker(event, 'private')
+    ? 'private'
+    : explicitVisibility === 'private'
+      ? 'private'
+      : 'open';
+  const archived = tagValue(event, 'archived');
+  return {
+    id: tagValue(event, 'd'),
+    name: tagValue(event, 'name'),
+    visibility,
+    channelType: tagValue(event, 't') || tagValue(event, 'channel_type') || 'stream',
+    archived: ['true', '1'].includes(String(archived).toLowerCase()),
+  };
+}
+
 export class ExistingRelayBuzzAdapter {
   constructor(config) {
     this.owner = new BuzzClient({ baseUrl: config.buzzHttp, secretKeyHex: config.ownerKey });
@@ -43,15 +68,7 @@ export class ExistingRelayBuzzAdapter {
   async findChannels(name) {
     const events = await this.owner.query([{ kinds: [39000] }]);
     return events
-      .map((event) => ({
-        id: event.tags.find((tag) => tag[0] === 'd')?.[1],
-        name: event.tags.find((tag) => tag[0] === 'name')?.[1],
-        visibility: event.tags.find((tag) => tag[0] === 'visibility')?.[1],
-        channelType: event.tags.find((tag) => tag[0] === 'channel_type')?.[1],
-        archived: ['true', '1'].includes(
-          String(event.tags.find((tag) => tag[0] === 'archived')?.[1]).toLowerCase(),
-        ),
-      }))
+      .map(channelFromMetadataEvent)
       .filter((channel) => channel.name === name && UUID.test(channel.id || ''));
   }
 
@@ -59,15 +76,7 @@ export class ExistingRelayBuzzAdapter {
     const events = await this.owner.query([{ kinds: [39000], '#d': [channelId], limit: 1 }]);
     const event = events[0];
     if (!event) return null;
-    return {
-      id: event.tags.find((tag) => tag[0] === 'd')?.[1],
-      name: event.tags.find((tag) => tag[0] === 'name')?.[1],
-      visibility: event.tags.find((tag) => tag[0] === 'visibility')?.[1],
-      channelType: event.tags.find((tag) => tag[0] === 'channel_type')?.[1],
-      archived: ['true', '1'].includes(
-        String(event.tags.find((tag) => tag[0] === 'archived')?.[1]).toLowerCase(),
-      ),
-    };
+    return channelFromMetadataEvent(event);
   }
 
   createChannel(config) {

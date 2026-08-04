@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   bootstrapExistingRelay,
+  channelFromMetadataEvent,
   loadExistingRelayConfig,
 } from '../scripts/bootstrap/existing-relay.mjs';
 
@@ -90,6 +91,39 @@ function harness() {
 }
 
 describe('existing-relay bootstrap reconciliation', () => {
+  it('decodes canonical NIP-29 metadata tags emitted by Buzz', () => {
+    expect(
+      channelFromMetadataEvent({
+        tags: [
+          ['d', channelId],
+          ['name', 'Web of Trust'],
+          ['public'],
+          ['closed'],
+          ['t', 'stream'],
+        ],
+      }),
+    ).toEqual({
+      id: channelId,
+      name: 'Web of Trust',
+      visibility: 'open',
+      channelType: 'stream',
+      archived: false,
+    });
+    expect(
+      channelFromMetadataEvent({
+        tags: [
+          ['d', channelId],
+          ['name', 'Private memory'],
+          ['private'],
+          ['visibility', 'open'],
+          ['closed'],
+          ['t', 'forum'],
+          ['channel_type', 'stream'],
+        ],
+      }),
+    ).toMatchObject({ visibility: 'private', channelType: 'forum' });
+  });
+
   it('binds the relay-assigned channel, upgrades the bot role, and converges', async () => {
     const h = harness();
     const first = await bootstrapExistingRelay(h.config, { buzz: h.buzz, dkg: h.dkg });
