@@ -63,4 +63,18 @@ describe('shared DKG HTTP transport', () => {
       expect.objectContaining({ method: 'GET' }),
     );
   });
+
+  it('creates a context graph through the canonical route', async () => {
+    const fetchImpl = vi.fn(async () => new Response('{"created":true}', { status: 200 }));
+    const client = new DkgClient({ baseUrl: 'http://dkg', token: 'secret', fetchImpl });
+    await client.createContextGraph({ id: 'buzz-test' });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'http://dkg/api/context-graph/create',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ authorization: 'Bearer secret' }),
+        body: '{"id":"buzz-test"}',
+      }),
+    );
+  });
 });
