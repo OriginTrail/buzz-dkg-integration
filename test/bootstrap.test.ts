@@ -33,12 +33,13 @@ function tempRoot(): string {
 function fixture(
   root: string,
   version = '0.1.0',
-): { release: string; installRoot: string; binDir: string } {
+): { release: string; installRoot: string; binDir: string; ghLog: string } {
   const release = join(root, 'release');
   const payload = join(root, 'payload');
   const fakeBin = join(root, 'fake-bin');
   const installRoot = join(root, 'lib', 'buzz-dkg');
   const binDir = join(root, 'bin');
+  const ghLog = join(root, 'gh-call.log');
   mkdirSync(join(payload, 'runtime', 'bin'), { recursive: true });
   mkdirSync(release, { recursive: true });
   mkdirSync(fakeBin, { recursive: true });
@@ -60,13 +61,16 @@ function fixture(
     '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; *) echo Linux;; esac\n',
   );
   chmodSync(join(fakeBin, 'uname'), 0o755);
-  writeFileSync(join(fakeBin, 'gh'), '#!/bin/sh\nexit 0\n');
+  writeFileSync(
+    join(fakeBin, 'gh'),
+    '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$GH_CALL_LOG"\n[ "${GH_ATTESTATION_FAIL:-0}" != 1 ]\n',
+  );
   chmodSync(join(fakeBin, 'gh'), 0o755);
 
-  return { release, installRoot, binDir };
+  return { release, installRoot, binDir, ghLog };
 }
 
-function runBootstrap(paths: ReturnType<typeof fixture>) {
+function runBootstrap(paths: ReturnType<typeof fixture>, envOverrides: NodeJS.ProcessEnv = {}) {
   const testBootstrap = join(dirname(paths.release), 'install.test.sh');
   const source = readFileSync(bootstrap, 'utf8').replace(
     'release_base=https://github.com/$repo/releases/latest/download',
@@ -81,6 +85,8 @@ function runBootstrap(paths: ReturnType<typeof fixture>) {
       BUZZ_DKG_INSTALL_ROOT: paths.installRoot,
       BUZZ_DKG_BIN_DIR: paths.binDir,
       BUZZ_DKG_SKIP_LAUNCH: '1',
+      GH_CALL_LOG: paths.ghLog,
+      ...envOverrides,
     },
   });
 }
@@ -92,6 +98,14 @@ describe('one-line release bootstrap', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('Installed buzz-dkg 0.1.0');
     expect(result.stdout).toContain('Run: sudo buzz-dkg install');
+    const attestationArgs = readFileSync(paths.ghLog, 'utf8').trim().split('\n');
+    expect(attestationArgs).toEqual([
+      'attestation',
+      'verify',
+      expect.stringMatching(/buzz-dkg-linux-x64\.tar\.gz$/),
+      '--repo',
+      'OriginTrail/buzz-dkg-integration',
+    ]);
 
     const command = join(paths.binDir, 'buzz-dkg');
     expect(lstatSync(command).isSymbolicLink()).toBe(true);
@@ -116,6 +130,16 @@ describe('one-line release bootstrap', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('checksum verification failed');
     expect(existsSync(join(paths.binDir, 'buzz-dkg'))).toBe(false);
+  });
+
+  it('fails closed when GitHub provenance verification fails', () => {
+    const paths = fixture(tempRoot());
+    const result = runBootstrap(paths, { GH_ATTESTATION_FAIL: '1' });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('release provenance verification failed');
+    expect(readFileSync(paths.ghLog, 'utf8')).toContain('attestation\nverify\n');
+    expect(existsSync(join(paths.binDir, 'buzz-dkg'))).toBe(false);
+    expect(existsSync(join(paths.installRoot, 'releases'))).toBe(false);
   });
 
   it('does not overwrite an unrelated command', () => {

@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
   chownSync,
@@ -10,24 +9,25 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
+import { createInstallContext } from './install/context.mjs';
+import { resolveDkgPlan, SUPPORTED_DKG_NETWORKS } from './install/dkg-plan.mjs';
+import { probeRelay, relayEndpoints } from './install/relay.mjs';
+import {
+  generatedSecrets,
+  parseEnvFile,
+  writeRuntimeEnv,
+} from './install/runtime-env.mjs';
 
-const appDir = fileURLToPath(new URL('..', import.meta.url));
-const configDir = process.env.BUZZ_DKG_CONFIG_DIR || '/etc/buzz-dkg';
-const stateDir = process.env.BUZZ_DKG_STATE_DIR || '/var/lib/buzz-dkg';
-const envPath = join(configDir, 'runtime.env');
-const composePath = join(appDir, 'deploy', 'v1a', 'compose.yml');
+export { relayEndpoints };
+
+const installContext = createInstallContext();
 const dkgVersion = '10.0.11';
 const dkgIntegrity =
   'sha512-QNsjad2eBADuuWWUjzIfdmjh1Xxd8lRy5QGLH6pTxMyOOQsIyeHQWMTGMIb24F6g533Zu/Iil9HtNdcrei8rFA==';
-const supportedNetworks = ['mainnet-gnosis', 'mainnet-base', 'testnet'];
-const managedDkgRoot = join(stateDir, 'dkg-cli');
-const managedDkgHome = join(stateDir, 'dkg');
-const managedDkgBin = join(managedDkgRoot, 'node_modules', '.bin', 'dkg');
 
 function fail(message) {
   throw new Error(message);
@@ -35,7 +35,7 @@ function fail(message) {
 
 function executable(command) {
   const result = spawnSync(command, ['--version'], { stdio: 'ignore' });
-  return !result.error;
+  return !result.error && result.status === 0;
 }
 
 function run(command, args, options = {}) {
@@ -75,40 +75,10 @@ export function parseArgs(argv) {
   if (parsed.dkgRole && !['auto', 'edge', 'core'].includes(parsed.dkgRole)) {
     fail('--dkg-role must be auto, edge, or core');
   }
-  if (parsed.dkgNetwork && !supportedNetworks.includes(parsed.dkgNetwork)) {
-    fail(`--dkg-network must be one of: ${supportedNetworks.join(', ')}`);
+  if (parsed.dkgNetwork && !SUPPORTED_DKG_NETWORKS.includes(parsed.dkgNetwork)) {
+    fail(`--dkg-network must be one of: ${SUPPORTED_DKG_NETWORKS.join(', ')}`);
   }
   return parsed;
-}
-
-function parseEnvFile(path) {
-  if (!existsSync(path)) return {};
-  const values = {};
-  for (const raw of readFileSync(path, 'utf8').split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const at = line.indexOf('=');
-    if (at < 1) continue;
-    values[line.slice(0, at)] = line.slice(at + 1);
-  }
-  return values;
-}
-
-export function relayEndpoints(raw) {
-  const parsed = new URL(raw);
-  if (!['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)) {
-    fail(`unsupported Buzz Relay URL protocol: ${parsed.protocol}`);
-  }
-  parsed.pathname = '';
-  parsed.search = '';
-  parsed.hash = '';
-  const http = new URL(parsed);
-  http.protocol =
-    parsed.protocol === 'wss:' ? 'https:' : parsed.protocol === 'ws:' ? 'http:' : parsed.protocol;
-  const ws = new URL(parsed);
-  ws.protocol =
-    parsed.protocol === 'https:' ? 'wss:' : parsed.protocol === 'http:' ? 'ws:' : parsed.protocol;
-  return { http: http.toString().replace(/\/$/, ''), ws: ws.toString().replace(/\/$/, '') };
 }
 
 function dockerRelayCandidates() {
@@ -141,24 +111,6 @@ function dockerRelayCandidates() {
   return [...new Set(candidates)];
 }
 
-async function probeRelay(httpUrl) {
-  const probes = ['/_readiness', '/'];
-  let last;
-  for (const path of probes) {
-    try {
-      const response = await fetch(`${httpUrl}${path}`, {
-        redirect: 'manual',
-        signal: AbortSignal.timeout(5_000),
-      });
-      if (response.status < 500) return { status: response.status, path };
-      last = `HTTP ${response.status}`;
-    } catch (error) {
-      last = error instanceof Error ? error.message : String(error);
-    }
-  }
-  fail(`Buzz Relay ${httpUrl} is not reachable (${last || 'no response'})`);
-}
-
 async function dkgStatus(api) {
   try {
     const response = await fetch(`${api.replace(/\/$/, '')}/api/status`, {
@@ -173,42 +125,42 @@ async function dkgStatus(api) {
   }
 }
 
-function defaultTokenCandidates() {
+function defaultTokenCandidates(context) {
   const values = [
-    process.env.BDI_DKG_TOKEN_PATH,
-    join(managedDkgHome, 'auth.token'),
-    join(homedir(), '.dkg', 'auth.token'),
+    context.env.BDI_DKG_TOKEN_PATH,
+    join(context.managedDkgHome, 'auth.token'),
+    join(context.invokingHome, '.dkg', 'auth.token'),
   ];
-  if (process.env.SUDO_USER && process.env.SUDO_USER !== 'root') {
-    values.push(join('/home', process.env.SUDO_USER, '.dkg', 'auth.token'));
+  if (context.env.SUDO_USER && context.env.SUDO_USER !== 'root') {
+    values.push(join('/home', context.env.SUDO_USER, '.dkg', 'auth.token'));
   }
   return values.filter(Boolean);
 }
 
-function npmCommand() {
-  const bundled = join(appDir, 'runtime', 'bin', 'npm');
+function npmCommand(context) {
+  const bundled = join(context.appDir, 'runtime', 'bin', 'npm');
   if (existsSync(bundled)) return bundled;
   if (executable('npm')) return 'npm';
   fail('npm is unavailable; reinstall buzz-dkg from an official release bundle');
 }
 
-function managedDkgEnv() {
-  const runtimeBin = join(appDir, 'runtime', 'bin');
+function managedDkgEnv(context) {
+  const runtimeBin = join(context.appDir, 'runtime', 'bin');
   return {
-    ...process.env,
-    HOME: managedDkgHome,
+    ...context.env,
+    HOME: context.managedDkgHome,
     // This boundary prevents the managed install from reading or mutating an
     // operator's existing ~/.dkg state.
-    DKG_HOME: managedDkgHome,
-    PATH: `${runtimeBin}:${process.env.PATH || ''}`,
+    DKG_HOME: context.managedDkgHome,
+    PATH: `${runtimeBin}:${context.env.PATH || ''}`,
   };
 }
 
-function invokingIdentity() {
+function invokingIdentity(context) {
   const currentUid = process.getuid?.() ?? 0;
   const currentGid = process.getgid?.() ?? 0;
-  const sudoUid = Number(process.env.SUDO_UID);
-  const sudoGid = Number(process.env.SUDO_GID);
+  const sudoUid = Number(context.env.SUDO_UID);
+  const sudoGid = Number(context.env.SUDO_GID);
   if (Number.isSafeInteger(sudoUid) && sudoUid > 0 && Number.isSafeInteger(sudoGid)) {
     return { uid: sudoUid, gid: sudoGid };
   }
@@ -218,16 +170,18 @@ function invokingIdentity() {
   return { uid: 65534, gid: 65534 };
 }
 
-function prepareManagedDkg(identity) {
-  for (const path of [stateDir, managedDkgRoot, managedDkgHome]) {
+function prepareManagedDkg(context, identity) {
+  for (const path of [context.stateDir, context.managedDkgRoot, context.managedDkgHome]) {
     mkdirSync(path, { recursive: true, mode: 0o750 });
     chownSync(path, identity.uid, identity.gid);
     chmodSync(path, 0o750);
   }
 }
 
-function verifyManagedDkgLock() {
-  const lock = JSON.parse(readFileSync(join(managedDkgRoot, 'package-lock.json'), 'utf8'));
+function verifyManagedDkgLock(context) {
+  const lock = JSON.parse(
+    readFileSync(join(context.managedDkgRoot, 'package-lock.json'), 'utf8'),
+  );
   const installed = lock.packages?.['node_modules/@origintrail-official/dkg'];
   if (installed?.version !== dkgVersion || installed?.integrity !== dkgIntegrity) {
     fail('managed DKG package lock does not match the pinned release integrity');
@@ -244,10 +198,10 @@ async function waitForDkg(api) {
   fail(`DKG node did not become ready at ${api}`);
 }
 
-async function waitForIntegration() {
+async function waitForIntegration(context) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    const result = run('docker', composeArgs('logs', '--no-color', 'daemon'), {
+    const result = run('docker', composeArgs(context, 'logs', '--no-color', 'daemon'), {
       capture: true,
       allowFailure: true,
     });
@@ -257,47 +211,19 @@ async function waitForIntegration() {
   fail('integration daemon did not become ready; run sudo buzz-dkg logs');
 }
 
-function composeArgs(command, ...args) {
-  return ['compose', '--env-file', envPath, '-f', composePath, command, ...args];
-}
-
-function generatedSecrets(prior) {
-  return {
-    BDI_SERVICE_KEY: prior.BDI_SERVICE_KEY || randomBytes(32).toString('hex'),
-    BDI_BUZZ_OWNER_KEY: prior.BDI_BUZZ_OWNER_KEY || randomBytes(32).toString('hex'),
-  };
-}
-
-function writeRuntimeEnv(values) {
-  mkdirSync(configDir, { recursive: true, mode: 0o700 });
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  const ordered = [
-    'BUZZ_DKG_APP_DIR',
-    'BUZZ_DKG_STATE_DIR',
-    'BUZZ_DKG_RUNTIME_UID',
-    'BUZZ_DKG_RUNTIME_GID',
-    'BDI_BUZZ_HTTP',
-    'BDI_BUZZ_WS',
-    'BDI_DKG_API',
-    'BDI_DKG_TOKEN_PATH',
-    'BDI_DKG_ROLE',
-    'BDI_DKG_NETWORK',
-    'BDI_SERVICE_KEY',
-    'BDI_BUZZ_OWNER_KEY',
-    'BDI_CHANNEL_NAME',
-    'BDI_PUBLISH_MODE',
-    'BDI_MAX_PUBLISHES_PER_DAY',
+function composeArgs(context, command, ...args) {
+  return [
+    'compose',
+    '--env-file',
+    context.envPath,
+    '-f',
+    context.composePath,
+    command,
+    ...args,
   ];
-  for (const name of ordered) {
-    if (String(values[name] || '').includes('\n')) fail(`${name} contains a newline`);
-  }
-  writeFileSync(envPath, `${ordered.map((name) => `${name}=${values[name]}`).join('\n')}\n`, {
-    mode: 0o600,
-  });
-  chmodSync(envPath, 0o600);
 }
 
-function showPlan(plan) {
+function showPlan(context, plan) {
   console.log('\nInstallation plan');
   console.log(`  Buzz Relay: ${plan.relay.ws} (adopt in place; no container or database changes)`);
   console.log(
@@ -305,13 +231,13 @@ function showPlan(plan) {
   );
   console.log('  Integration: install projector/provider sidecar with VM publication disabled');
   console.log('  Memory:      create or reuse one managed Web of Trust channel and Context Graph');
-  console.log(`  State:       ${stateDir}`);
+  console.log(`  State:       ${context.stateDir}`);
   console.log('  Public ports: none added by the integration');
   console.log('  Network:     sidecar uses the Linux host network to reach loopback Buzz/DKG APIs');
 }
 
-async function resolvePlan(options, prompt) {
-  const prior = parseEnvFile(envPath);
+async function resolvePlan(context, options, prompt) {
+  const prior = parseEnvFile(context.envPath);
   let relayRaw = options.relay || prior.BDI_BUZZ_WS;
   if (!relayRaw) {
     const candidates = dockerRelayCandidates();
@@ -339,25 +265,27 @@ async function resolvePlan(options, prompt) {
   );
   const existingStatus = await dkgStatus(dkgApi);
   const requestedRole = options.dkgRole || prior.BDI_DKG_ROLE || 'auto';
-  const dkgRole = existingStatus?.nodeRole || (requestedRole === 'auto' ? 'edge' : requestedRole);
-  if (existingStatus && requestedRole !== 'auto' && existingStatus.nodeRole !== requestedRole) {
-    fail(`DKG node at ${dkgApi} is ${existingStatus.nodeRole}, but ${requestedRole} was requested`);
+  let dkgPlan;
+  try {
+    dkgPlan = resolveDkgPlan({
+      existingStatus,
+      requestedRole,
+      requestedNetwork: options.dkgNetwork,
+      priorNetwork: prior.BDI_DKG_NETWORK,
+      unattended: options.yes === true,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    fail(message.replace(/^DKG node is /, `DKG node at ${dkgApi} is `));
   }
-  if (!existingStatus && options.yes && !options.dkgNetwork && !prior.BDI_DKG_NETWORK) {
-    fail('a fresh unattended DKG install requires --dkg-network testnet|mainnet-gnosis|mainnet-base');
-  }
-  const network = options.dkgNetwork || prior.BDI_DKG_NETWORK || 'testnet';
   return {
     relay,
     dkgApi,
-    dkgRole,
-    network,
-    dkgExisting: Boolean(existingStatus),
-    dkgStatus: existingStatus,
+    ...dkgPlan,
   };
 }
 
-async function ensureDkg(plan, prompt, options) {
+async function ensureDkg(context, plan, prompt, options) {
   if (plan.dkgExisting) return plan.dkgStatus;
   if (!options.yes) {
     const answer = (
@@ -368,86 +296,86 @@ async function ensureDkg(plan, prompt, options) {
     if (answer && answer !== 'y' && answer !== 'yes')
       fail('installation cancelled before DKG setup');
   }
-  const identity = invokingIdentity();
-  prepareManagedDkg(identity);
+  const identity = invokingIdentity(context);
+  prepareManagedDkg(context, identity);
   console.log(`Installing @origintrail-official/dkg@${dkgVersion}...`);
   // The pinned DKG package and better-sqlite3 dependency require lifecycle
   // hooks. Execute them as the managed non-root identity, never as installer
   // root, then verify npm's generated lock against the reviewed integrity.
   run(
-    npmCommand(),
+    npmCommand(context),
     [
       'install',
       '--save-exact',
       '--prefix',
-      managedDkgRoot,
+      context.managedDkgRoot,
       `@origintrail-official/dkg@${dkgVersion}`,
     ],
     {
-      env: managedDkgEnv(),
+      env: managedDkgEnv(context),
       uid: identity.uid,
       gid: identity.gid,
     },
   );
-  verifyManagedDkgLock();
+  verifyManagedDkgLock(context);
   console.log('Starting the supported DKG setup wizard...');
-  run(managedDkgBin, ['init', '--role', plan.dkgRole, '--network', plan.network], {
-    env: managedDkgEnv(),
+  run(context.managedDkgBin, ['init', '--role', plan.dkgRole, '--network', plan.network], {
+    env: managedDkgEnv(context),
     uid: identity.uid,
     gid: identity.gid,
   });
-  run(managedDkgBin, ['start'], {
-    env: managedDkgEnv(),
+  run(context.managedDkgBin, ['start'], {
+    env: managedDkgEnv(context),
     uid: identity.uid,
     gid: identity.gid,
   });
   return waitForDkg(plan.dkgApi);
 }
 
-async function resolveTokenPath(options, prompt) {
+async function resolveTokenPath(context, options, prompt) {
   if (options.dkgTokenPath) return options.dkgTokenPath;
-  const prior = parseEnvFile(envPath);
+  const prior = parseEnvFile(context.envPath);
   if (prior.BDI_DKG_TOKEN_PATH && existsSync(prior.BDI_DKG_TOKEN_PATH)) {
     return prior.BDI_DKG_TOKEN_PATH;
   }
-  const found = defaultTokenCandidates().find((candidate) => existsSync(candidate));
+  const found = defaultTokenCandidates(context).find((candidate) => existsSync(candidate));
   if (found) return found;
   if (options.yes) fail('DKG auth token was not found; pass --dkg-token-path <path>');
   return prompt.question('DKG auth.token path: ');
 }
 
-export async function install(options, prompt) {
-  if (process.platform !== 'linux' && process.env.BUZZ_DKG_ALLOW_UNSUPPORTED !== '1') {
+export async function install(options, prompt, context = installContext) {
+  if (process.platform !== 'linux' && context.env.BUZZ_DKG_ALLOW_UNSUPPORTED !== '1') {
     fail('Beta V1 supports Linux only');
   }
-  if (process.getuid?.() !== 0 && process.env.BUZZ_DKG_ALLOW_NON_ROOT !== '1') {
+  if (process.getuid?.() !== 0 && context.env.BUZZ_DKG_ALLOW_NON_ROOT !== '1') {
     fail('run installation with sudo');
   }
   if (!executable('docker')) fail('Docker with the Compose plugin is required');
   const compose = run('docker', ['compose', 'version'], { capture: true, allowFailure: true });
   if (compose.status !== 0) fail('the Docker Compose plugin is required');
 
-  const plan = await resolvePlan(options, prompt);
-  showPlan(plan);
+  const plan = await resolvePlan(context, options, prompt);
+  showPlan(context, plan);
   if (!options.yes) {
     const answer = (await prompt.question('\nContinue? [Y/n] ')).trim().toLowerCase();
     if (answer && answer !== 'y' && answer !== 'yes') fail('installation cancelled');
   }
-  const status = await ensureDkg(plan, prompt, options);
-  const tokenPath = await resolveTokenPath(options, prompt);
+  const status = await ensureDkg(context, plan, prompt, options);
+  const tokenPath = await resolveTokenPath(context, options, prompt);
   if (!existsSync(tokenPath)) fail(`DKG token does not exist: ${tokenPath}`);
   const tokenOwner = statSync(tokenPath);
   // Match the sidecar uid/gid to the credential it must read, and make only the
   // integration state root writable by that identity. The token remains a
   // read-only bind mount and is never copied.
-  mkdirSync(stateDir, { recursive: true, mode: 0o750 });
-  chownSync(stateDir, tokenOwner.uid, tokenOwner.gid);
-  chmodSync(stateDir, 0o750);
-  const prior = parseEnvFile(envPath);
+  mkdirSync(context.stateDir, { recursive: true, mode: 0o750 });
+  chownSync(context.stateDir, tokenOwner.uid, tokenOwner.gid);
+  chmodSync(context.stateDir, 0o750);
+  const prior = parseEnvFile(context.envPath);
   const secrets = generatedSecrets(prior);
-  writeRuntimeEnv({
-    BUZZ_DKG_APP_DIR: appDir,
-    BUZZ_DKG_STATE_DIR: stateDir,
+  writeRuntimeEnv(context, {
+    BUZZ_DKG_APP_DIR: context.appDir,
+    BUZZ_DKG_STATE_DIR: context.stateDir,
     BUZZ_DKG_RUNTIME_UID: String(tokenOwner.uid),
     BUZZ_DKG_RUNTIME_GID: String(tokenOwner.gid),
     BDI_BUZZ_HTTP: plan.relay.http,
@@ -463,12 +391,14 @@ export async function install(options, prompt) {
   });
 
   console.log('Creating or reusing the Web of Trust channel and Context Graph...');
-  run('docker', composeArgs('run', '--rm', 'bootstrap'));
-  run('docker', composeArgs('up', '-d', 'daemon'));
-  await waitForIntegration();
+  run('docker', composeArgs(context, 'run', '--rm', 'bootstrap'));
+  run('docker', composeArgs(context, 'up', '-d', 'daemon'));
+  await waitForIntegration(context);
   console.log('Running the end-to-end smoke check...');
-  run('docker', composeArgs('run', '--rm', 'smoke'));
-  const bootstrap = JSON.parse(readFileSync(join(stateDir, 'bootstrap.json'), 'utf8'));
+  run('docker', composeArgs(context, 'run', '--rm', 'smoke'));
+  const bootstrap = JSON.parse(
+    readFileSync(join(context.stateDir, 'bootstrap.json'), 'utf8'),
+  );
   console.log('\nBuzz + DKG is ready.');
   console.log(`  Buzz Relay:   ${plan.relay.ws}`);
   console.log(`  DKG node:     ${status.nodeRole} ${status.version || ''}`.trimEnd());
@@ -477,14 +407,14 @@ export async function install(options, prompt) {
   console.log('\nCommands: sudo buzz-dkg status | logs | smoke | remove');
 }
 
-async function plan(options, prompt) {
-  const resolved = await resolvePlan(options, prompt);
-  showPlan(resolved);
+async function plan(context, options, prompt) {
+  const resolved = await resolvePlan(context, options, prompt);
+  showPlan(context, resolved);
 }
 
-async function status() {
-  const values = parseEnvFile(envPath);
-  if (!values.BDI_BUZZ_HTTP) fail(`no V1a installation found at ${envPath}`);
+async function status(context) {
+  const values = parseEnvFile(context.envPath);
+  if (!values.BDI_BUZZ_HTTP) fail(`no V1a installation found at ${context.envPath}`);
   console.log(`Buzz Relay: ${values.BDI_BUZZ_WS}`);
   await probeRelay(values.BDI_BUZZ_HTTP);
   console.log('  reachable');
@@ -494,23 +424,23 @@ async function status() {
       ? `DKG node:   ${dkg.nodeRole} ${dkg.version || 'unknown'} (${values.BDI_DKG_API})`
       : `DKG node:   unavailable (${values.BDI_DKG_API})`,
   );
-  run('docker', composeArgs('ps'), { allowFailure: true });
-  console.log(`State:      ${stateDir}`);
+  run('docker', composeArgs(context, 'ps'), { allowFailure: true });
+  console.log(`State:      ${context.stateDir}`);
 }
 
-function logs() {
-  if (!existsSync(envPath)) fail(`no V1a installation found at ${envPath}`);
-  run('docker', composeArgs('logs', '--tail', '100', 'daemon'));
+function logs(context) {
+  if (!existsSync(context.envPath)) fail(`no V1a installation found at ${context.envPath}`);
+  run('docker', composeArgs(context, 'logs', '--tail', '100', 'daemon'));
 }
 
-function smoke() {
-  if (!existsSync(envPath)) fail(`no V1a installation found at ${envPath}`);
-  run('docker', composeArgs('run', '--rm', 'smoke'));
+function smoke(context) {
+  if (!existsSync(context.envPath)) fail(`no V1a installation found at ${context.envPath}`);
+  run('docker', composeArgs(context, 'run', '--rm', 'smoke'));
 }
 
-function remove() {
-  if (!existsSync(envPath)) fail(`no V1a installation found at ${envPath}`);
-  run('docker', composeArgs('down'));
+function remove(context) {
+  if (!existsSync(context.envPath)) fail(`no V1a installation found at ${context.envPath}`);
+  run('docker', composeArgs(context, 'down'));
   console.log(
     'Buzz–DKG integration stopped. Buzz and retained integration/DKG data were not removed.',
   );
@@ -537,12 +467,13 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
   try {
-    if (options.command === 'install') await install(options, prompt);
-    else if (options.command === 'plan') await plan(options, prompt);
-    else if (options.command === 'status' || options.command === 'doctor') await status();
-    else if (options.command === 'logs') logs();
-    else if (options.command === 'smoke') smoke();
-    else if (options.command === 'remove') remove();
+    if (options.command === 'install') await install(options, prompt, installContext);
+    else if (options.command === 'plan') await plan(installContext, options, prompt);
+    else if (options.command === 'status' || options.command === 'doctor')
+      await status(installContext);
+    else if (options.command === 'logs') logs(installContext);
+    else if (options.command === 'smoke') smoke(installContext);
+    else if (options.command === 'remove') remove(installContext);
     else help();
   } catch (error) {
     console.error(`buzz-dkg: ${error instanceof Error ? error.message : String(error)}`);

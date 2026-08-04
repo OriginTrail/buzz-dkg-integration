@@ -16,12 +16,37 @@ afterEach(async () => {
 async function apiServer(role = 'edge') {
   const server = createServer((request, response) => {
     response.setHeader('content-type', 'application/json');
+    if (request.url === '/_readiness') {
+      response.end(JSON.stringify({ status: 'ready' }));
+      return;
+    }
+    if (request.url === '/info') {
+      response.end(
+        JSON.stringify({
+          software: 'https://github.com/block/buzz',
+          supported_nips: [1, 29],
+          version: 'test',
+        }),
+      );
+      return;
+    }
     if (request.url === '/api/status') {
       response.end(JSON.stringify({ nodeRole: role, version: '10.0.11' }));
       return;
     }
     response.statusCode = 200;
     response.end('{}');
+  });
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  servers.push(server);
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+async function genericServer() {
+  const server = createServer((_request, response) => {
+    response.statusCode = 200;
+    response.setHeader('content-type', 'text/html');
+    response.end('<h1>generic web server</h1>');
   });
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
   servers.push(server);
@@ -180,5 +205,26 @@ describe('Buzz-first installer CLI', () => {
     expect(mismatchResult.status).not.toBe(0);
     expect(mismatchResult.stderr).toContain('is edge, but core was requested');
     expect(existsSync(join(mismatch.config, 'runtime.env'))).toBe(false);
+  });
+
+  it('rejects a generic HTTP 200 endpoint before DKG or config mutation', async () => {
+    const endpoint = await genericServer();
+    const f = fixture();
+    const result = await runInstaller(f, [
+      'install',
+      '--relay',
+      endpoint,
+      '--dkg-api',
+      'http://127.0.0.1:1',
+      '--dkg-token-path',
+      f.token,
+      '--dkg-network',
+      'testnet',
+      '--yes',
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('Buzz Relay');
+    expect(existsSync(join(f.config, 'runtime.env'))).toBe(false);
+    expect(existsSync(join(f.state, 'dkg-cli'))).toBe(false);
   });
 });
