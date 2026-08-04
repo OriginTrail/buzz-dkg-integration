@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { DkgApiClient, DkgHttpTransport } from '../src/dkg/http.mjs';
+import { DkgClient, DkgHttpTransport } from '../src/dkg/http.mjs';
 
 describe('shared DKG HTTP transport', () => {
   it('applies bearer auth and parses JSON consistently', async () => {
@@ -56,7 +56,7 @@ describe('shared DKG HTTP transport', () => {
 
   it('owns shared status and context-graph routes', async () => {
     const fetchImpl = vi.fn(async () => new Response('{"exists":true}', { status: 200 }));
-    const client = new DkgApiClient({ baseUrl: 'http://dkg', token: 'secret', fetchImpl });
+    const client = new DkgClient({ baseUrl: 'http://dkg', token: 'secret', fetchImpl });
     await client.contextGraphExists('channel/a');
     expect(fetchImpl).toHaveBeenCalledWith(
       'http://dkg/api/context-graph/exists?id=channel%2Fa',

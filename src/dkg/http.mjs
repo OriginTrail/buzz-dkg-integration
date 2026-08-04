@@ -14,7 +14,7 @@ export class DkgHttpTransport {
         method,
         headers: {
           ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-          authorization: `Bearer ${this.token}`,
+          ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
         },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(timeoutMs),
@@ -43,7 +43,7 @@ export class DkgHttpTransport {
 }
 
 /** Canonical route-level surface shared by runtime and bootstrap clients. */
-export class DkgApiClient extends DkgHttpTransport {
+export class DkgClient extends DkgHttpTransport {
   status() {
     return this.request('GET', '/api/status');
   }
@@ -57,5 +57,52 @@ export class DkgApiClient extends DkgHttpTransport {
 
   createContextGraph(payload) {
     return this.request('POST', '/api/context-graph/create', payload);
+  }
+
+  listContextGraphs() {
+    return this.request('GET', '/api/context-graph/list');
+  }
+
+  createKa(name, contextGraphId) {
+    return this.request('POST', '/api/knowledge-assets', { name, contextGraphId });
+  }
+
+  write(name, contextGraphId, quads) {
+    return this.request('POST', `/api/knowledge-assets/${encodeURIComponent(name)}/wm/write`, {
+      quads,
+      contextGraphId,
+    });
+  }
+
+  finalize(name, contextGraphId) {
+    return this.request('POST', `/api/knowledge-assets/${encodeURIComponent(name)}/wm/finalize`, {
+      contextGraphId,
+    });
+  }
+
+  share(name, contextGraphId) {
+    return this.request('POST', `/api/knowledge-assets/${encodeURIComponent(name)}/swm/share`, {
+      contextGraphId,
+    });
+  }
+
+  publish(name, contextGraphId) {
+    return this.request(
+      'POST',
+      `/api/knowledge-assets/${encodeURIComponent(name)}/vm/publish`,
+      { contextGraphId },
+      180_000,
+    );
+  }
+
+  descriptor(name, contextGraphId) {
+    return this.request(
+      'GET',
+      `/api/knowledge-assets/${encodeURIComponent(name)}?contextGraphId=${encodeURIComponent(contextGraphId)}`,
+    );
+  }
+
+  query(options) {
+    return this.request('POST', '/api/query', options);
   }
 }

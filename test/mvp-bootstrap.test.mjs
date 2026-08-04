@@ -73,13 +73,13 @@ describe('M0 bootstrap', () => {
     ).toThrow(/already bound to another channel/);
   });
 
-  it('converges on one channel, one bot membership, and one context graph', async () => {
+  it('converges a private channel with bot, promoter, and one context graph', async () => {
     const stateDir = tempDir();
     const channelId = '550e8400-e29b-41d4-a716-446655440000';
     const ownerPubkey = '1'.repeat(64);
     const servicePubkey = '2'.repeat(64);
     const promoterPubkey = '3'.repeat(64);
-    const calls = { channelCreate: 0, addBot: 0, graphCreate: 0 };
+    const calls = { channelCreate: 0, addBot: 0, addMember: 0, graphCreate: 0 };
     const channels = [];
     const members = [];
     const graphs = new Set();
@@ -97,7 +97,7 @@ describe('M0 bootstrap', () => {
           channel_id: channelId,
           name: 'buzz-dkg-canary',
           channel_type: 'stream',
-          visibility: 'public',
+          visibility: 'private',
           archived: false,
         });
         return { accepted: true, channel_id: channelId };
@@ -110,18 +110,23 @@ describe('M0 bootstrap', () => {
         members.push({ pubkey, role: 'bot' });
         return { accepted: true };
       },
+      async addMember(_id, pubkey) {
+        calls.addMember += 1;
+        members.push({ pubkey, role: 'member' });
+        return { accepted: true };
+      },
     };
     const dkg = {
       async status() {
         return { version: '10.0.11' };
       },
-      async exists(id) {
+      async contextGraphExists(id) {
         return { id, exists: graphs.has(id) };
       },
-      async create(id) {
+      async createContextGraph(payload) {
         calls.graphCreate += 1;
-        graphs.add(id);
-        return { created: id };
+        graphs.add(payload.id);
+        return { created: payload.id };
       },
     };
     const config = {
@@ -134,7 +139,7 @@ describe('M0 bootstrap', () => {
       promoterPubkeys: [promoterPubkey],
       channelName: 'buzz-dkg-canary',
       channelType: 'stream',
-      channelVisibility: 'open',
+      channelVisibility: 'private',
       channelDescription: 'test',
     };
 
@@ -144,14 +149,16 @@ describe('M0 bootstrap', () => {
     expect(first.actions).toMatchObject({
       channel: 'created',
       serviceMembership: 'added',
+      promoterMemberships: [{ pubkey: promoterPubkey, action: 'added' }],
       contextGraph: 'created',
     });
     expect(second.actions).toMatchObject({
       channel: 'existing',
       serviceMembership: 'existing',
+      promoterMemberships: [{ pubkey: promoterPubkey, action: 'existing' }],
       contextGraph: 'existing',
     });
-    expect(calls).toEqual({ channelCreate: 1, addBot: 1, graphCreate: 1 });
+    expect(calls).toEqual({ channelCreate: 1, addBot: 1, addMember: 1, graphCreate: 1 });
     expect(JSON.parse(readFileSync(config.bindingsPath, 'utf8'))).toEqual([
       {
         channelId,

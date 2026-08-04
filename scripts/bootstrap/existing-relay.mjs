@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { getPublicKey } from 'nostr-tools/pure';
 import { BuzzClient } from '../../phase0/bridge/lib/nostr.mjs';
-import { DkgApiClient } from '../../src/dkg/http.mjs';
+import { DkgClient } from '../../src/dkg/http.mjs';
 import {
   defaultContextGraphId,
   parseTokenFile,
@@ -90,27 +90,6 @@ export class ExistingRelayBuzzAdapter {
   }
 }
 
-export class ExistingRelayDkgAdapter extends DkgApiClient {
-  status() {
-    return super.status();
-  }
-
-  exists(id) {
-    return this.contextGraphExists(id);
-  }
-
-  create(id, config) {
-    return this.createContextGraph({
-      id,
-      name: `Buzz: ${config.channelName}`,
-      description: `Private DKG memory for Buzz channel ${config.channelName} (${config.channelId})`,
-      accessPolicy: config.accessPolicy,
-      publishPolicy: 0,
-      register: false,
-    });
-  }
-}
-
 function accepted(result, operation) {
   const payload = result?.res ?? result;
   if (payload?.accepted !== true) throw new Error(`${operation} rejected: ${payload?.message || 'unknown'}`);
@@ -186,7 +165,7 @@ export async function bootstrapExistingRelay(config, dependencies = {}) {
   if (prior?.ownerPubkey && prior.ownerPubkey !== config.ownerPubkey) throw new Error('owner identity drift detected');
   if (prior?.servicePubkey && prior.servicePubkey !== config.servicePubkey) throw new Error('service identity drift detected');
   const buzz = dependencies.buzz ?? new ExistingRelayBuzzAdapter(config);
-  const dkg = dependencies.dkg ?? new ExistingRelayDkgAdapter({ baseUrl: config.dkgApi, token: config.token });
+  const dkg = dependencies.dkg ?? new DkgClient({ baseUrl: config.dkgApi, token: config.token });
   const channel = await ensureChannel(config, buzz, prior);
   const channelId = channel.channelId;
   const derivedId = defaultContextGraphId(config.buzzHttp, channelId);
@@ -221,7 +200,14 @@ export async function bootstrapExistingRelay(config, dependencies = {}) {
     ensureMembership: () => ensureMembership(buzz, channelId, config.servicePubkey),
     ensureProfile: () => ensureProfile(buzz, config.servicePubkey, config.serviceProfile),
     dkg,
-    graphConfig: { ...config, channelId },
+    graphPayload: {
+      id: contextGraphId,
+      name: `Buzz: ${config.channelName}`,
+      description: `Private DKG memory for Buzz channel ${config.channelName} (${channelId})`,
+      accessPolicy: config.accessPolicy,
+      publishPolicy: 0,
+      register: false,
+    },
   });
 
   return {
