@@ -16,7 +16,7 @@ function harness() {
   const runtimeDir = mkdtempSync(join(tmpdir(), 'bdi-existing-bootstrap-'));
   const calls = { createChannel: 0, addBot: 0, publishProfile: 0, createGraph: 0 };
   const channels = [];
-  let membership = { tags: [['p', servicePubkey, 'member']] };
+  let membership = { tags: [['p', servicePubkey, '', 'member']] };
   const profiles = [];
   const graphs = new Set();
   const buzz = {
@@ -43,7 +43,7 @@ function harness() {
     },
     async addBot(_channelId, pubkey) {
       calls.addBot += 1;
-      membership = { tags: [['p', pubkey, 'bot']] };
+      membership = { tags: [['p', pubkey, '', 'bot']] };
       return { accepted: true };
     },
     async profiles() {
