@@ -30,7 +30,10 @@ describe('installer services', () => {
 
   it('resolves reuse and fresh DKG plans without process environment state', () => {
     expect(
-      resolveDkgPlan({ existingStatus: { nodeRole: 'core' }, requestedRole: 'auto' }),
+      resolveDkgPlan({
+        existingStatus: { nodeRole: 'core', version: '10.0.11', networkId: 'testnet' },
+        requestedRole: 'auto',
+      }),
     ).toMatchObject({ dkgExisting: true, dkgRole: 'core', network: 'testnet' });
     expect(() =>
       resolveDkgPlan({ requestedRole: 'edge', unattended: true }),

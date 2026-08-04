@@ -13,7 +13,7 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise((done) => server.close(done))));
 });
 
-async function apiServer(role = 'edge') {
+async function apiServer(role = 'edge', status = {}) {
   const server = createServer((request, response) => {
     response.setHeader('content-type', 'application/json');
     if (request.url === '/_readiness') {
@@ -31,7 +31,14 @@ async function apiServer(role = 'edge') {
       return;
     }
     if (request.url === '/api/status') {
-      response.end(JSON.stringify({ nodeRole: role, version: '10.0.11' }));
+      response.end(
+        JSON.stringify({
+          nodeRole: role,
+          version: '10.0.11',
+          networkId: 'testnet',
+          ...status,
+        }),
+      );
       return;
     }
     response.statusCode = 200;
@@ -60,14 +67,20 @@ function fixture() {
   const config = join(root, 'config');
   const state = join(root, 'state');
   const token = join(root, 'auth.token');
+  const dockerLog = join(root, 'docker.log');
+  const daemonReady = join(root, 'daemon.ready');
   mkdirSync(bin, { recursive: true });
   writeFileSync(token, 'test-token\n', { mode: 0o600 });
   writeFileSync(
     join(bin, 'docker'),
     `#!/bin/sh
+printf '%s\n' "$*" >> "$BUZZ_DKG_DOCKER_LOG"
 case "$*" in
   *"compose version"*) echo "Docker Compose version v2.30.0" ;;
-  *"logs --no-color daemon"*) echo '{"message":"daemon started"}' ;;
+  *"up -d daemon"*) touch "$BUZZ_DKG_DAEMON_READY" ;;
+  *"logs --no-color daemon"*)
+    test -f "$BUZZ_DKG_DAEMON_READY" && echo '{"message":"daemon started"}'
+    ;;
   *"run --rm bootstrap"*)
     mkdir -p "$BUZZ_DKG_STATE_DIR"
     printf '%s\n' '{"channelName":"Web of Trust","channelId":"550e8400-e29b-41d4-a716-446655440000","contextGraphId":"buzz-test"}' > "$BUZZ_DKG_STATE_DIR/bootstrap.json"
@@ -77,7 +90,7 @@ esac
 `,
   );
   chmodSync(join(bin, 'docker'), 0o755);
-  return { root, bin, config, state, token };
+  return { root, bin, config, state, token, dockerLog, daemonReady };
 }
 
 function runInstaller(f, args) {
@@ -89,6 +102,8 @@ function runInstaller(f, args) {
       BUZZ_DKG_STATE_DIR: f.state,
       BUZZ_DKG_ALLOW_NON_ROOT: '1',
       BUZZ_DKG_ALLOW_UNSUPPORTED: '1',
+      BUZZ_DKG_DOCKER_LOG: f.dockerLog,
+      BUZZ_DKG_DAEMON_READY: f.daemonReady,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -169,6 +184,11 @@ describe('Buzz-first installer CLI', () => {
     expect(runtime).toContain(`BDI_DKG_TOKEN_PATH=${f.token}`);
     expect(runtime).toMatch(/BUZZ_DKG_RUNTIME_UID=\d+/);
     expect(existsSync(join(f.state, 'bootstrap.json'))).toBe(true);
+    const dockerCalls = readFileSync(f.dockerLog, 'utf8');
+    expect(dockerCalls).toContain('run --rm bootstrap');
+    expect(dockerCalls).toContain('up -d daemon');
+    expect(dockerCalls).toContain('logs --no-color daemon');
+    expect(dockerCalls).toContain('run --rm smoke');
     expect(result.stdout).toContain('Buzz + DKG is ready.');
   });
 
@@ -226,5 +246,41 @@ describe('Buzz-first installer CLI', () => {
     expect(result.stderr).toContain('Buzz Relay');
     expect(existsSync(join(f.config, 'runtime.env'))).toBe(false);
     expect(existsSync(join(f.state, 'dkg-cli'))).toBe(false);
+  });
+
+  it('rejects incompatible or wrong-network DKG reuse before config writes', async () => {
+    const incompatibleApi = await apiServer('edge', { version: '10.0.8' });
+    const incompatible = fixture();
+    const incompatibleResult = await runInstaller(incompatible, [
+      'install',
+      '--relay',
+      incompatibleApi,
+      '--dkg-api',
+      incompatibleApi,
+      '--dkg-token-path',
+      incompatible.token,
+      '--yes',
+    ]);
+    expect(incompatibleResult.status).not.toBe(0);
+    expect(incompatibleResult.stderr).toContain('version 10.0.8 is incompatible');
+    expect(existsSync(join(incompatible.config, 'runtime.env'))).toBe(false);
+
+    const wrongNetworkApi = await apiServer('edge', { networkId: 'testnet' });
+    const wrongNetwork = fixture();
+    const wrongNetworkResult = await runInstaller(wrongNetwork, [
+      'install',
+      '--relay',
+      wrongNetworkApi,
+      '--dkg-api',
+      wrongNetworkApi,
+      '--dkg-token-path',
+      wrongNetwork.token,
+      '--dkg-network',
+      'mainnet-base',
+      '--yes',
+    ]);
+    expect(wrongNetworkResult.status).not.toBe(0);
+    expect(wrongNetworkResult.stderr).toContain('does not match requested mainnet-base');
+    expect(existsSync(join(wrongNetwork.config, 'runtime.env'))).toBe(false);
   });
 });
