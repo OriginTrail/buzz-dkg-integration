@@ -16,7 +16,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { getPublicKey } from 'nostr-tools/pure';
 import { nip19 } from 'nostr-tools';
-import { DkgHttpTransport } from '../src/dkg/http.mjs';
+import { DkgApiClient } from '../src/dkg/http.mjs';
 
 const execFileAsync = promisify(execFile);
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -433,24 +433,21 @@ class BuzzCli {
   }
 }
 
-export class DkgHttp extends DkgHttpTransport {
+export class DkgHttp extends DkgApiClient {
   constructor(config) {
     super({ baseUrl: config.dkgApi, token: config.dkgToken, timeoutMs: DEFAULT_TIMEOUT_MS });
   }
 
   status() {
-    return this.request('GET', '/api/status');
+    return super.status();
   }
 
   exists(contextGraphId) {
-    return this.request(
-      'GET',
-      `/api/context-graph/exists?id=${encodeURIComponent(contextGraphId)}`,
-    );
+    return this.contextGraphExists(contextGraphId);
   }
 
   create(contextGraphId, config) {
-    return this.request('POST', '/api/context-graph/create', contextGraphCreatePayload(contextGraphId, config));
+    return this.createContextGraph(contextGraphCreatePayload(contextGraphId, config));
   }
 }
 
