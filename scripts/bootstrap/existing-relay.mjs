@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { getPublicKey } from 'nostr-tools/pure';
 import { BuzzClient } from '../../phase0/bridge/lib/nostr.mjs';
 import { DkgClient } from '../../src/dkg/http.mjs';
@@ -46,6 +47,10 @@ export class ExistingRelayBuzzAdapter {
         id: event.tags.find((tag) => tag[0] === 'd')?.[1],
         name: event.tags.find((tag) => tag[0] === 'name')?.[1],
         visibility: event.tags.find((tag) => tag[0] === 'visibility')?.[1],
+        channelType: event.tags.find((tag) => tag[0] === 'channel_type')?.[1],
+        archived: ['true', '1'].includes(
+          String(event.tags.find((tag) => tag[0] === 'archived')?.[1]).toLowerCase(),
+        ),
       }))
       .filter((channel) => channel.name === name && UUID.test(channel.id || ''));
   }
@@ -58,6 +63,10 @@ export class ExistingRelayBuzzAdapter {
       id: event.tags.find((tag) => tag[0] === 'd')?.[1],
       name: event.tags.find((tag) => tag[0] === 'name')?.[1],
       visibility: event.tags.find((tag) => tag[0] === 'visibility')?.[1],
+      channelType: event.tags.find((tag) => tag[0] === 'channel_type')?.[1],
+      archived: ['true', '1'].includes(
+        String(event.tags.find((tag) => tag[0] === 'archived')?.[1]).toLowerCase(),
+      ),
     };
   }
 
@@ -67,7 +76,7 @@ export class ExistingRelayBuzzAdapter {
       tags: [
         ['name', config.channelName],
         ['visibility', config.channelVisibility],
-        ['channel_type', 'stream'],
+        ['channel_type', config.channelType],
         ['about', config.channelDescription],
       ],
       content: '',
@@ -103,13 +112,13 @@ async function ensureChannel(config, buzz, prior) {
     const channel = await buzz.getChannel(prior.channelId);
     if (!channel) throw new Error(`bootstrap channel ${prior.channelId} no longer exists`);
     if (channel.name !== config.channelName) throw new Error('bootstrap channel name drift detected');
-    ensureChannelVisibility(config, channel);
+    ensureChannelShape(config, channel);
     return { channelId: prior.channelId.toLowerCase(), action: 'existing' };
   }
   const matches = await buzz.findChannels(config.channelName);
   if (matches.length > 1) throw new Error(`multiple Buzz channels are named '${config.channelName}'`);
   if (matches.length === 1) {
-    ensureChannelVisibility(config, matches[0]);
+    ensureChannelShape(config, matches[0]);
     return { channelId: matches[0].id.toLowerCase(), action: 'existing' };
   }
   accepted(await buzz.createChannel(config), 'Buzz channel create');
@@ -121,12 +130,20 @@ async function ensureChannel(config, buzz, prior) {
   return { channelId: discovered.id.toLowerCase(), action: 'created' };
 }
 
-function ensureChannelVisibility(config, channel) {
+function ensureChannelShape(config, channel) {
   const actual = channel.visibility === 'public' ? 'open' : channel.visibility;
   if (actual !== config.channelVisibility) {
     throw new Error(
       `existing Buzz channel has visibility '${actual || 'unknown'}', expected '${config.channelVisibility}'`,
     );
+  }
+  if (channel.channelType !== config.channelType) {
+    throw new Error(
+      `existing Buzz channel has type '${channel.channelType || 'unknown'}', expected '${config.channelType}'`,
+    );
+  }
+  if (channel.archived === true) {
+    throw new Error('existing Buzz channel is archived; refusing managed-channel reuse');
   }
 }
 
@@ -272,6 +289,7 @@ export function loadExistingRelayConfig(env = process.env) {
     ownerPubkey,
     servicePubkey,
     channelName: env.BDI_CHANNEL_NAME || 'Web of Trust',
+    channelType: 'stream',
     channelVisibility,
     channelDescription: env.BDI_CHANNEL_DESCRIPTION || 'Buzz channel with DKG-backed memory',
     requestedContextGraphId: env.BDI_CONTEXT_GRAPH_ID,
@@ -289,4 +307,11 @@ export async function runExistingRelayBootstrap(env = process.env) {
   const result = await bootstrapExistingRelay(loadExistingRelayConfig(env));
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return result;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
+  runExistingRelayBootstrap().catch((error) => {
+    process.stderr.write(`${JSON.stringify({ ok: false, error: String(error?.message || error) })}\n`);
+    process.exitCode = 1;
+  });
 }

@@ -5,6 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { askCommand } from './smoke-command.mjs';
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const stateDir = process.env.BDI_MVP_STATE_DIR || join(repo, '.mvp');
@@ -118,7 +119,7 @@ console.log(`✓ capture receipt ${receipt.id.slice(0, 12)}… (no duplicate, no
 
 const ask = await owner.sendMessage(
   channelId,
-  '@dkg ask what authentication methods did we decide the service should support?',
+  askCommand('what authentication methods did we decide the service should support?', env),
   { mentions: [service.pubkey] },
 );
 const answer = await waitFor('grounded answer', async () => {
@@ -135,7 +136,7 @@ console.log(`✓ grounded answer ${answer.id.slice(0, 12)}… includes a scoped 
 
 const unsupportedAsk = await owner.sendMessage(
   channelId,
-  '@dkg ask what is the office Wi-Fi password?',
+  askCommand('what is the office Wi-Fi password?', env),
   { mentions: [service.pubkey] },
 );
 const refusal = await waitFor('unsupported-question refusal', async () => {

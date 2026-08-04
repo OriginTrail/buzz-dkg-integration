@@ -109,6 +109,66 @@ path — is off-chain and free.
 
 Node docs: [OriginTrail/dkg](https://github.com/OriginTrail/dkg).
 
+## Buzz-first installer preview
+
+The Beta V1a installer starts from a Buzz Relay that is already serving a
+community. On a supported Linux relay host, a tagged release is installed and
+started with one command:
+
+```bash
+curl -fsSL https://github.com/OriginTrail/buzz-dkg-integration/releases/latest/download/install.sh | sudo sh
+```
+
+Prerequisites are Docker with the Compose plugin and the GitHub CLI (`gh`). The
+bootstrap detects `linux/x64` or `linux/arm64`, downloads the corresponding
+versioned bundle, checks its SHA-256 transit integrity, and uses
+`gh attestation verify` to authenticate its GitHub Actions build provenance before any root
+extraction. It then atomically activates the CLI under
+`/usr/local/bin/buzz-dkg` and reconnects the guided installer to `/dev/tty`.
+The CLI remains available after setup:
+
+```bash
+sudo buzz-dkg plan
+sudo buzz-dkg status
+sudo buzz-dkg logs
+sudo buzz-dkg smoke
+sudo buzz-dkg remove
+```
+
+The guided installer discovers common containerized Buzz Relay deployments or
+accepts `--relay wss://community.example.com`. It validates and adopts that
+endpoint without replacing the relay process, database, identity, domain, or
+TLS configuration. It then reuses a compatible DKG node on `127.0.0.1:9200`,
+or invokes the supported DKG npm installer and setup wizard for an Edge
+(default) or Core node. A fresh guided install defaults to DKG testnet; a fresh
+unattended install must explicitly pass `--dkg-network testnet`,
+`mainnet-gnosis`, or `mainnet-base`. Finally it creates the managed Web of Trust
+channel and Context Graph, starts the integration sidecar with Verifiable Memory
+disabled, and runs an end-to-end smoke check.
+
+For automation or a relay that cannot be inferred from its container metadata:
+
+```bash
+sudo buzz-dkg install \
+  --relay wss://community.example.com \
+  --dkg-role edge \
+  --dkg-network testnet
+```
+
+`remove` stops only the integration sidecar. It does not delete Buzz history,
+integration state, DKG state, or an operator-managed node. Release bundles pin
+their own Node runtime; the host does not need Node.js preinstalled. The
+sidecar adds no public port, but it deliberately joins the Linux host network
+to reach loopback-only Buzz and DKG APIs. It runs with the uid/gid that owns the
+mounted DKG token rather than defaulting to container root. Until the
+first installer tag is published, the `releases/latest/download` URL above is
+expected to return 404.
+
+Before the first installer release, repository maintainers must configure the
+`installer-release` GitHub environment with required reviewers and protect the
+`v*` tag pattern. The workflow additionally scopes write permission to the
+gated release job and refuses tags whose commit is not already on `main`.
+
 ## Local one-command M0
 
 The M0 launcher packages a pinned Buzz relay, an isolated one-node DKG 10.0.11
