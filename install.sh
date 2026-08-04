@@ -15,7 +15,7 @@ skip_launch=${BUZZ_DKG_SKIP_LAUNCH:-0}
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 command -v mktemp >/dev/null 2>&1 || fail "mktemp is required"
 command -v gh >/dev/null 2>&1 ||
-  fail "GitHub CLI (gh) is required to authenticate the release attestation"
+  fail "GitHub CLI (gh) is required to verify release provenance; no GitHub login is required"
 
 case "$(uname -s)" in
   Linux) platform=linux ;;
@@ -30,6 +30,7 @@ esac
 
 asset="buzz-dkg-$platform-$arch.tar.gz"
 checksum_asset="$asset.sha256"
+attestation_asset="$asset.attestation.jsonl"
 temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/buzz-dkg-bootstrap.XXXXXX")
 trap 'rm -rf "$temp_dir"' EXIT HUP INT TERM
 
@@ -59,7 +60,8 @@ sha256_file() {
 printf 'Downloading Buzz + DKG installer for %s/%s from %s...\n' "$platform" "$arch" "$release_base"
 download "$release_base/$asset" "$temp_dir/$asset"
 download "$release_base/$checksum_asset" "$temp_dir/$checksum_asset"
-chmod 0600 "$temp_dir/$asset" "$temp_dir/$checksum_asset"
+download "$release_base/$attestation_asset" "$temp_dir/$attestation_asset"
+chmod 0600 "$temp_dir/$asset" "$temp_dir/$checksum_asset" "$temp_dir/$attestation_asset"
 
 expected=$(awk 'NF { print $1; exit }' "$temp_dir/$checksum_asset")
 actual=$(sha256_file "$temp_dir/$asset")
@@ -68,29 +70,11 @@ printf '%s\n' "$expected" | grep -Eq '^[0-9a-fA-F]{64}$' ||
 [ "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" = "$actual" ] ||
   fail "release checksum verification failed"
 
-printf 'Authenticating GitHub build provenance...\n'
-case "${SUDO_USER:-}" in
-  ''|root|*[!A-Za-z0-9._-]*)
-    gh attestation verify "$temp_dir/$asset" --repo "$repo" >/dev/null ||
-      fail "release provenance verification failed; authenticate GitHub CLI and retry"
-    ;;
-  *)
-    # The one-line command normally runs this script through sudo. Verify as
-    # the invoking operator so their existing gh login is used. The artifact is
-    # public, but the root-created temporary directory is private by default;
-    # expose only traverse/read bits during verification, then restore them.
-    chmod 0711 "$temp_dir"
-    chmod 0444 "$temp_dir/$asset"
-    provenance_verified=0
-    if sudo -H -u "$SUDO_USER" -- gh attestation verify "$temp_dir/$asset" --repo "$repo" >/dev/null; then
-      provenance_verified=1
-    fi
-    chmod 0600 "$temp_dir/$asset"
-    chmod 0700 "$temp_dir"
-    [ "$provenance_verified" = 1 ] ||
-      fail "release provenance verification failed; run 'gh auth login' as $SUDO_USER and retry"
-    ;;
-esac
+printf 'Verifying GitHub build provenance (no login required)...\n'
+gh attestation verify "$temp_dir/$asset" \
+  --repo "$repo" \
+  --bundle "$temp_dir/$attestation_asset" >/dev/null ||
+  fail "release provenance verification failed"
 
 if tar -tvzf "$temp_dir/$asset" | awk '
   substr($1, 1, 1) !~ /^[-d]$/ { bad=1 }

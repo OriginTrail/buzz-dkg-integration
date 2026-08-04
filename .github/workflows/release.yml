@@ -65,6 +65,25 @@ jobs:
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: ${{ runner.temp }}/release/buzz-dkg-linux-${{ matrix.arch }}.tar.gz
+      - name: Export offline attestation bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP/release"
+          asset="buzz-dkg-linux-${{ matrix.arch }}.tar.gz"
+          for attempt in 1 2 3 4 5; do
+            if gh attestation download "$asset" --repo "$GITHUB_REPOSITORY"; then
+              break
+            fi
+            [ "$attempt" -lt 5 ] || exit 1
+            sleep 2
+          done
+          mapfile -t bundles < <(find . -maxdepth 1 -type f -name '*.jsonl' -print)
+          [ "${#bundles[@]}" -eq 1 ] || {
+            echo "Expected exactly one downloaded attestation bundle" >&2
+            exit 1
+          }
+          mv "${bundles[0]}" "$asset.attestation.jsonl"
       - uses: actions/upload-artifact@v4
         with:
           name: buzz-dkg-linux-${{ matrix.arch }}
