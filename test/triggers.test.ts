@@ -3,7 +3,7 @@ import { classify } from '../src/triggers/detect.ts';
 import { hexId, makeEvent } from './helpers.ts';
 
 const servicePubkey = hexId('svc');
-const opts = { servicePubkey, mentionLabels: ['DKG Memory', 'dkg'] };
+const opts = { servicePubkey, mentionLabels: ['DKG Memory', 'dkg'] as const };
 const target = hexId('target');
 
 describe('trigger classification', () => {
@@ -153,23 +153,6 @@ describe('trigger classification', () => {
           ],
         }),
         opts,
-      ),
-    ).toBeNull();
-  });
-
-  it('rejects an empty mention-label set instead of matching a bare at-sign', () => {
-    expect(
-      classify(
-        makeEvent({
-          kind: 9,
-          content: '@ distill this',
-          tags: [
-            ['h', 'chan'],
-            ['p', servicePubkey],
-            ['e', target, '', 'reply'],
-          ],
-        }),
-        { servicePubkey, mentionLabels: [] },
       ),
     ).toBeNull();
   });

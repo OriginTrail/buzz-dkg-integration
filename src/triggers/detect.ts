@@ -1,4 +1,4 @@
-import type { NostrEvent } from '../types.ts';
+import type { MentionLabels, NostrEvent } from '../types.ts';
 
 export type Trigger =
   | { type: 'pin'; event: NostrEvent; channelId: string; targetEventId: string }
@@ -40,7 +40,7 @@ export const MAX_QUESTION_CHARS = 512;
  */
 export function classify(
   event: NostrEvent,
-  opts: { servicePubkey: string; mentionLabels: readonly string[] },
+  opts: { servicePubkey: string; mentionLabels: MentionLabels },
 ): Trigger {
   if (event.pubkey === opts.servicePubkey) return null; // never self-trigger
 
@@ -64,12 +64,9 @@ export function classify(
     // signed p tag carries the authoritative identity. Interior whitespace is
     // presentation-tolerant; every non-whitespace character remains literal.
     const names = opts.mentionLabels
-      .map((name) => String(name).trim())
-      .filter(Boolean)
       .map(escapeRegExp)
       .map((name) => name.replace(/\s+/g, '\\s+'))
       .join('|');
-    if (!names) return null;
     const re = new RegExp(`@(?:${names})(?=\\s)\\s+(distill|ask)\\b\\s*(.*)`, 'is');
     const m = event.content.match(re);
     if (!m) return null;

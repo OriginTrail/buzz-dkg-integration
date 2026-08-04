@@ -54,7 +54,7 @@ describe('config hardening', () => {
 // ── triggers: question cap + bare-distill guard (review #6, nit) ──────────────
 
 describe('trigger classification hardening', () => {
-  const opts = { servicePubkey, mentionLabels: ['dkg'] };
+  const opts = { servicePubkey, mentionLabels: ['dkg'] as const };
 
   it('drops an over-length ask instead of building a giant SPARQL filter', () => {
     const huge = makeEvent({
@@ -97,7 +97,7 @@ function setup(overrides: Partial<DaemonConfig> = {}) {
     relayHttpUrl: 'http://mock',
     relayWsUrl: 'ws://mock',
     serviceSecretKeyHex: '11'.repeat(32),
-    mentionLabels: ['dkg'],
+    mentionLabels: ['dkg'] as const,
     dkgApiUrl: 'http://mock',
     dkgToken: 'mock',
     approvalEmoji: '✅',

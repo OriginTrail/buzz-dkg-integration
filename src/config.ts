@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { nip19 } from 'nostr-tools';
-import type { ChannelBinding, DaemonConfig, PublishMode } from './types.ts';
+import type { ChannelBinding, DaemonConfig, MentionLabels, PublishMode } from './types.ts';
 
 function required(name: string, env: NodeJS.ProcessEnv = process.env): string {
   const v = env[name];
@@ -68,6 +68,17 @@ export function parseBindings(raw: string): ChannelBinding[] {
   });
 }
 
+/** Own mention-label cleanup at the config boundary, not in the trigger parser. */
+export function normalizeMentionLabels(values: readonly (string | undefined)[]): MentionLabels {
+  const labels = [
+    ...new Set(
+      values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)),
+    ),
+  ].sort((a, b) => b.length - a.length);
+  if (labels.length === 0) throw new Error('at least one non-empty mention label is required');
+  return [labels[0]!, ...labels.slice(1)];
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
   const publishMode = (env.BDI_PUBLISH_MODE ?? 'disabled') as PublishMode;
   if (!['disabled', 'devnet', 'mainnet'].includes(publishMode)) {
@@ -88,11 +99,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
   }
   const mentionHandle = env.BDI_MENTION_HANDLE?.trim() || 'dkg';
   const mentionDisplayName = env.BDI_MENTION_DISPLAY_NAME?.trim();
-  const mentionLabels = [
-    ...new Set(
-      [mentionHandle, mentionDisplayName].filter((value): value is string => Boolean(value)),
-    ),
-  ].sort((a, b) => b.length - a.length) as [string, ...string[]];
+  const mentionLabels = normalizeMentionLabels([mentionHandle, mentionDisplayName]);
   return {
     relayHttpUrl: (env.BDI_BUZZ_HTTP ?? 'http://127.0.0.1:9440').replace(/\/$/, ''),
     relayWsUrl:
