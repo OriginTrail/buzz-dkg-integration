@@ -40,20 +40,21 @@ sudo buzz-dkg plan
 sudo buzz-dkg install
 ```
 
-Container discovery prefers the relay's loopback host mapping. This avoids
-hairpin TLS or private-network authentication failures while leaving the
-community's public URL unchanged. If discovery cannot identify the relay, pass
-its locally reachable endpoint explicitly:
+Container discovery preserves the relay's advertised community URL for tenant
+routing and NIP-98 authentication. It uses a loopback host mapping only for
+readiness and NIP-11 probes, avoiding hairpin TLS or private-network identity
+failures without changing the community authority. If discovery cannot identify
+the relay, pass its existing community URL explicitly:
 
 ```bash
-sudo buzz-dkg install --relay http://127.0.0.1:9440
+sudo buzz-dkg install --relay wss://community.example.com
 ```
 
 For an existing DKG node on a non-default API port or token path:
 
 ```bash
 sudo buzz-dkg install \
-  --relay http://127.0.0.1:9440 \
+  --relay wss://community.example.com \
   --dkg-api http://127.0.0.1:9200 \
   --dkg-token-path /home/relay-operator/.dkg/auth.token
 ```
@@ -62,7 +63,7 @@ For a new unattended installation, select the DKG network explicitly:
 
 ```bash
 sudo buzz-dkg install \
-  --relay http://127.0.0.1:9440 \
+  --relay wss://community.example.com \
   --dkg-role edge \
   --dkg-network testnet \
   --yes

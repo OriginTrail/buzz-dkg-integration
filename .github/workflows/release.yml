@@ -37,6 +37,7 @@ jobs:
           node-version: '22.14.0'
           cache: npm
       - run: npm ci
+      - run: npm run verify:dkg-release
       - run: npm test
       - run: npm run typecheck
       - run: npm run lint

@@ -50,9 +50,14 @@ export function relayCandidatesFromContainer(container) {
     .map(hostBindingUrl)
     .filter(Boolean);
 
-  // Prefer a host-local mapping. It avoids hairpin TLS/auth failures and keeps
-  // the integration working when the relay's public URL is private-network gated.
-  return [...new Set(local.length > 0 ? local : env.RELAY_URL ? [env.RELAY_URL] : [])];
+  // Buzz resolves the community from the request authority and signs NIP-98
+  // requests for that same public URL. A loopback host binding is therefore
+  // safe for an unauthenticated readiness/NIP-11 probe, but it must never
+  // replace an advertised RELAY_URL used by bootstrap or the daemon.
+  if (env.RELAY_URL) {
+    return [{ relayUrl: env.RELAY_URL, probeUrl: local[0] || env.RELAY_URL }];
+  }
+  return [...new Set(local)].map((url) => ({ relayUrl: url, probeUrl: url }));
 }
 
 export async function probeRelay(httpUrl, fetchImpl = fetch) {

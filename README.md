@@ -139,9 +139,11 @@ sudo buzz-dkg smoke
 sudo buzz-dkg remove
 ```
 
-The guided installer discovers common containerized Buzz Relay deployments,
-preferring their loopback host mapping over a public URL that may be protected
-by private-network identity checks. It also accepts an explicit
+The guided installer discovers common containerized Buzz Relay deployments. It
+preserves the relay's advertised community URL for tenant routing and NIP-98
+authentication, while using a loopback host mapping only for readiness and
+NIP-11 discovery probes when the public endpoint is private-network gated. It
+also accepts an explicit
 `--relay wss://community.example.com`. It validates and adopts that
 endpoint without replacing the relay process, database, identity, domain, or
 TLS configuration. It then reuses a compatible DKG node on `127.0.0.1:9200`,
