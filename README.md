@@ -109,6 +109,51 @@ path — is off-chain and free.
 
 Node docs: [OriginTrail/dkg](https://github.com/OriginTrail/dkg).
 
+## Local one-command M0
+
+The M0 launcher packages a pinned Buzz relay, an isolated one-node DKG 10.0.11
+devnet, and this integration into one local lifecycle. It generates stable
+identities, creates one `buzz-dkg-canary` channel, creates exactly one
+deterministically named Context Graph for that channel, adds the integration as
+a bot member, writes the binding, and starts the daemon with VM publication
+disabled.
+
+Prerequisites are Docker, pnpm, the Buzz CLI, a compatible Node.js runtime
+(`>=22.13 <23` or `>=23.4`), and a sibling DKG checkout named
+`dkg-v10.0.11`. Override the DKG checkout, Node binary, or Buzz CLI with
+`BDI_MVP_DKG_REPO`, `BDI_MVP_NODE`, or `BDI_BUZZ_CLI` when needed. The launcher
+checks the Buzz CLI before it creates local state or starts any service.
+Buzz itself runs from an immutable GHCR image pinned in
+`deploy/mvp/compose.yml`.
+
+```bash
+./buzz-dkg up
+./buzz-dkg status
+./buzz-dkg smoke
+```
+
+`smoke` drives the real relay and node: it posts and pins a synthetic decision,
+waits for one SWM receipt, checks that no VM receipt was produced, asks a
+supported question and verifies its scoped citation, then checks an unsupported
+question is refused. No approval or on-chain publication is attempted.
+
+```bash
+./buzz-dkg logs
+./buzz-dkg down
+```
+
+Secrets and retained runtime state live under `.mvp/` with private permissions
+and are ignored by Git. A checkout-wide ignored `.buzz-dkg-m0-control/`
+lock/journal safely serializes lifecycle commands even when the state-directory
+override is used. `up` is convergent: rerunning it reuses the healthy relay, DKG
+node, channel, graph, membership, binding, and daemon. `down` stops only
+M0-owned processes and containers and does not delete secrets or Docker
+volumes. If a process is killed while acquiring the lock, `./buzz-dkg unlock`
+provides a supported recovery path; it refuses while either the recorded
+launcher or DKG child is still alive. This is a local development devnet,
+however, so its Hardhat chain and
+graph contents must not be treated as durable production data.
+
 ## Deploy against an existing relay + node
 
 This is the deployment the integration advertises: a Buzz NIP-29 relay and a DKG
