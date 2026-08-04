@@ -75,6 +75,16 @@ printf '%s\n' "$@" > "$SUDO_CALL_LOG"
 [ "$1" = -H ] && shift
 [ "$1" = -u ] && shift 2
 [ "$1" = -- ] && shift
+if [ "\${SUDO_ENFORCE_ASSET_ACCESS:-0}" = 1 ]; then
+  ASSET_PATH="$4" node -e '
+    const { statSync } = require("node:fs");
+    const { dirname } = require("node:path");
+    const asset = process.env.ASSET_PATH;
+    const fileIsWorldReadable = (statSync(asset).mode & 0o004) !== 0;
+    const directoryIsWorldTraversable = (statSync(dirname(asset)).mode & 0o001) !== 0;
+    process.exit(fileIsWorldReadable && directoryIsWorldTraversable ? 0 : 96);
+  ' || exit $?
+fi
 exec "$@"
 `,
   );
@@ -158,7 +168,10 @@ describe('one-line release bootstrap', () => {
 
   it('verifies provenance with the invoking sudo user credentials', () => {
     const paths = fixture(tempRoot());
-    const result = runBootstrap(paths, { SUDO_USER: 'relay-operator' });
+    const result = runBootstrap(paths, {
+      SUDO_USER: 'relay-operator',
+      SUDO_ENFORCE_ASSET_ACCESS: '1',
+    });
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(paths.sudoLog, 'utf8').trim().split('\n')).toEqual([
       '-H',
@@ -178,6 +191,7 @@ describe('one-line release bootstrap', () => {
     const paths = fixture(tempRoot());
     const result = runBootstrap(paths, {
       SUDO_USER: 'relay-operator',
+      SUDO_ENFORCE_ASSET_ACCESS: '1',
       GH_ATTESTATION_FAIL: '1',
     });
     expect(result.status).not.toBe(0);
