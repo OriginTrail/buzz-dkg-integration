@@ -30,6 +30,7 @@ import { createLifecycleLockManager } from './mvp-lock.mjs';
 import { createDkgDeploymentRecovery } from './mvp-dkg-recovery.mjs';
 import { createMvpDaemonManager } from './mvp-daemon.mjs';
 import { startBuzzDependencies } from './mvp-orchestration.mjs';
+import { ensureActiveStateDirectory } from './mvp-active-state.mjs';
 import { DkgClient } from '../src/dkg/http.mjs';
 
 const EXPECTED_DKG_VERSION = '10.0.11';
@@ -64,6 +65,7 @@ const dkgDeploymentPath = join(
 // caller overrides BDI_MVP_STATE_DIR.
 const controlDir = join(repo, '.buzz-dkg-m0-control');
 const controlOwnerMarker = join(controlDir, 'owner.json');
+const activeStateMarker = join(controlDir, 'active-state.json');
 const dkgDeploymentBackupPath = join(controlDir, 'dkg-deployment-backup');
 const dkgDeploymentBackupMetaPath = join(controlDir, 'dkg-deployment-backup.json');
 const lifecycleLockDir = join(controlDir, 'lifecycle-lock');
@@ -242,8 +244,15 @@ const lifecycleLock = createLifecycleLockManager({
 });
 
 function unlockLifecycle() {
-  ensureStateDir();
   ensureControlDir();
+  ensureActiveStateDirectory({
+    markerPath: activeStateMarker,
+    stateDir,
+    project: PROJECT,
+    repo,
+    atomicWrite,
+  });
+  ensureStateDir();
   console.log(
     lifecycleLock.unlock()
       ? '[buzz-dkg] stale lifecycle lock cleared'
@@ -252,8 +261,15 @@ function unlockLifecycle() {
 }
 
 async function withLifecycleLock(command, action) {
-  ensureStateDir();
   ensureControlDir();
+  ensureActiveStateDirectory({
+    markerPath: activeStateMarker,
+    stateDir,
+    project: PROJECT,
+    repo,
+    atomicWrite,
+  });
+  ensureStateDir();
   const release = lifecycleLock.acquire(command);
   try {
     // Recovery is deliberately limited to an exclusive lifecycle command.
@@ -946,12 +962,10 @@ async function main() {
       logs();
       break;
     case 'smoke':
-      if (existsSync(stateDir)) await withLifecycleLock(command, smoke);
-      else await smoke();
+      await withLifecycleLock(command, smoke);
       break;
     case 'down':
-      if (existsSync(stateDir)) await withLifecycleLock(command, down);
-      else await down();
+      await withLifecycleLock(command, down);
       break;
     case 'unlock':
       unlockLifecycle();
