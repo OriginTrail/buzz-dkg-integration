@@ -929,6 +929,10 @@ async function up() {
   const dkgOwned = inspectDkgOwnership();
   await preflightPorts(dkgOwned);
   claimDkgState();
+  // Finish all local build/native compatibility work before starting Docker or
+  // a DKG process. From this point onward the ordered reconciliation steps are
+  // external mutations and are safe to retry independently.
+  ensureDkgBuild(env.dkg);
 
   console.log('[buzz-dkg] starting isolated Buzz dependencies on 127.0.0.1:9440');
   run('docker', composeArgs('up', '-d', 'postgres', 'redis', 'minio', 'minio-init', 'relay'), {
@@ -936,7 +940,6 @@ async function up() {
   });
   await waitUntil('Buzz relay', () => tcpOpen(9440), 150_000);
 
-  ensureDkgBuild(env.dkg);
   let status;
   if (await tcpOpen(9420)) {
     status = validateDkgStatus(await dkgStatus());

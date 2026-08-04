@@ -2,8 +2,11 @@
 
 This profile adds a Buzz Relay and the Buzz-DKG integration beside an already
 running DKG v10 Core. It does not start, stop, reconfigure, or expose the Core.
-The integration reaches the Core's loopback API using host networking and reads
-its bearer token from a read-only bind mount.
+The integration runs in the Linux host network namespace and is configured to
+reach the Core's loopback API. Host networking is connectivity, not isolation:
+the integration containers can reach other services bound to the host network,
+so the container image and this repository's code are part of the trust
+boundary. The Core bearer token is provided through a read-only bind mount.
 
 Safety defaults:
 
@@ -15,6 +18,11 @@ Safety defaults:
   bot profile needed for mention autocomplete. The daemon accepts both the
   profile's rendered `@DKG Memory distill` command and `@dkg distill`, while
   requiring the signed bot `p` tag. Bootstrap is convergent on rerun.
+
+This profile requires a Linux Docker host; Docker Desktop host networking does
+not provide the loopback behavior it relies on. Set `BDI_RUNTIME_UID` and
+`BDI_RUNTIME_GID` to the owner of the mounted DKG `auth.token`, otherwise the
+bootstrap and daemon cannot read it.
 
 The intended lifecycle is:
 
