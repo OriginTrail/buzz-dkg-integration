@@ -123,11 +123,11 @@ started with one command:
 curl -fsSL https://github.com/OriginTrail/buzz-dkg-integration/releases/latest/download/install.sh | sudo sh
 ```
 
-Prerequisites are Docker with the Compose plugin and the GitHub CLI (`gh`). The
-bootstrap detects `linux/x64` or `linux/arm64`, downloads the corresponding
-versioned bundle, checks its SHA-256 transit integrity, and uses
-`gh attestation verify` to authenticate its GitHub Actions build provenance before any root
-extraction. It then atomically activates the CLI under
+Prerequisites are Docker with the Compose plugin and the GitHub CLI (`gh`); no
+GitHub account, login, or token is required. The bootstrap detects `linux/x64`
+or `linux/arm64`, downloads the corresponding versioned bundle, checksum, and
+signed attestation bundle, then uses `gh attestation verify` to authenticate its
+GitHub Actions build provenance before any root extraction. It atomically activates the CLI under
 `/usr/local/bin/buzz-dkg` and reconnects the guided installer to `/dev/tty`.
 The CLI remains available after setup:
 

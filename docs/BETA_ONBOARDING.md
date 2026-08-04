@@ -11,8 +11,7 @@ Use a 64-bit Linux host (`x86_64` or `aarch64`) with:
 
 - a running Buzz Relay;
 - Docker and the Docker Compose plugin;
-- GitHub CLI (`gh`), authenticated as the invoking operator with `gh auth
-  login` so the installer can verify the release attestation; and
+- GitHub CLI (`gh`); no GitHub account, login, or token is required; and
 - `sudo` access.
 
 The relay should be published from Docker on a host port. If it is not, have a
@@ -28,9 +27,10 @@ The shortest path is one command:
 curl -fsSL https://github.com/OriginTrail/buzz-dkg-integration/releases/latest/download/install.sh | sudo sh
 ```
 
-The command downloads the bundle for the host architecture, verifies its
-SHA-256 checksum and GitHub build provenance, installs `buzz-dkg`, and opens the
-guided setup. Review the displayed plan before accepting it.
+The command downloads the bundle for the host architecture plus its checksum
+and signed attestation bundle, verifies its SHA-256 checksum and GitHub build
+provenance locally without signing in, installs `buzz-dkg`, and opens the guided
+setup. Review the displayed plan before accepting it.
 
 To install only the CLI and inspect the plan first:
 
