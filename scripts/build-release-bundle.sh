@@ -66,7 +66,13 @@ asset="$output_dir/buzz-dkg-$platform-$arch.tar.gz"
 # The installer rejects archive links and special files. Dereference the npm
 # and Node-runtime convenience symlinks so the release contains only regular
 # files/directories and extraction never follows an archive-controlled link.
-tar -chzf "$asset" -C "$bundle" .
+# GNU tar otherwise coalesces identical inodes into hard-link archive entries,
+# which the installer correctly rejects. BSD tar does not expose this option.
+if tar --help 2>&1 | grep -q -- '--hard-dereference'; then
+  tar --hard-dereference -chzf "$asset" -C "$bundle" .
+else
+  tar -chzf "$asset" -C "$bundle" .
+fi
 if tar -tvzf "$asset" | awk 'substr($1, 1, 1) !~ /^[-d]$/ { bad=1 } END { exit bad ? 0 : 1 }'; then
   printf 'release bundle contains a non-file archive entry\n' >&2
   exit 1
