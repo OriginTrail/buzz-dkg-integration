@@ -1,5 +1,9 @@
 import { readFileSync } from 'node:fs';
-import { nip19 } from 'nostr-tools';
+import {
+  normalizePublicKey,
+  parseBindings as parseSharedBindings,
+  parseTokenFile as parseSharedTokenFile,
+} from '../scripts/bootstrap/core.mjs';
 import type { ChannelBinding, DaemonConfig, MentionLabels, PublishMode } from './types.ts';
 
 function required(name: string, env: NodeJS.ProcessEnv = process.env): string {
@@ -16,28 +20,12 @@ function required(name: string, env: NodeJS.ProcessEnv = process.env): string {
  * `logger.warn` at best). Fail fast instead.
  */
 export function normalizePubkey(raw: string, ctx: string): string {
-  const v = String(raw).trim();
-  if (/^[0-9a-f]{64}$/i.test(v)) return v.toLowerCase();
-  if (v.startsWith('npub1')) {
-    try {
-      const dec = nip19.decode(v);
-      if (dec.type === 'npub' && typeof dec.data === 'string') return dec.data.toLowerCase();
-    } catch {
-      /* fall through to the throw below */
-    }
-  }
-  throw new Error(`${ctx}: '${v.slice(0, 16)}…' is not a 64-hex pubkey or npub1… identity`);
+  return normalizePublicKey(raw, ctx);
 }
 
 /** Last non-comment line — DKG auth.token files carry a comment header. */
 export function parseTokenFile(raw: string): string {
-  const line = raw
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith('#'))
-    .pop();
-  if (!line) throw new Error('token file contains no token');
-  return line;
+  return parseSharedTokenFile(raw);
 }
 
 /**
@@ -47,25 +35,7 @@ export function parseTokenFile(raw: string): string {
  * mappings; an unmapped channel is rejected everywhere.
  */
 export function parseBindings(raw: string): ChannelBinding[] {
-  const arr = JSON.parse(raw);
-  if (!Array.isArray(arr)) throw new Error('bindings file must be a JSON array');
-  const seen = new Set<string>();
-  return arr.map((b: any, i: number) => {
-    if (!b.channelId || !b.contextGraphId) {
-      throw new Error(`bindings[${i}]: channelId and contextGraphId are required`);
-    }
-    if (seen.has(b.channelId)) throw new Error(`bindings[${i}]: duplicate channelId`);
-    seen.add(b.channelId);
-    return {
-      channelId: String(b.channelId),
-      contextGraphId: String(b.contextGraphId),
-      promoters: Array.isArray(b.promoters)
-        ? b.promoters.map((p: unknown, j: number) =>
-            normalizePubkey(String(p), `bindings[${i}].promoters[${j}]`),
-          )
-        : [],
-    };
-  });
+  return parseSharedBindings(raw);
 }
 
 /** Own mention-label cleanup at the config boundary, not in the trigger parser. */

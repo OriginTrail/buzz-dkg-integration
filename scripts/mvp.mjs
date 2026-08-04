@@ -733,7 +733,9 @@ async function up() {
   const dkgOwned = inspectDkgOwnership();
   await preflightPorts(dkgOwned);
   claimDkgState();
-
+  // Finish all local build/native compatibility work before starting Docker or
+  // a DKG process. From this point onward the ordered reconciliation steps are
+  // external mutations and are safe to retry independently.
   await startBuzzDependencies({
     prepareDkg: () => ensureDkgBuild(env.dkg),
     startBuzz: () => {

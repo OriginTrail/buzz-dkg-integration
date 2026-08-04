@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -141,6 +141,7 @@ describe('M0 bootstrap', () => {
       channelType: 'stream',
       channelVisibility: 'private',
       channelDescription: 'test',
+      requestedContextGraphId: 'my-cg',
     };
 
     const first = await bootstrap(config, { buzz, dkg });
@@ -162,16 +163,69 @@ describe('M0 bootstrap', () => {
     expect(JSON.parse(readFileSync(config.bindingsPath, 'utf8'))).toEqual([
       {
         channelId,
-        contextGraphId: defaultContextGraphId(config.buzzHttp, channelId),
+        contextGraphId: 'my-cg',
         promoters: [promoterPubkey],
       },
     ]);
     expect(JSON.parse(readFileSync(config.statePath, 'utf8'))).toEqual({
       channelId,
-      contextGraphId: defaultContextGraphId(config.buzzHttp, channelId),
+      contextGraphId: 'my-cg',
       ownerPubkey,
       servicePubkey,
       promoterPubkeys: [promoterPubkey],
     });
+  });
+
+  it('rejects a requested graph collision before creating or mutating Buzz state', async () => {
+    const stateDir = tempDir();
+    const calls = { search: 0, createChannel: 0, addBot: 0, graph: 0 };
+    const bindingsPath = join(stateDir, 'bindings.json');
+    writeFileSync(
+      bindingsPath,
+      `${JSON.stringify([
+        {
+          channelId: '11111111-1111-4111-8111-111111111111',
+          contextGraphId: 'my-cg',
+          promoters: [],
+        },
+      ])}\n`,
+    );
+    const config = {
+      stateDir,
+      statePath: join(stateDir, 'bootstrap.json'),
+      bindingsPath,
+      buzzHttp: 'http://127.0.0.1:9440',
+      ownerPubkey: '1'.repeat(64),
+      servicePubkey: '2'.repeat(64),
+      promoterPubkeys: [],
+      channelName: 'buzz-dkg-canary',
+      channelType: 'stream',
+      channelVisibility: 'open',
+      channelDescription: 'test',
+      requestedContextGraphId: 'my-cg',
+    };
+    const buzz = {
+      async searchExact() {
+        calls.search += 1;
+        return [];
+      },
+      async createChannel() {
+        calls.createChannel += 1;
+        return { accepted: true };
+      },
+      async addBot() {
+        calls.addBot += 1;
+        return { accepted: true };
+      },
+    };
+    const dkg = {
+      async status() {
+        calls.graph += 1;
+        return {};
+      },
+    };
+
+    await expect(bootstrap(config, { buzz, dkg })).rejects.toThrow(/already bound/);
+    expect(calls).toEqual({ search: 1, createChannel: 0, addBot: 0, graph: 0 });
   });
 });
