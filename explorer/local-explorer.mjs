@@ -783,8 +783,11 @@ const server = createServer(async (req, res) => {
   }
 });
 
-// Loopback only — the mandate is per-viewer resolution, never a shared proxy.
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`local-first DKG explorer on http://127.0.0.1:${PORT}`);
+// Default loopback (per-viewer resolution). EXPLORER_BIND=0.0.0.0 opts the
+// operator into "community gateway" mode (RFC deployment profile 2): tailnet
+// members read this node's view, honestly labeled as gateway-resolved.
+const BIND = process.env.EXPLORER_BIND ?? '127.0.0.1';
+server.listen(PORT, BIND, () => {
+  console.log(`local-first DKG explorer on http://${BIND}:${PORT}`);
   console.log(`  node API: ${NODE_API} (token ${TOKEN ? 'loaded' : 'MISSING'})`);
 });
