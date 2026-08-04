@@ -176,19 +176,19 @@ export function mergeBinding(rawBindings, desired) {
   return normalized;
 }
 
-async function ensureContextGraph(dkg, contextGraphId, graphConfig) {
+async function ensureContextGraph(dkg, contextGraphId, graphPayload) {
   await dkg.status();
-  const before = await dkg.exists(contextGraphId);
+  const before = await dkg.contextGraphExists(contextGraphId);
   if (before?.exists === true) return 'existing';
   if (before?.exists !== false) {
     throw new Error('DKG Context Graph existence returned an unexpected response');
   }
   try {
-    await dkg.create(contextGraphId, graphConfig);
+    await dkg.createContextGraph(graphPayload);
   } catch (error) {
     if (error?.status !== 409) throw error;
   }
-  const after = await dkg.exists(contextGraphId);
+  const after = await dkg.contextGraphExists(contextGraphId);
   if (after?.exists !== true) throw new Error('created Context Graph was not visible on read-back');
   return 'created';
 }
@@ -202,13 +202,14 @@ export async function reconcileResolvedBootstrap(input) {
   const bindings = mergeBinding(readJsonFile(input.bindingsPath, 'bindings file') ?? [], input.binding);
   atomicWriteJson(input.statePath, input.provisionalState);
   const serviceMembership = await input.ensureMembership();
+  const promoterMemberships = input.ensurePromoters ? await input.ensurePromoters() : [];
   const serviceProfile = input.ensureProfile ? await input.ensureProfile() : undefined;
   const contextGraph = await ensureContextGraph(
     input.dkg,
     input.binding.contextGraphId,
-    input.graphConfig,
+    input.graphPayload,
   );
   atomicWriteJson(input.bindingsPath, bindings);
   atomicWriteJson(input.statePath, input.completeState);
-  return { serviceMembership, serviceProfile, contextGraph };
+  return { serviceMembership, promoterMemberships, serviceProfile, contextGraph };
 }

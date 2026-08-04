@@ -52,14 +52,14 @@ function harness() {
     async status() {
       return { nodeRole: 'core' };
     },
-    async exists(id) {
+    async contextGraphExists(id) {
       return { exists: graphs.has(id) };
     },
-    async create(id, config) {
+    async createContextGraph(config) {
       calls.createGraph += 1;
       expect(config).toMatchObject({ accessPolicy: 1 });
-      graphs.add(id);
-      return { id };
+      graphs.add(config.id);
+      return { id: config.id };
     },
   };
   const config = {
@@ -112,12 +112,12 @@ describe('existing-relay bootstrap reconciliation', () => {
     let failOnce = true;
     const dkg = {
       ...h.dkg,
-      async create(id, config) {
+      async createContextGraph(config) {
         if (failOnce) {
           failOnce = false;
           throw new Error('DKG unavailable');
         }
-        return h.dkg.create(id, config);
+        return h.dkg.createContextGraph(config);
       },
     };
     await expect(bootstrapExistingRelay(h.config, { buzz: h.buzz, dkg })).rejects.toThrow(/unavailable/);
@@ -128,7 +128,7 @@ describe('existing-relay bootstrap reconciliation', () => {
 
   it('fails closed when Context Graph creation is not visible on read-back', async () => {
     const h = harness();
-    const dkg = { ...h.dkg, create: async () => ({ accepted: true }) };
+    const dkg = { ...h.dkg, createContextGraph: async () => ({ accepted: true }) };
     await expect(bootstrapExistingRelay(h.config, { buzz: h.buzz, dkg })).rejects.toThrow(/not visible/);
   });
 

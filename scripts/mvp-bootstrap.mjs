@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { getPublicKey } from 'nostr-tools/pure';
 import { nip19 } from 'nostr-tools';
-import { DkgApiClient } from '../src/dkg/http.mjs';
+import { DkgClient } from '../src/dkg/http.mjs';
 import {
   bindingMappingKey,
   defaultContextGraphId,
@@ -305,23 +305,18 @@ class BuzzCli {
       'bot',
     ]);
   }
-}
 
-export class DkgHttp extends DkgApiClient {
-  constructor(config) {
-    super({ baseUrl: config.dkgApi, token: config.dkgToken, timeoutMs: DEFAULT_TIMEOUT_MS });
-  }
-
-  status() {
-    return super.status();
-  }
-
-  exists(contextGraphId) {
-    return this.contextGraphExists(contextGraphId);
-  }
-
-  create(contextGraphId, config) {
-    return this.createContextGraph(contextGraphCreatePayload(contextGraphId, config));
+  addMember(channelId, pubkey) {
+    return this.run([
+      'channels',
+      'add-member',
+      '--channel',
+      channelId,
+      '--pubkey',
+      pubkey,
+      '--role',
+      'member',
+    ]);
   }
 }
 
@@ -433,6 +428,31 @@ async function ensureMembership(buzz, channelId, servicePubkey) {
   return 'added';
 }
 
+async function ensurePromoterMemberships(buzz, config, channelId) {
+  if (config.channelVisibility !== 'private') return [];
+  const results = [];
+  for (const pubkey of config.promoterPubkeys) {
+    if (pubkey === config.ownerPubkey) {
+      results.push({ pubkey, action: 'owner' });
+      continue;
+    }
+    if (pubkey === config.servicePubkey) {
+      results.push({ pubkey, action: 'service-bot' });
+      continue;
+    }
+    const hasMember = (members) =>
+      Array.isArray(members) &&
+      members.some((member) => String(member.pubkey).toLowerCase() === pubkey);
+    if (hasMember(await buzz.members(channelId))) {
+      results.push({ pubkey, action: 'existing' });
+      continue;
+    }
+    writeAccepted(await buzz.addMember(channelId, pubkey), 'Buzz promoter membership');
+    await poll(() => buzz.members(channelId), hasMember, `Buzz promoter membership ${pubkey}`);
+    results.push({ pubkey, action: 'added' });
+  }
+  return results;
+}
 function validatePriorState(state, desired) {
   if (!state) return;
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
@@ -463,7 +483,13 @@ export async function bootstrap(config, dependencies = {}) {
   const normalizedOldBindings = parseBindingArray(oldBindings, { strict: true });
 
   const buzz = dependencies.buzz ?? new BuzzCli(config);
-  const dkg = dependencies.dkg ?? new DkgHttp(config);
+  const dkg =
+    dependencies.dkg ??
+    new DkgClient({
+      baseUrl: config.dkgApi,
+      token: config.dkgToken,
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+    });
   const channel = await ensureChannel(config, buzz, priorState);
   const channelId = channel.channelId;
   const existingBinding = normalizedOldBindings.find((binding) => binding.channelId === channelId);
@@ -487,7 +513,6 @@ export async function bootstrap(config, dependencies = {}) {
   const contextGraphId = validateContextGraphId(
     stateId ||
       existingBinding?.contextGraphId ||
-      requestedId ||
       defaultContextGraphId(config.buzzHttp, channelId),
   );
   const desiredBinding = {
@@ -509,8 +534,9 @@ export async function bootstrap(config, dependencies = {}) {
     provisionalState: publicState,
     completeState: publicState,
     ensureMembership: () => ensureMembership(buzz, channelId, config.servicePubkey),
+    ensurePromoters: () => ensurePromoterMemberships(buzz, config, channelId),
     dkg,
-    graphConfig: { ...config, channelId },
+    graphPayload: contextGraphCreatePayload(contextGraphId, { ...config, channelId }),
   });
 
   return {
@@ -521,6 +547,7 @@ export async function bootstrap(config, dependencies = {}) {
     actions: {
       channel: channel.action,
       serviceMembership: actions.serviceMembership,
+      promoterMemberships: actions.promoterMemberships,
       contextGraph: actions.contextGraph,
       bindings: 'written',
     },
