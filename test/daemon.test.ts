@@ -18,7 +18,7 @@ function setup(overrides: Partial<DaemonConfig> = {}) {
     relayHttpUrl: 'http://mock',
     relayWsUrl: 'ws://mock',
     serviceSecretKeyHex: '11'.repeat(32),
-    mentionHandle: 'dkg',
+    mentionLabels: ['dkg'],
     dkgApiUrl: 'http://mock',
     dkgToken: 'mock',
     approvalEmoji: '✅',

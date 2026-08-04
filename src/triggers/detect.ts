@@ -40,7 +40,7 @@ export const MAX_QUESTION_CHARS = 512;
  */
 export function classify(
   event: NostrEvent,
-  opts: { servicePubkey: string; mentionHandle: string; mentionDisplayName?: string },
+  opts: { servicePubkey: string; mentionLabels: readonly string[] },
 ): Trigger {
   if (event.pubkey === opts.servicePubkey) return null; // never self-trigger
 
@@ -60,14 +60,16 @@ export function classify(
   if (event.kind === 9 && mentionsPubkey(event, opts.servicePubkey)) {
     const channelId = firstTag(event, 'h');
     if (!channelId) return null;
-    // Buzz renders the selected profile's display_name into message content
-    // while the signed p tag carries the authoritative identity. Accept both
-    // configured labels exactly; never treat arbitrary @text as the service.
-    const names = [...new Set([opts.mentionHandle, opts.mentionDisplayName].filter(Boolean))]
-      .map((name) => String(name))
-      .sort((a, b) => b.length - a.length)
+    // Buzz renders one of the configured labels into message content while the
+    // signed p tag carries the authoritative identity. Interior whitespace is
+    // presentation-tolerant; every non-whitespace character remains literal.
+    const names = opts.mentionLabels
+      .map((name) => String(name).trim())
+      .filter(Boolean)
       .map(escapeRegExp)
+      .map((name) => name.replace(/\s+/g, '\\s+'))
       .join('|');
+    if (!names) return null;
     const re = new RegExp(`@(?:${names})(?=\\s)\\s+(distill|ask)\\b\\s*(.*)`, 'is');
     const m = event.content.match(re);
     if (!m) return null;

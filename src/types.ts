@@ -82,9 +82,8 @@ export interface DaemonConfig {
   relayHttpUrl: string;
   relayWsUrl: string;
   serviceSecretKeyHex: string;
-  mentionHandle: string; // stable short name, e.g. "dkg"
-  /** Optional Buzz profile display name rendered into message content. */
-  mentionDisplayName?: string;
+  /** Non-empty labels Buzz may render when the service is selected as a mention. */
+  mentionLabels: readonly [string, ...string[]];
   dkgApiUrl: string;
   dkgToken: string;
   approvalEmoji: string;

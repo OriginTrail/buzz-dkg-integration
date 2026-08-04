@@ -86,13 +86,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
       `BDI_MAX_PUBLISHES_PER_DAY must be a non-negative number, got '${env.BDI_MAX_PUBLISHES_PER_DAY}'`,
     );
   }
+  const mentionHandle = env.BDI_MENTION_HANDLE?.trim() || 'dkg';
+  const mentionDisplayName = env.BDI_MENTION_DISPLAY_NAME?.trim();
+  const mentionLabels = [
+    ...new Set(
+      [mentionHandle, mentionDisplayName].filter((value): value is string => Boolean(value)),
+    ),
+  ].sort((a, b) => b.length - a.length) as [string, ...string[]];
   return {
     relayHttpUrl: (env.BDI_BUZZ_HTTP ?? 'http://127.0.0.1:9440').replace(/\/$/, ''),
     relayWsUrl:
       env.BDI_BUZZ_WS ?? (env.BDI_BUZZ_HTTP ?? 'ws://127.0.0.1:9440').replace(/^http/, 'ws'),
     serviceSecretKeyHex: required('BDI_SERVICE_KEY', env),
-    mentionHandle: env.BDI_MENTION_HANDLE ?? 'dkg',
-    mentionDisplayName: env.BDI_MENTION_DISPLAY_NAME?.trim() || undefined,
+    mentionLabels,
     dkgApiUrl: (env.BDI_DKG_API ?? 'http://127.0.0.1:9200').replace(/\/$/, ''),
     dkgToken,
     approvalEmoji: env.BDI_APPROVAL_EMOJI ?? '✅',

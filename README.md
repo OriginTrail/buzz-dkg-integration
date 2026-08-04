@@ -36,6 +36,11 @@ one operator-approved SWM share → one operator-approved on-chain publication.
   `create → write → finalize (seal) → full SWM share`, verifies with a scoped
   read-back, and replies in-thread with a receipt (assertion coordinate,
   KA name, source digest).
+  Mention authorization is identity-bound, not label-bound: the signed event
+  must carry the integration service pubkey in a `p` tag. Any channel member
+  who can mention that service may request `distill`; the display-name alias
+  makes the existing capability easier to discover but does not widen who may
+  invoke it.
 - **Approval**: an authorized promoter's ✅ on that receipt is validated
   against the nine SPEC §6 invariants in code (including a re-read of the
   shared graph's source-set digest at approval time). Publication is
