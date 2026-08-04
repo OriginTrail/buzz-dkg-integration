@@ -1,5 +1,7 @@
 # buzz-dkg-integration
 
+[![CI](https://github.com/OriginTrail/buzz-dkg-integration/actions/workflows/ci.yml/badge.svg)](https://github.com/OriginTrail/buzz-dkg-integration/actions/workflows/ci.yml)
+
 Reference integration between [Buzz](https://github.com/block/buzz) and
 [OriginTrail DKG v10](https://github.com/OriginTrail/dkg): a standalone daemon
 that joins a Buzz channel as an external member, turns explicitly signalled
