@@ -53,20 +53,8 @@ function requireSecrets(secrets) {
  */
 export function buildBaseMvpEnvironments(input) {
   const {
-    processEnv,
-    nodePath,
-    project,
-    stateDir,
-    dkgRepo,
-    dkgDevnetDir,
-    dkgTokenPath,
-    bindingsPath,
-    daemonDbPath,
-    buzzHttp,
-    buzzWs,
-    dkgApi,
-    dkgDockerPrefix,
-    dkgNodes,
+    host: { processEnv, nodePath, project, stateDir, dkgRepo },
+    dkg: { dkgDevnetDir, dkgDockerPrefix, dkgNodes },
   } = input;
   const base = {
     ...safeHostEnvironment(processEnv),
@@ -95,15 +83,18 @@ export function buildBaseMvpEnvironments(input) {
 
 export function buildCredentialedMvpEnvironments(input) {
   const {
-    processEnv,
-    dkgTokenPath,
-    bindingsPath,
-    daemonDbPath,
-    buzzHttp,
-    buzzWs,
-    dkgApi,
+    integration: {
+      processEnv,
+      dkgTokenPath,
+      bindingsPath,
+      daemonDbPath,
+      buzzHttp,
+      buzzWs,
+      dkgApi,
+      buzzCli,
+    },
   } = input;
-  const { base, dkg } = buildBaseMvpEnvironments(input);
+  const { base, dkg } = buildBaseMvpEnvironments(input.base);
 
   const secrets = requireSecrets(input.secrets);
   const integration = {
@@ -125,6 +116,7 @@ export function buildCredentialedMvpEnvironments(input) {
     dkg,
     bootstrap: {
       ...integration,
+      BDI_BUZZ_CLI: buzzCli,
       BDI_BUZZ_OWNER_KEY: secrets.BDI_SPIKE_AUTHOR_KEY,
       BDI_PROMOTER_KEY: secrets.BDI_SPIKE_PROMOTER_KEY,
     },

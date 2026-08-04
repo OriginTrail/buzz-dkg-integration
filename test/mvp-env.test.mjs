@@ -24,26 +24,36 @@ const secrets = Object.fromEntries(
 
 function input() {
   return {
-    processEnv: {
-      PATH: '/bin',
-      BDI_PUBLISH_MODE: 'mainnet',
-      BDI_DKG_TOKEN: 'ambient-production-token',
-      DKG_HOME: '/production/dkg',
-      DEVNET_NO_AUTH: '1',
+    base: {
+      host: {
+        processEnv: {
+          PATH: '/bin',
+          BDI_PUBLISH_MODE: 'mainnet',
+          BDI_DKG_TOKEN: 'ambient-production-token',
+          DKG_HOME: '/production/dkg',
+          DEVNET_NO_AUTH: '1',
+        },
+        nodePath: '/shim:/bin',
+        project: 'test',
+        stateDir: '/state',
+        dkgRepo: '/dkg',
+      },
+      dkg: {
+        dkgDevnetDir: '/state/dkg',
+        dkgDockerPrefix: 'test-dkg',
+        dkgNodes: 6,
+      },
     },
-    nodePath: '/shim:/bin',
-    project: 'test',
-    stateDir: '/state',
-    dkgRepo: '/dkg',
-    dkgDevnetDir: '/state/dkg',
-    dkgTokenPath: '/state/dkg/auth.token',
-    bindingsPath: '/state/bindings.json',
-    daemonDbPath: '/state/daemon.db',
-    buzzHttp: 'http://127.0.0.1:9440',
-    buzzWs: 'ws://127.0.0.1:9440',
-    dkgApi: 'http://127.0.0.1:9420',
-    dkgDockerPrefix: 'test-dkg',
-    dkgNodes: 6,
+    integration: {
+      processEnv: { BDI_LOG_LEVEL: 'debug' },
+      dkgTokenPath: '/state/dkg/auth.token',
+      bindingsPath: '/state/bindings.json',
+      daemonDbPath: '/state/daemon.db',
+      buzzHttp: 'http://127.0.0.1:9440',
+      buzzWs: 'ws://127.0.0.1:9440',
+      dkgApi: 'http://127.0.0.1:9420',
+      buzzCli: '/opt/buzz/bin/buzz',
+    },
     secrets,
   };
 }
@@ -76,10 +86,18 @@ describe('M0 component environments', () => {
   });
 
   it('has an explicit non-credentialed environment contract', () => {
-    const env = buildBaseMvpEnvironments(input());
+    const env = buildBaseMvpEnvironments(input().base);
     expect(Object.keys(env).sort()).toEqual(['base', 'dkg']);
     expect(env.base.BDI_DKG_TOKEN).toBeUndefined();
     expect(env.dkg.BDI_DKG_TOKEN_PATH).toBeUndefined();
+  });
+
+  it('carries an explicitly preflighted Buzz CLI into bootstrap only', () => {
+    const env = environments();
+    expect(env.bootstrap.BDI_BUZZ_CLI).toBe('/opt/buzz/bin/buzz');
+    expect(env.base.BDI_BUZZ_CLI).toBeUndefined();
+    expect(env.dkg.BDI_BUZZ_CLI).toBeUndefined();
+    expect(env.daemon.BDI_BUZZ_CLI).toBeUndefined();
   });
 
   it('rejects missing and non-zero Buzz CLI executables', () => {
