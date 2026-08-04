@@ -14,7 +14,6 @@ import {
   readdirSync,
   renameSync,
   rmSync,
-  rmdirSync,
   statSync,
   symlinkSync,
   unlinkSync,
@@ -23,6 +22,8 @@ import {
 import net from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildMvpEnvironments } from './mvp-env.mjs';
+import { createLifecycleLockManager } from './mvp-lock.mjs';
 
 const EXPECTED_DKG_VERSION = '10.0.11';
 const PROJECT = 'buzz-dkg-m0';
@@ -80,12 +81,14 @@ Usage:
   ./buzz-dkg logs     Show recent logs for this M0 stack only
   ./buzz-dkg smoke    Run the synthetic distill → receipt → ask check
   ./buzz-dkg down     Stop this M0 stack; retain secrets, DKG state, and volumes
+  ./buzz-dkg unlock   Clear a stale lifecycle lock after verifying no owner or DKG child is alive
 
 Environment overrides:
   BDI_MVP_NODE        Node >=22.13 <23 or >=23.4 executable used by the launcher
   BDI_MVP_STATE_DIR   Runtime state directory (default: ${join(repo, '.mvp')})
   BDI_MVP_DKG_REPO    DKG v10.0.11 checkout (default: ${join(dirname(repo), 'dkg-v10.0.11')})
   BDI_MVP_DKG_NODES   Local DKG node count, 1..6 (default: 1; M0 keeps VM disabled)
+  BDI_BUZZ_CLI        Buzz CLI executable used for bootstrap (default: buzz)
 
 Only 127.0.0.1:9440 is published by Docker. DKG uses the isolated Phase 0
 ports beginning at API 9420 and Hardhat 8655. No production DKG home is read.`);
@@ -99,6 +102,12 @@ function fail(message, code = 1) {
 function commandExists(command) {
   const result = spawnSync(command, ['--version'], { stdio: 'ignore' });
   return !result.error;
+}
+
+export function assertBuzzCliPrerequisite(command = process.env.BDI_BUZZ_CLI || 'buzz') {
+  if (!commandExists(command)) {
+    throw new Error(`Buzz CLI not found at '${command}'; install it or set BDI_BUZZ_CLI`);
+  }
 }
 
 function run(command, args, options = {}) {
@@ -376,92 +385,40 @@ function assertControlOwnership() {
   }
 }
 
-function readLifecycleLockOwner() {
-  const lockStat = lstatMaybe(lifecycleLockDir);
-  if (!lockStat?.isDirectory() || lockStat.isSymbolicLink()) {
-    throw new Error(`invalid M0 lifecycle lock: ${lifecycleLockDir}`);
-  }
-  const ownerStat = lstatMaybe(lifecycleLockOwnerPath);
-  if (!ownerStat?.isFile() || ownerStat.isSymbolicLink()) {
-    throw new Error(`M0 lifecycle lock has no valid owner record: ${lifecycleLockOwnerPath}`);
-  }
-  let owner;
-  try {
-    owner = JSON.parse(readFileSync(lifecycleLockOwnerPath, 'utf8'));
-  } catch {
-    throw new Error(`invalid M0 lifecycle lock owner: ${lifecycleLockOwnerPath}`);
-  }
-  if (
-    owner.version !== 1 ||
-    owner.owner !== PROJECT ||
-    owner.repo !== repo ||
-    !Number.isInteger(owner.pid) ||
-    owner.pid < 1
-  ) {
-    throw new Error(`M0 lifecycle lock does not belong to this checkout`);
-  }
-  return owner;
+function processIdentity(pid) {
+  if (!processAlive(pid)) return null;
+  const result = run('ps', ['-p', String(pid), '-o', 'lstart=', '-o', 'command='], {
+    capture: true,
+    allowFailure: true,
+  });
+  return result.status === 0 && result.stdout.trim() ? result.stdout.trim() : null;
 }
 
-function removeLifecycleLock(owner) {
-  const current = readLifecycleLockOwner();
-  if (current.pid !== owner.pid || current.startedAt !== owner.startedAt) {
-    throw new Error('M0 lifecycle lock owner changed while it was being released');
-  }
-  unlinkSync(lifecycleLockOwnerPath);
-  // Refuse recursive removal: unexpected lock contents are evidence of an
-  // unsafe/corrupt state directory and must be inspected rather than erased.
-  rmdirSync(lifecycleLockDir);
-}
+const lifecycleLock = createLifecycleLockManager({
+  lockDir: lifecycleLockDir,
+  ownerPath: lifecycleLockOwnerPath,
+  project: PROJECT,
+  repo,
+  processAlive,
+  processIdentity,
+  readRecovery: readDkgDeploymentRecoveryMeta,
+  recover: recoverPendingDkgDeployment,
+});
 
-function acquireLifecycleLock(command) {
-  assertStateOwnership();
-  assertControlOwnership();
-  if (existsSync(lifecycleLockDir)) {
-    const staleOwner = readLifecycleLockOwner();
-    if (processAlive(staleOwner.pid)) {
-      throw new Error(
-        `another buzz-dkg ${staleOwner.command || 'lifecycle command'} is active ` +
-          `(PID ${staleOwner.pid})`,
-      );
-    }
-    const recovery = readDkgDeploymentRecoveryMeta();
-    if (recovery) {
-      if (recovery.ownerPid !== staleOwner.pid) {
-        throw new Error('stale lifecycle lock and DKG recovery record have different owners');
-      }
-      if (recovery.childPid !== null && processAlive(recovery.childPid)) {
-        throw new Error(
-          `stale launcher PID ${staleOwner.pid} left active DKG devnet child PID ` +
-            `${recovery.childPid}; recovery refused`,
-        );
-      }
-    }
-    removeLifecycleLock(staleOwner);
-  }
-
-  mkdirSync(lifecycleLockDir, { mode: 0o700 });
-  const owner = {
-    version: 1,
-    owner: PROJECT,
-    repo,
-    pid: process.pid,
-    command,
-    startedAt: new Date().toISOString(),
-  };
-  try {
-    atomicWrite(lifecycleLockOwnerPath, `${JSON.stringify(owner)}\n`, 0o600);
-  } catch (error) {
-    rmdirSync(lifecycleLockDir);
-    throw error;
-  }
-  return () => removeLifecycleLock(owner);
+function unlockLifecycle() {
+  ensureStateDir();
+  ensureControlDir();
+  console.log(
+    lifecycleLock.unlock()
+      ? '[buzz-dkg] stale lifecycle lock cleared'
+      : '[buzz-dkg] no stale lifecycle lock found',
+  );
 }
 
 async function withLifecycleLock(command, action) {
   ensureStateDir();
   ensureControlDir();
-  const release = acquireLifecycleLock(command);
+  const release = lifecycleLock.acquire(command);
   try {
     // Recovery is deliberately limited to an exclusive lifecycle command.
     // Read-only status/log commands can therefore never interfere with an up.
@@ -545,39 +502,25 @@ function readSecretsIfPresent() {
   return secrets;
 }
 
-function runtimeEnv(secrets) {
+function runtimeEnvironments(secrets) {
   const shimDir = ensureNodeShim();
-  return {
-    ...process.env,
-    ...secrets,
-    PATH: `${shimDir}:${process.env.PATH || ''}`,
-    COMPOSE_PROJECT_NAME: PROJECT,
-    BDI_MVP_STATE_DIR: stateDir,
-    BDI_MVP_DKG_REPO: dkgRepo,
-    BDI_BUZZ_HTTP: BUZZ_HTTP,
-    BDI_BUZZ_WS: BUZZ_WS,
-    BDI_DKG_API: DKG_API,
-    BDI_DKG_TOKEN_PATH: dkgTokenPath,
-    BDI_BINDINGS_PATH: bindingsPath,
-    BDI_BUZZ_OWNER_KEY: secrets.BDI_SPIKE_AUTHOR_KEY,
-    BDI_SERVICE_KEY: secrets.BDI_SPIKE_SERVICE_KEY,
-    BDI_PROMOTER_KEY: secrets.BDI_SPIKE_PROMOTER_KEY,
-    BDI_PUBLISH_MODE: 'disabled',
-    BDI_DB_PATH: daemonDbPath,
-    BDI_LOG_LEVEL: process.env.BDI_LOG_LEVEL || 'info',
-    DEVNET_DIR: dkgDevnetDir,
-    DEVNET_DOCKER_NAME_PREFIX: DKG_DOCKER_PREFIX,
-    DEVNET_ENABLE_PUBLISHER: '0',
-    NUM_CORE_NODES: String(Math.min(dkgNodes, 4)),
-    API_PORT_BASE: '9420',
-    LIBP2P_PORT_BASE: '10401',
-    HARDHAT_PORT: '8655',
-    DEVNET_OXIGRAPH_BASE: '7920',
-    DEVNET_BLAZEGRAPH_PORT: '19999',
-    DEVNET_OXIGRAPH_SERVER_PORT_5: '7931',
-    DEVNET_OXIGRAPH_SERVER_PORT_6: '7932',
-    UI_PORT: '5573',
-  };
+  return buildMvpEnvironments({
+    processEnv: process.env,
+    nodePath: `${shimDir}:${process.env.PATH || ''}`,
+    project: PROJECT,
+    stateDir,
+    dkgRepo,
+    dkgDevnetDir,
+    dkgTokenPath,
+    bindingsPath,
+    daemonDbPath,
+    buzzHttp: BUZZ_HTTP,
+    buzzWs: BUZZ_WS,
+    dkgApi: DKG_API,
+    dkgDockerPrefix: DKG_DOCKER_PREFIX,
+    dkgNodes,
+    secrets,
+  });
 }
 
 function ensureNodeShim() {
@@ -620,6 +563,7 @@ function composeArgs(...args) {
 }
 
 function assertPrerequisites() {
+  assertBuzzCliPrerequisite();
   if (!commandExists('docker')) throw new Error('Docker is required');
   run('docker', ['info'], { capture: true });
   const devnet = join(dkgRepo, 'scripts', 'devnet.sh');
@@ -977,20 +921,22 @@ async function stopDaemon() {
 
 async function up() {
   ensureRuntimeVersion();
-  const secrets = ensureSecrets();
-  const env = runtimeEnv(secrets);
+  // Complete all host/tooling preflight before generating secrets or starting
+  // any external service, so a missing Buzz CLI cannot leave a partial stack.
   assertPrerequisites();
+  const secrets = ensureSecrets();
+  const env = runtimeEnvironments(secrets);
   const dkgOwned = inspectDkgOwnership();
   await preflightPorts(dkgOwned);
   claimDkgState();
 
   console.log('[buzz-dkg] starting isolated Buzz dependencies on 127.0.0.1:9440');
   run('docker', composeArgs('up', '-d', 'postgres', 'redis', 'minio', 'minio-init', 'relay'), {
-    env,
+    env: env.compose,
   });
   await waitUntil('Buzz relay', () => tcpOpen(9440), 150_000);
 
-  ensureDkgBuild(env);
+  ensureDkgBuild(env.dkg);
   let status;
   if (await tcpOpen(9420)) {
     status = validateDkgStatus(await dkgStatus());
@@ -1027,7 +973,7 @@ async function up() {
       `[buzz-dkg] starting isolated DKG v${EXPECTED_DKG_VERSION} devnet ` +
         `(${dkgNodes} core node${dkgNodes === 1 ? '' : 's'})`,
     );
-    await runDevnetStart(env);
+    await runDevnetStart(env.dkg);
     status = await waitUntil(
       'DKG API identity',
       async () => validateDkgStatus(await dkgStatus()),
@@ -1038,8 +984,8 @@ async function up() {
   }
 
   console.log('[buzz-dkg] bootstrapping the canary channel and binding');
-  run(process.execPath, [bootstrapScript, 'bootstrap'], { env });
-  await startDaemon(env);
+  run(process.execPath, [bootstrapScript, 'bootstrap'], { env: env.bootstrap });
+  await startDaemon(env.daemon);
   console.log(
     `[buzz-dkg] M0 ready — Buzz ${BUZZ_HTTP}; DKG ${DKG_API}; DKG ${status.version}/${status.chain.chainId}`,
   );
@@ -1126,14 +1072,14 @@ async function smoke() {
   }
   const secrets = readSecretsIfPresent();
   if (!secrets) throw new Error('M0 is not initialized; run ./buzz-dkg up first');
-  const env = runtimeEnv(secrets);
+  const env = runtimeEnvironments(secrets);
   const dkg = validateDkgStatus(await dkgStatus());
   if (!(await tcpOpen(9440)) || !daemonOwned(readPid())) {
     throw new Error('M0 is not fully running; inspect ./buzz-dkg status and ./buzz-dkg logs');
   }
   await validateContextGraph();
   console.log(`[buzz-dkg] smoke preflight: DKG ${dkg.version}/${dkg.chain.chainId}; VM disabled`);
-  run(process.execPath, [smokeScript], { env });
+  run(process.execPath, [smokeScript], { env: env.smoke });
 }
 
 async function down() {
@@ -1145,7 +1091,7 @@ async function down() {
   assertStateOwnership();
   await stopDaemon();
   const secrets = readSecretsIfPresent();
-  const env = runtimeEnv(secrets || {});
+  const env = runtimeEnvironments(secrets || undefined);
   let dkgStopConfirmed = true;
   if (existsSync(dkgDevnetDir) && inspectDkgOwnership()) {
     if (!existsSync(join(dkgRepo, 'scripts', 'devnet.sh'))) {
@@ -1154,7 +1100,7 @@ async function down() {
     console.log('[buzz-dkg] stopping the M0-owned DKG devnet (state retained)');
     const stopped = run(join(dkgRepo, 'scripts', 'devnet.sh'), ['stop'], {
       cwd: dkgRepo,
-      env,
+      env: env.dkg,
       allowFailure: true,
     });
     const livePids = liveDkgPids();
@@ -1176,7 +1122,7 @@ async function down() {
       );
     }
     console.log('[buzz-dkg] stopping the buzz-dkg-m0 Compose project (volumes retained)');
-    run('docker', composeArgs('down', '--remove-orphans'), { env });
+    run('docker', composeArgs('down', '--remove-orphans'), { env: env.compose });
   }
   if (!dkgStopConfirmed) {
     throw new Error('M0 dependencies stopped, but DKG shutdown was not confirmed; inspect logs');
@@ -1194,6 +1140,8 @@ async function main() {
     throw new Error(`unexpected argument(s) for ${command}: ${extra.join(' ')}`);
   switch (command) {
     case 'up':
+      // Check the profile's explicit host client before lock/state creation.
+      assertBuzzCliPrerequisite();
       await withLifecycleLock(command, up);
       break;
     case 'status':
@@ -1210,10 +1158,15 @@ async function main() {
       if (existsSync(stateDir)) await withLifecycleLock(command, down);
       else await down();
       break;
+    case 'unlock':
+      unlockLifecycle();
+      break;
     default:
       help();
       throw new Error(`unknown command: ${command}`);
   }
 }
 
-main().catch((error) => fail(error instanceof Error ? error.message : String(error)));
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => fail(error instanceof Error ? error.message : String(error)));
+}

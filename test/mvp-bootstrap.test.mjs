@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   bindingMappingKey,
   bootstrap,
+  contextGraphCreatePayload,
   defaultContextGraphId,
   mergeBinding,
   parseTokenFile,
@@ -36,6 +37,21 @@ describe('M0 bootstrap', () => {
 
   it('parses the last non-comment DKG token line', () => {
     expect(parseTokenFile('# generated\n\nold\nnew-token\n')).toBe('new-token');
+  });
+
+  it('creates an off-chain-only Context Graph payload', () => {
+    expect(
+      contextGraphCreatePayload('buzz-test', {
+        channelName: 'canary',
+        channelId: '550e8400-e29b-41d4-a716-446655440000',
+        channelVisibility: 'private',
+      }),
+    ).toMatchObject({
+      id: 'buzz-test',
+      accessPolicy: 1,
+      publishPolicy: 0,
+      register: false,
+    });
   });
 
   it('rejects a context graph already assigned to another channel', () => {
