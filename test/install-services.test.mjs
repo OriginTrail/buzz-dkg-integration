@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { createInstallContext } from '../scripts/install/context.mjs';
+import { DKG_RELEASE_POLICY } from '../scripts/install/dkg-release.mjs';
 import { resolveDkgPlan } from '../scripts/install/dkg-plan.mjs';
 import { serializeRuntimeEnv } from '../scripts/install/runtime-env.mjs';
 
 describe('installer services', () => {
+  it('keeps the managed DKG package inside the reusable compatibility set', () => {
+    expect(DKG_RELEASE_POLICY.reusableVersions).toContain(DKG_RELEASE_POLICY.managedVersion);
+    expect(DKG_RELEASE_POLICY.managedIntegrity).toMatch(/^sha512-/);
+  });
+
   it('builds paths from an explicit install context', () => {
     const context = createInstallContext({
       BUZZ_DKG_CONFIG_DIR: '/config',

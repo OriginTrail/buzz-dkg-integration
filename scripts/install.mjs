@@ -14,8 +14,13 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { createInstallContext } from './install/context.mjs';
+import { DKG_RELEASE_POLICY } from './install/dkg-release.mjs';
 import { resolveDkgPlan, SUPPORTED_DKG_NETWORKS } from './install/dkg-plan.mjs';
-import { probeRelay, relayEndpoints } from './install/relay.mjs';
+import {
+  probeRelay,
+  relayCandidatesFromContainer,
+  relayEndpoints,
+} from './install/relay.mjs';
 import {
   generatedSecrets,
   parseEnvFile,
@@ -25,9 +30,8 @@ import {
 export { relayEndpoints };
 
 const installContext = createInstallContext();
-const dkgVersion = '10.0.12';
-const dkgIntegrity =
-  'sha512-AwUiqLXLLrUMuEN8maGSt5ijmAsgFsp2Ur4CZaHWlsxrHIHDk4QBbmQV7GyfD2LPZXknKIL8oIvlXYKxFhdJxA==';
+const dkgVersion = DKG_RELEASE_POLICY.managedVersion;
+const dkgIntegrity = DKG_RELEASE_POLICY.managedIntegrity;
 
 function fail(message) {
   throw new Error(message);
@@ -79,36 +83,6 @@ export function parseArgs(argv) {
     fail(`--dkg-network must be one of: ${SUPPORTED_DKG_NETWORKS.join(', ')}`);
   }
   return parsed;
-}
-
-export function relayCandidatesFromContainer(container) {
-  const env = Object.fromEntries(
-    (container?.Config?.Env || []).map((entry) => {
-      const at = entry.indexOf('=');
-      return at < 0 ? [entry, ''] : [entry.slice(0, at), entry.slice(at + 1)];
-    }),
-  );
-  const image = String(container?.Config?.Image || '').toLowerCase();
-  const service = String(
-    container?.Config?.Labels?.['com.docker.compose.service'] || '',
-  ).toLowerCase();
-  if (!image.includes('buzz') && service !== 'relay' && !env.BUZZ_BIND_ADDR) return [];
-
-  const local = (container?.NetworkSettings?.Ports?.['3000/tcp'] || [])
-    .map((binding) => {
-      const port = String(binding?.HostPort || '');
-      if (!/^\d+$/.test(port)) return null;
-      let host = String(binding?.HostIp || '127.0.0.1');
-      if (!host || host === '0.0.0.0') host = '127.0.0.1';
-      if (host === '::') host = '::1';
-      if (host.includes(':')) host = `[${host}]`;
-      return `http://${host}:${port}`;
-    })
-    .filter(Boolean);
-
-  // Prefer a host-local mapping. It avoids hairpin TLS/auth failures and keeps
-  // the integration working when the relay's public URL is private-network gated.
-  return [...new Set(local.length > 0 ? local : env.RELAY_URL ? [env.RELAY_URL] : [])];
 }
 
 function dockerRelayCandidates() {

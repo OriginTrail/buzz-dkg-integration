@@ -4,11 +4,8 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  parseArgs,
-  relayCandidatesFromContainer,
-  relayEndpoints,
-} from '../scripts/install.mjs';
+import { parseArgs, relayEndpoints } from '../scripts/install.mjs';
+import { relayCandidatesFromContainer } from '../scripts/install/relay.mjs';
 
 const roots = [];
 const servers = [];
@@ -155,6 +152,35 @@ describe('Buzz-first installer CLI', () => {
         NetworkSettings: { Ports: {} },
       }),
     ).toEqual(['wss://community.example.com']);
+  });
+
+  it('does not discover a generic Compose relay service as Buzz', () => {
+    expect(
+      relayCandidatesFromContainer({
+        Config: {
+          Image: 'example/generic-relay:latest',
+          Env: [],
+          Labels: { 'com.docker.compose.service': 'relay' },
+        },
+        NetworkSettings: {
+          Ports: { '3000/tcp': [{ HostIp: '127.0.0.1', HostPort: '3000' }] },
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it('normalizes wildcard Buzz host bindings to loopback URLs', () => {
+    const container = (hostIp) => ({
+      Config: { Image: 'ghcr.io/block/buzz:sha-test', Env: [] },
+      NetworkSettings: {
+        Ports: { '3000/tcp': [{ HostIp: hostIp, HostPort: '9440' }] },
+      },
+    });
+    expect(relayCandidatesFromContainer(container('0.0.0.0'))).toEqual([
+      'http://127.0.0.1:9440',
+    ]);
+    expect(relayCandidatesFromContainer(container(''))).toEqual(['http://127.0.0.1:9440']);
+    expect(relayCandidatesFromContainer(container('::'))).toEqual(['http://[::1]:9440']);
   });
 
   it('accepts explicit Buzz and DKG selections', () => {

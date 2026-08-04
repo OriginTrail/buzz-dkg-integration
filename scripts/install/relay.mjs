@@ -15,6 +15,46 @@ export function relayEndpoints(raw) {
   return { http: http.toString().replace(/\/$/, ''), ws: ws.toString().replace(/\/$/, '') };
 }
 
+function containerEnv(container) {
+  return Object.fromEntries(
+    (container?.Config?.Env || []).map((entry) => {
+      const at = entry.indexOf('=');
+      return at < 0 ? [entry, ''] : [entry.slice(0, at), entry.slice(at + 1)];
+    }),
+  );
+}
+
+function hostBindingUrl(binding) {
+  const port = String(binding?.HostPort || '');
+  if (!/^\d+$/.test(port)) return null;
+  let host = String(binding?.HostIp || '127.0.0.1');
+  if (!host || host === '0.0.0.0') host = '127.0.0.1';
+  if (host === '::') host = '::1';
+  if (host.includes(':')) host = `[${host}]`;
+  return `http://${host}:${port}`;
+}
+
+export function relayCandidatesFromContainer(container) {
+  const env = containerEnv(container);
+  const image = String(container?.Config?.Image || '').toLowerCase();
+  const service = String(
+    container?.Config?.Labels?.['com.docker.compose.service'] || '',
+  ).toLowerCase();
+  const isBuzz =
+    image.includes('buzz') ||
+    Boolean(env.BUZZ_BIND_ADDR) ||
+    (service === 'relay' && Boolean(env.RELAY_URL));
+  if (!isBuzz) return [];
+
+  const local = (container?.NetworkSettings?.Ports?.['3000/tcp'] || [])
+    .map(hostBindingUrl)
+    .filter(Boolean);
+
+  // Prefer a host-local mapping. It avoids hairpin TLS/auth failures and keeps
+  // the integration working when the relay's public URL is private-network gated.
+  return [...new Set(local.length > 0 ? local : env.RELAY_URL ? [env.RELAY_URL] : [])];
+}
+
 export async function probeRelay(httpUrl, fetchImpl = fetch) {
   try {
     const readiness = await fetchImpl(`${httpUrl}/_readiness`, {
