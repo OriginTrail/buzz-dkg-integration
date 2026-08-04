@@ -41,3 +41,21 @@ export class DkgHttpTransport {
     return payload;
   }
 }
+
+/** Canonical route-level surface shared by runtime and bootstrap clients. */
+export class DkgApiClient extends DkgHttpTransport {
+  status() {
+    return this.request('GET', '/api/status');
+  }
+
+  contextGraphExists(contextGraphId) {
+    return this.request(
+      'GET',
+      `/api/context-graph/exists?id=${encodeURIComponent(contextGraphId)}`,
+    );
+  }
+
+  createContextGraph(payload) {
+    return this.request('POST', '/api/context-graph/create', payload);
+  }
+}

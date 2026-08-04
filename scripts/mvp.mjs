@@ -22,7 +22,10 @@ import {
 import net from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildMvpEnvironments } from './mvp-env.mjs';
+import {
+  buildBaseMvpEnvironments,
+  buildCredentialedMvpEnvironments,
+} from './mvp-env.mjs';
 import { createLifecycleLockManager } from './mvp-lock.mjs';
 
 const EXPECTED_DKG_VERSION = '10.0.11';
@@ -101,7 +104,7 @@ function fail(message, code = 1) {
 
 function commandExists(command) {
   const result = spawnSync(command, ['--version'], { stdio: 'ignore' });
-  return !result.error;
+  return !result.error && result.status === 0;
 }
 
 export function assertBuzzCliPrerequisite(command = process.env.BDI_BUZZ_CLI || 'buzz') {
@@ -502,9 +505,9 @@ function readSecretsIfPresent() {
   return secrets;
 }
 
-function runtimeEnvironments(secrets) {
+function runtimeEnvironmentInput() {
   const shimDir = ensureNodeShim();
-  return buildMvpEnvironments({
+  return {
     processEnv: process.env,
     nodePath: `${shimDir}:${process.env.PATH || ''}`,
     project: PROJECT,
@@ -519,8 +522,15 @@ function runtimeEnvironments(secrets) {
     dkgApi: DKG_API,
     dkgDockerPrefix: DKG_DOCKER_PREFIX,
     dkgNodes,
-    secrets,
-  });
+  };
+}
+
+function runtimeBaseEnvironments() {
+  return buildBaseMvpEnvironments(runtimeEnvironmentInput());
+}
+
+function runtimeCredentialedEnvironments(secrets) {
+  return buildCredentialedMvpEnvironments({ ...runtimeEnvironmentInput(), secrets });
 }
 
 function ensureNodeShim() {
@@ -925,13 +935,17 @@ async function up() {
   // any external service, so a missing Buzz CLI cannot leave a partial stack.
   assertPrerequisites();
   const secrets = ensureSecrets();
-  const env = runtimeEnvironments(secrets);
+  const env = runtimeCredentialedEnvironments(secrets);
   const dkgOwned = inspectDkgOwnership();
   await preflightPorts(dkgOwned);
   claimDkgState();
   // Finish all local build/native compatibility work before starting Docker or
   // a DKG process. From this point onward the ordered reconciliation steps are
   // external mutations and are safe to retry independently.
+  ensureDkgBuild(env.dkg);
+
+  // Finish all local runtime preparation before the first service mutation.
+  // A native dependency/build failure must not leave a partial Compose stack.
   ensureDkgBuild(env.dkg);
 
   console.log('[buzz-dkg] starting isolated Buzz dependencies on 127.0.0.1:9440');
@@ -1075,7 +1089,7 @@ async function smoke() {
   }
   const secrets = readSecretsIfPresent();
   if (!secrets) throw new Error('M0 is not initialized; run ./buzz-dkg up first');
-  const env = runtimeEnvironments(secrets);
+  const env = runtimeCredentialedEnvironments(secrets);
   const dkg = validateDkgStatus(await dkgStatus());
   if (!(await tcpOpen(9440)) || !daemonOwned(readPid())) {
     throw new Error('M0 is not fully running; inspect ./buzz-dkg status and ./buzz-dkg logs');
@@ -1094,7 +1108,8 @@ async function down() {
   assertStateOwnership();
   await stopDaemon();
   const secrets = readSecretsIfPresent();
-  const env = runtimeEnvironments(secrets || undefined);
+  const baseEnv = runtimeBaseEnvironments();
+  const credentialedEnv = secrets ? runtimeCredentialedEnvironments(secrets) : null;
   let dkgStopConfirmed = true;
   if (existsSync(dkgDevnetDir) && inspectDkgOwnership()) {
     if (!existsSync(join(dkgRepo, 'scripts', 'devnet.sh'))) {
@@ -1103,7 +1118,7 @@ async function down() {
     console.log('[buzz-dkg] stopping the M0-owned DKG devnet (state retained)');
     const stopped = run(join(dkgRepo, 'scripts', 'devnet.sh'), ['stop'], {
       cwd: dkgRepo,
-      env: env.dkg,
+      env: baseEnv.dkg,
       allowFailure: true,
     });
     const livePids = liveDkgPids();
@@ -1125,7 +1140,7 @@ async function down() {
       );
     }
     console.log('[buzz-dkg] stopping the buzz-dkg-m0 Compose project (volumes retained)');
-    run('docker', composeArgs('down', '--remove-orphans'), { env: env.compose });
+    run('docker', composeArgs('down', '--remove-orphans'), { env: credentialedEnv.compose });
   }
   if (!dkgStopConfirmed) {
     throw new Error('M0 dependencies stopped, but DKG shutdown was not confirmed; inspect logs');
