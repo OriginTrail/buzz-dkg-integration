@@ -79,10 +79,18 @@ export function createLifecycleLockManager(options) {
 
   function clearDirectory() {
     const entries = readdirSync(lockDir);
-    if (entries.some((entry) => entry !== 'owner.json')) {
+    const recoverable = (entry) => entry === 'owner.json' || /^\.owner-\d+-\d+\.tmp$/.test(entry);
+    if (entries.some((entry) => !recoverable(entry))) {
       throw new Error(`refusing to clear lifecycle lock with unexpected contents: ${entries.join(', ')}`);
     }
-    if (existsSync(ownerPath)) unlinkSync(ownerPath);
+    for (const entry of entries) {
+      const path = join(lockDir, entry);
+      const stat = statMaybe(path);
+      if (!stat?.isFile() || stat.isSymbolicLink()) {
+        throw new Error(`refusing to clear unsafe lifecycle lock entry: ${entry}`);
+      }
+      unlinkSync(path);
+    }
     rmdirSync(lockDir);
   }
 
