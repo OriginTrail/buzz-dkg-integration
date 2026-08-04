@@ -1,13 +1,18 @@
-import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { getPublicKey } from 'nostr-tools/pure';
 import { BuzzClient } from '../../phase0/bridge/lib/nostr.mjs';
-import { DkgHttpTransport } from '../../src/dkg/http.mjs';
+import { DkgApiClient } from '../../src/dkg/http.mjs';
+import {
+  defaultContextGraphId,
+  parseTokenFile,
+  readJsonFile,
+  reconcileResolvedBootstrap,
+  validateContextGraphId,
+} from './core.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const CG_ID = /^[\w:/.@-]+$/u;
 
 function required(value, name) {
   if (!value || !String(value).trim()) throw new Error(`missing required ${name}`);
@@ -17,65 +22,6 @@ function required(value, name) {
 function keyBytes(hex, name) {
   if (!/^[0-9a-f]{64}$/i.test(hex)) throw new Error(`${name} must be a 64-character hex key`);
   return Uint8Array.from(Buffer.from(hex, 'hex'));
-}
-
-function readJson(path) {
-  if (!existsSync(path)) return null;
-  try {
-    return JSON.parse(readFileSync(path, 'utf8'));
-  } catch {
-    throw new Error(`invalid JSON at ${path}`);
-  }
-}
-
-function atomicJson(path, value) {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const temp = `${path}.${process.pid}.tmp`;
-  writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
-  renameSync(temp, path);
-  chmodSync(path, 0o600);
-}
-
-function parseToken(raw) {
-  const token = String(raw)
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith('#'))
-    .at(-1);
-  if (!token) throw new Error('DKG token file contains no token');
-  return token;
-}
-
-function contextGraphIdFor(relayUrl, channelId) {
-  return `buzz-${createHash('sha256')
-    .update('buzz-dkg-binding-v1\0')
-    .update(new URL(relayUrl).origin.toLowerCase())
-    .update('\0')
-    .update(channelId.toLowerCase())
-    .digest('hex')}`;
-}
-
-function validateContextGraphId(value) {
-  const id = required(value, 'context graph ID');
-  if (id.length > 256 || !CG_ID.test(id) || id.split('/').some((part) => part.startsWith('_'))) {
-    throw new Error('context graph ID is not valid for DKG v10');
-  }
-  return id;
-}
-
-function mergeBinding(raw, desired) {
-  if (!Array.isArray(raw)) throw new Error('bindings file must contain a JSON array');
-  const others = raw.filter((binding) => {
-    if (!binding?.channelId || !binding?.contextGraphId) throw new Error('invalid existing binding');
-    if (binding.contextGraphId === desired.contextGraphId && binding.channelId !== desired.channelId) {
-      throw new Error(`Context Graph ${desired.contextGraphId} is already bound to another channel`);
-    }
-    if (binding.channelId === desired.channelId && binding.contextGraphId !== desired.contextGraphId) {
-      throw new Error(`channel ${desired.channelId} is already bound to another Context Graph`);
-    }
-    return binding.channelId !== desired.channelId;
-  });
-  return [...others, desired];
 }
 
 async function poll(label, fn, attempts = 40) {
@@ -144,17 +90,17 @@ export class ExistingRelayBuzzAdapter {
   }
 }
 
-export class ExistingRelayDkgAdapter extends DkgHttpTransport {
+export class ExistingRelayDkgAdapter extends DkgApiClient {
   status() {
-    return this.request('GET', '/api/status');
+    return super.status();
   }
 
   exists(id) {
-    return this.request('GET', `/api/context-graph/exists?id=${encodeURIComponent(id)}`);
+    return this.contextGraphExists(id);
   }
 
   create(id, config) {
-    return this.request('POST', '/api/context-graph/create', {
+    return this.createContextGraph({
       id,
       name: `Buzz: ${config.channelName}`,
       description: `Private DKG memory for Buzz channel ${config.channelName} (${config.channelId})`,
@@ -235,36 +181,27 @@ async function ensureProfile(buzz, servicePubkey, desired) {
   return 'published';
 }
 
-async function ensureContextGraph(dkg, contextGraphId, config) {
-  await dkg.status();
-  const before = await dkg.exists(contextGraphId);
-  if (before?.exists === true) return 'existing';
-  if (before?.exists !== false) throw new Error('DKG Context Graph existence returned an unexpected response');
-  try {
-    await dkg.create(contextGraphId, config);
-  } catch (error) {
-    if (error?.status !== 409) throw error;
-  }
-  const after = await dkg.exists(contextGraphId);
-  if (after?.exists !== true) throw new Error('created Context Graph was not visible on read-back');
-  return 'created';
-}
-
 export async function bootstrapExistingRelay(config, dependencies = {}) {
-  const prior = readJson(config.statePath);
+  const prior = readJsonFile(config.statePath, 'bootstrap state');
   if (prior?.ownerPubkey && prior.ownerPubkey !== config.ownerPubkey) throw new Error('owner identity drift detected');
   if (prior?.servicePubkey && prior.servicePubkey !== config.servicePubkey) throw new Error('service identity drift detected');
   const buzz = dependencies.buzz ?? new ExistingRelayBuzzAdapter(config);
   const dkg = dependencies.dkg ?? new ExistingRelayDkgAdapter({ baseUrl: config.dkgApi, token: config.token });
   const channel = await ensureChannel(config, buzz, prior);
   const channelId = channel.channelId;
-  const derivedId = contextGraphIdFor(config.buzzHttp, channelId);
+  const derivedId = defaultContextGraphId(config.buzzHttp, channelId);
   const contextGraphId = validateContextGraphId(
     prior?.contextGraphId || config.requestedContextGraphId || derivedId,
   );
   if (prior?.contextGraphId && config.requestedContextGraphId && prior.contextGraphId !== config.requestedContextGraphId) {
     throw new Error('requested Context Graph conflicts with bootstrap state');
   }
+
+  const binding = {
+    channelId,
+    contextGraphId,
+    promoters: [config.ownerPubkey],
+  };
 
   const publicState = {
     phase: 'provisional',
@@ -275,20 +212,17 @@ export async function bootstrapExistingRelay(config, dependencies = {}) {
     ownerPubkey: config.ownerPubkey,
     servicePubkey: config.servicePubkey,
   };
-  // Persist the relay-assigned identity before any later side effect. A crash
-  // resumes this record instead of creating a second channel/graph.
-  atomicJson(config.statePath, publicState);
-
-  const membershipAction = await ensureMembership(buzz, channelId, config.servicePubkey);
-  const profileAction = await ensureProfile(buzz, config.servicePubkey, config.serviceProfile);
-  const graphAction = await ensureContextGraph(dkg, contextGraphId, { ...config, channelId });
-  const bindings = mergeBinding(readJson(config.bindingsPath) ?? [], {
-    channelId,
-    contextGraphId,
-    promoters: [config.ownerPubkey],
+  const actions = await reconcileResolvedBootstrap({
+    statePath: config.statePath,
+    bindingsPath: config.bindingsPath,
+    binding,
+    provisionalState: publicState,
+    completeState: { ...publicState, phase: 'complete' },
+    ensureMembership: () => ensureMembership(buzz, channelId, config.servicePubkey),
+    ensureProfile: () => ensureProfile(buzz, config.servicePubkey, config.serviceProfile),
+    dkg,
+    graphConfig: { ...config, channelId },
   });
-  atomicJson(config.bindingsPath, bindings);
-  atomicJson(config.statePath, { ...publicState, phase: 'complete' });
 
   return {
     ok: true,
@@ -296,9 +230,9 @@ export async function bootstrapExistingRelay(config, dependencies = {}) {
     phase: 'complete',
     actions: {
       channel: channel.action,
-      serviceMembership: membershipAction,
-      serviceProfile: profileAction,
-      contextGraph: graphAction,
+      serviceMembership: actions.serviceMembership,
+      serviceProfile: actions.serviceProfile,
+      contextGraph: actions.contextGraph,
     },
   };
 }
@@ -323,7 +257,7 @@ export function loadExistingRelayConfig(env = process.env) {
     bindingsPath: join(runtimeDir, 'bindings.json'),
     buzzHttp: required(env.BDI_BUZZ_HTTP, 'BDI_BUZZ_HTTP').replace(/\/$/, ''),
     dkgApi: (env.BDI_DKG_API || 'http://127.0.0.1:9200').replace(/\/$/, ''),
-    token: parseToken(readFileSync(tokenPath, 'utf8')),
+    token: parseTokenFile(readFileSync(tokenPath, 'utf8')),
     ownerKey,
     serviceKey,
     ownerPubkey,

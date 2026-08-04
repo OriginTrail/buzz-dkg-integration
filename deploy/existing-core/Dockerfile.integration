@@ -8,6 +8,7 @@ RUN npm ci --omit=dev \
 
 COPY src ./src
 COPY scripts/mvp-smoke.mjs ./scripts/mvp-smoke.mjs
+COPY scripts/bootstrap ./scripts/bootstrap
 COPY phase0/bridge/lib/nostr.mjs ./phase0/bridge/lib/nostr.mjs
 COPY deploy/existing-core/bootstrap.mjs ./deploy/existing-core/bootstrap.mjs
 
