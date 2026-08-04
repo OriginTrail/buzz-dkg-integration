@@ -32,6 +32,8 @@ function harness() {
         id: channelId,
         name: config.channelName,
         visibility: config.channelVisibility,
+        channelType: config.channelType,
+        archived: false,
       });
       return { accepted: true };
     },
@@ -78,6 +80,7 @@ function harness() {
     ownerPubkey,
     servicePubkey,
     channelName: 'Web of Trust',
+    channelType: 'stream',
     channelVisibility: 'open',
     channelDescription: 'test',
     accessPolicy: 1,
@@ -142,6 +145,8 @@ describe('existing-relay bootstrap reconciliation', () => {
       id: channelId,
       name: h.config.channelName,
       visibility: h.config.channelVisibility,
+      channelType: h.config.channelType,
+      archived: false,
     });
     writeFileSync(
       h.config.bindingsPath,
@@ -192,10 +197,38 @@ describe('existing-relay bootstrap reconciliation', () => {
 
   it('rejects same-named channel visibility drift before side effects', async () => {
     const h = harness();
-    h.channels.push({ id: channelId, name: h.config.channelName, visibility: 'private' });
+    h.channels.push({
+      id: channelId,
+      name: h.config.channelName,
+      visibility: 'private',
+      channelType: 'stream',
+      archived: false,
+    });
     await expect(
       bootstrapExistingRelay(h.config, { buzz: h.buzz, dkg: h.dkg }),
     ).rejects.toThrow(/visibility 'private'.*expected 'open'/);
+    expect(h.calls).toEqual({
+      createChannel: 0,
+      addBot: 0,
+      publishProfile: 0,
+      createGraph: 0,
+    });
+  });
+
+  it.each([
+    [{ channelType: 'forum', archived: false }, /type 'forum'.*expected 'stream'/],
+    [{ channelType: 'stream', archived: true }, /channel is archived/],
+  ])('rejects incompatible same-named channel shape before side effects', async (shape, error) => {
+    const h = harness();
+    h.channels.push({
+      id: channelId,
+      name: h.config.channelName,
+      visibility: h.config.channelVisibility,
+      ...shape,
+    });
+    await expect(
+      bootstrapExistingRelay(h.config, { buzz: h.buzz, dkg: h.dkg }),
+    ).rejects.toThrow(error);
     expect(h.calls).toEqual({
       createChannel: 0,
       addBot: 0,

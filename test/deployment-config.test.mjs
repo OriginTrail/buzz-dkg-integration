@@ -32,6 +32,10 @@ describe('deployment artifacts', () => {
         BUZZ_S3_ACCESS_KEY: 'buzz-access',
         BUZZ_S3_SECRET_KEY: 'buzz-secret',
         BUZZ_RELAY_PRIVATE_KEY: '3'.repeat(64),
+        BUZZ_DKG_APP_DIR: repo,
+        BUZZ_DKG_STATE_DIR: '/tmp/buzz-dkg-v1a-state',
+        BUZZ_DKG_RUNTIME_UID: '1000',
+        BUZZ_DKG_RUNTIME_GID: '1000',
       };
       for (const profileArgs of [[], ['--profile', 'tools']]) {
         const result = spawnSync(
@@ -47,6 +51,15 @@ describe('deployment artifacts', () => {
         { cwd: repo, env, encoding: 'utf8' },
       );
       expect(mvp.status, mvp.stderr).toBe(0);
+
+      for (const profileArgs of [[], ['--profile', 'tools']]) {
+        const v1a = spawnSync(
+          'docker',
+          ['compose', ...profileArgs, '-f', 'deploy/v1a/compose.yml', 'config'],
+          { cwd: repo, env, encoding: 'utf8' },
+        );
+        expect(v1a.status, v1a.stderr).toBe(0);
+      }
     },
   );
 
