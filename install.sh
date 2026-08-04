@@ -59,6 +59,7 @@ sha256_file() {
 printf 'Downloading Buzz + DKG installer for %s/%s from %s...\n' "$platform" "$arch" "$release_base"
 download "$release_base/$asset" "$temp_dir/$asset"
 download "$release_base/$checksum_asset" "$temp_dir/$checksum_asset"
+chmod 0600 "$temp_dir/$asset" "$temp_dir/$checksum_asset"
 
 expected=$(awk 'NF { print $1; exit }' "$temp_dir/$checksum_asset")
 actual=$(sha256_file "$temp_dir/$asset")
@@ -68,8 +69,28 @@ printf '%s\n' "$expected" | grep -Eq '^[0-9a-fA-F]{64}$' ||
   fail "release checksum verification failed"
 
 printf 'Authenticating GitHub build provenance...\n'
-gh attestation verify "$temp_dir/$asset" --repo "$repo" >/dev/null ||
-  fail "release provenance verification failed"
+case "${SUDO_USER:-}" in
+  ''|root|*[!A-Za-z0-9._-]*)
+    gh attestation verify "$temp_dir/$asset" --repo "$repo" >/dev/null ||
+      fail "release provenance verification failed; authenticate GitHub CLI and retry"
+    ;;
+  *)
+    # The one-line command normally runs this script through sudo. Verify as
+    # the invoking operator so their existing gh login is used. The artifact is
+    # public, but the root-created temporary directory is private by default;
+    # expose only traverse/read bits during verification, then restore them.
+    chmod 0711 "$temp_dir"
+    chmod 0444 "$temp_dir/$asset"
+    provenance_verified=0
+    if sudo -H -u "$SUDO_USER" -- gh attestation verify "$temp_dir/$asset" --repo "$repo" >/dev/null; then
+      provenance_verified=1
+    fi
+    chmod 0600 "$temp_dir/$asset"
+    chmod 0700 "$temp_dir"
+    [ "$provenance_verified" = 1 ] ||
+      fail "release provenance verification failed; run 'gh auth login' as $SUDO_USER and retry"
+    ;;
+esac
 
 if tar -tvzf "$temp_dir/$asset" | awk '
   substr($1, 1, 1) !~ /^[-d]$/ { bad=1 }

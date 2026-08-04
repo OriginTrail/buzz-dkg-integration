@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseArgs, relayEndpoints } from '../scripts/install.mjs';
+import { probeRelay, relayCandidatesFromContainer } from '../scripts/install/relay.mjs';
 
 const roots = [];
 const servers = [];
@@ -34,7 +35,7 @@ async function apiServer(role = 'edge', status = {}) {
       response.end(
         JSON.stringify({
           nodeRole: role,
-          version: '10.0.11',
+          version: '10.0.12',
           networkId: 'testnet',
           ...status,
         }),
@@ -124,6 +125,132 @@ describe('Buzz-first installer CLI', () => {
       http: 'http://127.0.0.1:9440',
       ws: 'ws://127.0.0.1:9440',
     });
+  });
+
+  it('preserves a Buzz community authority while using its local port only for probes', () => {
+    expect(
+      relayCandidatesFromContainer({
+        Config: {
+          Image: 'ghcr.io/block/buzz:sha-test',
+          Env: ['RELAY_URL=wss://community.example.com'],
+          Labels: { 'com.docker.compose.service': 'relay' },
+        },
+        NetworkSettings: {
+          Ports: { '3000/tcp': [{ HostIp: '127.0.0.1', HostPort: '9440' }] },
+        },
+      }),
+    ).toEqual([
+      {
+        relayUrl: 'wss://community.example.com',
+        probeUrl: 'http://127.0.0.1:9440',
+      },
+    ]);
+  });
+
+  it('uses the configured relay URL when the Buzz container has no host mapping', () => {
+    expect(
+      relayCandidatesFromContainer({
+        Config: {
+          Image: 'ghcr.io/block/buzz:sha-test',
+          Env: ['RELAY_URL=wss://community.example.com'],
+        },
+        NetworkSettings: { Ports: {} },
+      }),
+    ).toEqual([
+      {
+        relayUrl: 'wss://community.example.com',
+        probeUrl: 'wss://community.example.com',
+      },
+    ]);
+  });
+
+  it('does not discover a generic Compose relay service as Buzz', () => {
+    expect(
+      relayCandidatesFromContainer({
+        Config: {
+          Image: 'example/generic-relay:latest',
+          Env: [],
+          Labels: { 'com.docker.compose.service': 'relay' },
+        },
+        NetworkSettings: {
+          Ports: { '3000/tcp': [{ HostIp: '127.0.0.1', HostPort: '3000' }] },
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it('normalizes wildcard Buzz host bindings to loopback URLs', () => {
+    const container = (hostIp) => ({
+      Config: { Image: 'ghcr.io/block/buzz:sha-test', Env: [] },
+      NetworkSettings: {
+        Ports: { '3000/tcp': [{ HostIp: hostIp, HostPort: '9440' }] },
+      },
+    });
+    expect(relayCandidatesFromContainer(container('0.0.0.0'))).toEqual([
+      { relayUrl: 'http://127.0.0.1:9440', probeUrl: 'http://127.0.0.1:9440' },
+    ]);
+    expect(relayCandidatesFromContainer(container(''))).toEqual([
+      { relayUrl: 'http://127.0.0.1:9440', probeUrl: 'http://127.0.0.1:9440' },
+    ]);
+    expect(relayCandidatesFromContainer(container('::'))).toEqual([
+      { relayUrl: 'http://[::1]:9440', probeUrl: 'http://[::1]:9440' },
+    ]);
+  });
+
+  it('keeps tenant operations on the advertised authority after a loopback probe', async () => {
+    const probeServer = createServer((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      if (request.url === '/_readiness') {
+        response.end(JSON.stringify({ status: 'ready' }));
+      } else if (request.url === '/info') {
+        response.end(
+          JSON.stringify({
+            software: 'https://github.com/block/buzz',
+            supported_nips: [1, 29],
+          }),
+        );
+      } else {
+        response.statusCode = 404;
+        response.end(JSON.stringify({ error: 'no community is configured for this host' }));
+      }
+    });
+    await new Promise((done) => probeServer.listen(0, '127.0.0.1', done));
+    servers.push(probeServer);
+
+    let publicAuthority;
+    const tenantServer = createServer((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      if (request.url === '/query' && request.headers.host === publicAuthority) {
+        response.end('[]');
+      } else {
+        response.statusCode = 404;
+        response.end(JSON.stringify({ error: 'no community is configured for this host' }));
+      }
+    });
+    await new Promise((done) => tenantServer.listen(0, '127.0.0.1', done));
+    servers.push(tenantServer);
+    publicAuthority = `127.0.0.1:${tenantServer.address().port}`;
+    const publicUrl = `http://${publicAuthority}`;
+    const probeUrl = `http://127.0.0.1:${probeServer.address().port}`;
+
+    const [candidate] = relayCandidatesFromContainer({
+      Config: {
+        Image: 'ghcr.io/block/buzz:sha-test',
+        Env: [`RELAY_URL=${publicUrl}`],
+      },
+      NetworkSettings: {
+        Ports: {
+          '3000/tcp': [{ HostIp: '127.0.0.1', HostPort: String(probeServer.address().port) }],
+        },
+      },
+    });
+
+    expect(candidate).toEqual({ relayUrl: publicUrl, probeUrl });
+    await expect(probeRelay(relayEndpoints(candidate.probeUrl).http)).resolves.toMatchObject({
+      status: 200,
+    });
+    expect((await fetch(`${relayEndpoints(candidate.relayUrl).http}/query`)).status).toBe(200);
+    expect((await fetch(`${relayEndpoints(candidate.probeUrl).http}/query`)).status).toBe(404);
   });
 
   it('accepts explicit Buzz and DKG selections', () => {

@@ -1,5 +1,6 @@
+import { DKG_RELEASE_POLICY } from './dkg-release.mjs';
+
 export const SUPPORTED_DKG_NETWORKS = ['mainnet-gnosis', 'mainnet-base', 'testnet'];
-export const SUPPORTED_DKG_VERSION = '10.0.11';
 
 function detectedNetwork(status) {
   const named = status?.networkId || status?.network || status?.chain?.network;
@@ -23,9 +24,9 @@ export function resolveDkgPlan({
   let existingNetwork = null;
   if (existingStatus) {
     const version = String(existingStatus.version || '').replace(/^v/, '');
-    if (version !== SUPPORTED_DKG_VERSION) {
+    if (!DKG_RELEASE_POLICY.reusableVersions.includes(version)) {
       throw new Error(
-        `existing DKG node version ${version || 'unknown'} is incompatible; expected ${SUPPORTED_DKG_VERSION}`,
+        `existing DKG node version ${version || 'unknown'} is incompatible; expected one of: ${DKG_RELEASE_POLICY.reusableVersions.join(', ')}`,
       );
     }
     existingNetwork = detectedNetwork(existingStatus);

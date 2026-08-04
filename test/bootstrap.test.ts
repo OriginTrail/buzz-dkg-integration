@@ -33,13 +33,14 @@ function tempRoot(): string {
 function fixture(
   root: string,
   version = '0.1.0',
-): { release: string; installRoot: string; binDir: string; ghLog: string } {
+): { release: string; installRoot: string; binDir: string; ghLog: string; sudoLog: string } {
   const release = join(root, 'release');
   const payload = join(root, 'payload');
   const fakeBin = join(root, 'fake-bin');
   const installRoot = join(root, 'lib', 'buzz-dkg');
   const binDir = join(root, 'bin');
   const ghLog = join(root, 'gh-call.log');
+  const sudoLog = join(root, 'sudo-call.log');
   mkdirSync(join(payload, 'runtime', 'bin'), { recursive: true });
   mkdirSync(release, { recursive: true });
   mkdirSync(fakeBin, { recursive: true });
@@ -67,7 +68,29 @@ function fixture(
   );
   chmodSync(join(fakeBin, 'gh'), 0o755);
 
-  return { release, installRoot, binDir, ghLog };
+  writeFileSync(
+    join(fakeBin, 'sudo'),
+    `#!/bin/sh
+printf '%s\n' "$@" > "$SUDO_CALL_LOG"
+[ "$1" = -H ] && shift
+[ "$1" = -u ] && shift 2
+[ "$1" = -- ] && shift
+if [ "\${SUDO_ENFORCE_ASSET_ACCESS:-0}" = 1 ]; then
+  ASSET_PATH="$4" node -e '
+    const { statSync } = require("node:fs");
+    const { dirname } = require("node:path");
+    const asset = process.env.ASSET_PATH;
+    const fileIsWorldReadable = (statSync(asset).mode & 0o004) !== 0;
+    const directoryIsWorldTraversable = (statSync(dirname(asset)).mode & 0o001) !== 0;
+    process.exit(fileIsWorldReadable && directoryIsWorldTraversable ? 0 : 96);
+  ' || exit $?
+fi
+exec "$@"
+`,
+  );
+  chmodSync(join(fakeBin, 'sudo'), 0o755);
+
+  return { release, installRoot, binDir, ghLog, sudoLog };
 }
 
 function runBootstrap(paths: ReturnType<typeof fixture>, envOverrides: NodeJS.ProcessEnv = {}) {
@@ -86,6 +109,7 @@ function runBootstrap(paths: ReturnType<typeof fixture>, envOverrides: NodeJS.Pr
       BUZZ_DKG_BIN_DIR: paths.binDir,
       BUZZ_DKG_SKIP_LAUNCH: '1',
       GH_CALL_LOG: paths.ghLog,
+      SUDO_CALL_LOG: paths.sudoLog,
       ...envOverrides,
     },
   });
@@ -138,6 +162,40 @@ describe('one-line release bootstrap', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('release provenance verification failed');
     expect(readFileSync(paths.ghLog, 'utf8')).toContain('attestation\nverify\n');
+    expect(existsSync(join(paths.binDir, 'buzz-dkg'))).toBe(false);
+    expect(existsSync(join(paths.installRoot, 'releases'))).toBe(false);
+  });
+
+  it('verifies provenance with the invoking sudo user credentials', () => {
+    const paths = fixture(tempRoot());
+    const result = runBootstrap(paths, {
+      SUDO_USER: 'relay-operator',
+      SUDO_ENFORCE_ASSET_ACCESS: '1',
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(paths.sudoLog, 'utf8').trim().split('\n')).toEqual([
+      '-H',
+      '-u',
+      'relay-operator',
+      '--',
+      'gh',
+      'attestation',
+      'verify',
+      expect.stringMatching(/buzz-dkg-linux-x64\.tar\.gz$/),
+      '--repo',
+      'OriginTrail/buzz-dkg-integration',
+    ]);
+  });
+
+  it('fails closed when sudo-user provenance verification fails', () => {
+    const paths = fixture(tempRoot());
+    const result = runBootstrap(paths, {
+      SUDO_USER: 'relay-operator',
+      SUDO_ENFORCE_ASSET_ACCESS: '1',
+      GH_ATTESTATION_FAIL: '1',
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("run 'gh auth login' as relay-operator");
     expect(existsSync(join(paths.binDir, 'buzz-dkg'))).toBe(false);
     expect(existsSync(join(paths.installRoot, 'releases'))).toBe(false);
   });

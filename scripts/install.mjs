@@ -14,8 +14,16 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { createInstallContext } from './install/context.mjs';
+import {
+  assertManagedDkgPackageLock,
+  DKG_RELEASE_POLICY,
+} from './install/dkg-release.mjs';
 import { resolveDkgPlan, SUPPORTED_DKG_NETWORKS } from './install/dkg-plan.mjs';
-import { probeRelay, relayEndpoints } from './install/relay.mjs';
+import {
+  probeRelay,
+  relayCandidatesFromContainer,
+  relayEndpoints,
+} from './install/relay.mjs';
 import {
   generatedSecrets,
   parseEnvFile,
@@ -25,9 +33,7 @@ import {
 export { relayEndpoints };
 
 const installContext = createInstallContext();
-const dkgVersion = '10.0.11';
-const dkgIntegrity =
-  'sha512-QNsjad2eBADuuWWUjzIfdmjh1Xxd8lRy5QGLH6pTxMyOOQsIyeHQWMTGMIb24F6g533Zu/Iil9HtNdcrei8rFA==';
+const dkgVersion = DKG_RELEASE_POLICY.managedVersion;
 
 function fail(message) {
   throw new Error(message);
@@ -89,26 +95,20 @@ function dockerRelayCandidates() {
   for (const id of ids.stdout.split(/\s+/).filter(Boolean)) {
     const inspected = run('docker', ['inspect', id], { capture: true, allowFailure: true });
     if (inspected.status !== 0) continue;
-    let container;
     try {
-      container = JSON.parse(inspected.stdout)[0];
+      candidates.push(...relayCandidatesFromContainer(JSON.parse(inspected.stdout)[0]));
     } catch {
       continue;
     }
-    const env = Object.fromEntries(
-      (container?.Config?.Env || []).map((entry) => {
-        const at = entry.indexOf('=');
-        return at < 0 ? [entry, ''] : [entry.slice(0, at), entry.slice(at + 1)];
-      }),
-    );
-    const image = String(container?.Config?.Image || '').toLowerCase();
-    const service = String(
-      container?.Config?.Labels?.['com.docker.compose.service'] || '',
-    ).toLowerCase();
-    if (!image.includes('buzz') && service !== 'relay' && !env.BUZZ_BIND_ADDR) continue;
-    if (env.RELAY_URL) candidates.push(env.RELAY_URL);
   }
-  return [...new Set(candidates)];
+  const unique = new Map();
+  for (const candidate of candidates) {
+    const prior = unique.get(candidate.relayUrl);
+    if (!prior || prior.probeUrl === prior.relayUrl) {
+      unique.set(candidate.relayUrl, candidate);
+    }
+  }
+  return [...unique.values()];
 }
 
 async function dkgStatus(api) {
@@ -182,10 +182,7 @@ function verifyManagedDkgLock(context) {
   const lock = JSON.parse(
     readFileSync(join(context.managedDkgRoot, 'package-lock.json'), 'utf8'),
   );
-  const installed = lock.packages?.['node_modules/@origintrail-official/dkg'];
-  if (installed?.version !== dkgVersion || installed?.integrity !== dkgIntegrity) {
-    fail('managed DKG package lock does not match the pinned release integrity');
-  }
+  assertManagedDkgPackageLock(lock);
 }
 
 async function waitForDkg(api) {
@@ -238,26 +235,36 @@ function showPlan(context, plan) {
 
 async function resolvePlan(context, options, prompt) {
   const prior = parseEnvFile(context.envPath);
-  let relayRaw = options.relay || prior.BDI_BUZZ_WS;
-  if (!relayRaw) {
+  let relayCandidate;
+  const configuredRelay = options.relay || prior.BDI_BUZZ_WS;
+  if (configuredRelay) {
+    relayCandidate = {
+      relayUrl: configuredRelay,
+      probeUrl: options.relay ? configuredRelay : prior.BDI_BUZZ_PROBE_HTTP || configuredRelay,
+    };
+  } else {
     const candidates = dockerRelayCandidates();
     if (candidates.length === 1) {
-      relayRaw = candidates[0];
-      console.log(`Found Buzz Relay: ${relayRaw}`);
+      relayCandidate = candidates[0];
+      console.log(`Found Buzz Relay: ${relayCandidate.relayUrl}`);
     } else if (candidates.length > 1) {
       console.log(`Found ${candidates.length} possible Buzz Relays:`);
-      candidates.forEach((candidate, index) => console.log(`  ${index + 1}. ${candidate}`));
+      candidates.forEach((candidate, index) =>
+        console.log(`  ${index + 1}. ${candidate.relayUrl}`),
+      );
       const selected = await prompt.question('Select the relay number: ');
-      relayRaw = candidates[Number(selected) - 1];
-      if (!relayRaw) fail('invalid Buzz Relay selection');
+      relayCandidate = candidates[Number(selected) - 1];
+      if (!relayCandidate) fail('invalid Buzz Relay selection');
     } else if (options.yes) {
       fail('no Buzz Relay was detected; pass --relay <wss-url>');
     } else {
-      relayRaw = await prompt.question('Buzz Relay URL (wss://...): ');
+      const relayUrl = await prompt.question('Buzz Relay URL (wss://...): ');
+      relayCandidate = { relayUrl, probeUrl: relayUrl };
     }
   }
-  const relay = relayEndpoints(relayRaw);
-  await probeRelay(relay.http);
+  const relay = relayEndpoints(relayCandidate.relayUrl);
+  const relayProbe = relayEndpoints(relayCandidate.probeUrl);
+  await probeRelay(relayProbe.http);
 
   const dkgApi = (options.dkgApi || prior.BDI_DKG_API || 'http://127.0.0.1:9200').replace(
     /\/$/,
@@ -280,6 +287,7 @@ async function resolvePlan(context, options, prompt) {
   }
   return {
     relay,
+    relayProbeHttp: relayProbe.http,
     dkgApi,
     ...dkgPlan,
   };
@@ -380,6 +388,7 @@ export async function install(options, prompt, context = installContext) {
     BUZZ_DKG_RUNTIME_GID: String(tokenOwner.gid),
     BDI_BUZZ_HTTP: plan.relay.http,
     BDI_BUZZ_WS: plan.relay.ws,
+    BDI_BUZZ_PROBE_HTTP: plan.relayProbeHttp,
     BDI_DKG_API: plan.dkgApi,
     BDI_DKG_TOKEN_PATH: tokenPath,
     BDI_DKG_ROLE: status.nodeRole,
@@ -416,7 +425,7 @@ async function status(context) {
   const values = parseEnvFile(context.envPath);
   if (!values.BDI_BUZZ_HTTP) fail(`no V1a installation found at ${context.envPath}`);
   console.log(`Buzz Relay: ${values.BDI_BUZZ_WS}`);
-  await probeRelay(values.BDI_BUZZ_HTTP);
+  await probeRelay(values.BDI_BUZZ_PROBE_HTTP || values.BDI_BUZZ_HTTP);
   console.log('  reachable');
   const dkg = await dkgStatus(values.BDI_DKG_API);
   console.log(

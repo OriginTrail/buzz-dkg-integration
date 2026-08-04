@@ -113,6 +113,8 @@ Node docs: [OriginTrail/dkg](https://github.com/OriginTrail/dkg).
 
 ## Buzz-first installer preview
 
+Operator quickstart and beta acceptance checklist: [docs/BETA_ONBOARDING.md](docs/BETA_ONBOARDING.md).
+
 The Beta V1a installer starts from a Buzz Relay that is already serving a
 community. On a supported Linux relay host, a tagged release is installed and
 started with one command:
@@ -137,11 +139,16 @@ sudo buzz-dkg smoke
 sudo buzz-dkg remove
 ```
 
-The guided installer discovers common containerized Buzz Relay deployments or
-accepts `--relay wss://community.example.com`. It validates and adopts that
+The guided installer discovers common containerized Buzz Relay deployments. It
+preserves the relay's advertised community URL for tenant routing and NIP-98
+authentication, while using a loopback host mapping only for readiness and
+NIP-11 discovery probes when the public endpoint is private-network gated. It
+also accepts an explicit
+`--relay wss://community.example.com`. It validates and adopts that
 endpoint without replacing the relay process, database, identity, domain, or
 TLS configuration. It then reuses a compatible DKG node on `127.0.0.1:9200`,
-or invokes the supported DKG npm installer and setup wizard for an Edge
+currently v10.0.11 or v10.0.12, or invokes the supported DKG npm installer and
+setup wizard for a managed v10.0.12 Edge
 (default) or Core node. A fresh guided install defaults to DKG testnet; a fresh
 unattended install must explicitly pass `--dkg-network testnet`,
 `mainnet-gnosis`, or `mainnet-base`. Finally it creates the managed Web of Trust

@@ -15,6 +15,51 @@ export function relayEndpoints(raw) {
   return { http: http.toString().replace(/\/$/, ''), ws: ws.toString().replace(/\/$/, '') };
 }
 
+function containerEnv(container) {
+  return Object.fromEntries(
+    (container?.Config?.Env || []).map((entry) => {
+      const at = entry.indexOf('=');
+      return at < 0 ? [entry, ''] : [entry.slice(0, at), entry.slice(at + 1)];
+    }),
+  );
+}
+
+function hostBindingUrl(binding) {
+  const port = String(binding?.HostPort || '');
+  if (!/^\d+$/.test(port)) return null;
+  let host = String(binding?.HostIp || '127.0.0.1');
+  if (!host || host === '0.0.0.0') host = '127.0.0.1';
+  if (host === '::') host = '::1';
+  if (host.includes(':')) host = `[${host}]`;
+  return `http://${host}:${port}`;
+}
+
+export function relayCandidatesFromContainer(container) {
+  const env = containerEnv(container);
+  const image = String(container?.Config?.Image || '').toLowerCase();
+  const service = String(
+    container?.Config?.Labels?.['com.docker.compose.service'] || '',
+  ).toLowerCase();
+  const isBuzz =
+    image.includes('buzz') ||
+    Boolean(env.BUZZ_BIND_ADDR) ||
+    (service === 'relay' && Boolean(env.RELAY_URL));
+  if (!isBuzz) return [];
+
+  const local = (container?.NetworkSettings?.Ports?.['3000/tcp'] || [])
+    .map(hostBindingUrl)
+    .filter(Boolean);
+
+  // Buzz resolves the community from the request authority and signs NIP-98
+  // requests for that same public URL. A loopback host binding is therefore
+  // safe for an unauthenticated readiness/NIP-11 probe, but it must never
+  // replace an advertised RELAY_URL used by bootstrap or the daemon.
+  if (env.RELAY_URL) {
+    return [{ relayUrl: env.RELAY_URL, probeUrl: local[0] || env.RELAY_URL }];
+  }
+  return [...new Set(local)].map((url) => ({ relayUrl: url, probeUrl: url }));
+}
+
 export async function probeRelay(httpUrl, fetchImpl = fetch) {
   try {
     const readiness = await fetchImpl(`${httpUrl}/_readiness`, {

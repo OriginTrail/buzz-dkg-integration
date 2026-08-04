@@ -42,6 +42,9 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
+      - name: Verify managed DKG release pin
+        run: npm run verify:dkg-release
+
       - name: Run tests
         run: npm test
 
