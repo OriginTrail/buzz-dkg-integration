@@ -28,7 +28,11 @@ function harness() {
     async createChannel(config) {
       calls.createChannel += 1;
       // The relay, not the caller, assigns this UUID.
-      channels.push({ id: channelId, name: config.channelName });
+      channels.push({
+        id: channelId,
+        name: config.channelName,
+        visibility: config.channelVisibility,
+      });
       return { accepted: true };
     },
     async membership() {
@@ -134,7 +138,11 @@ describe('existing-relay bootstrap reconciliation', () => {
 
   it('rejects a binding conflict before membership, profile, or DKG mutation', async () => {
     const h = harness();
-    h.channels.push({ id: channelId, name: h.config.channelName });
+    h.channels.push({
+      id: channelId,
+      name: h.config.channelName,
+      visibility: h.config.channelVisibility,
+    });
     writeFileSync(
       h.config.bindingsPath,
       `${JSON.stringify([
@@ -149,6 +157,45 @@ describe('existing-relay bootstrap reconciliation', () => {
     await expect(
       bootstrapExistingRelay(h.config, { buzz: h.buzz, dkg: h.dkg }),
     ).rejects.toThrow(/already bound/);
+    expect(h.calls).toEqual({
+      createChannel: 0,
+      addBot: 0,
+      publishProfile: 0,
+      createGraph: 0,
+    });
+  });
+
+  it('rejects a requested graph conflict before creating a Buzz channel', async () => {
+    const h = harness();
+    h.config.requestedContextGraphId = 'shared-context-graph';
+    writeFileSync(
+      h.config.bindingsPath,
+      `${JSON.stringify([
+        {
+          channelId: '2e3db7ae-0964-4cbf-88e1-6544a96a134d',
+          contextGraphId: 'shared-context-graph',
+          promoters: [ownerPubkey],
+        },
+      ])}\n`,
+    );
+
+    await expect(
+      bootstrapExistingRelay(h.config, { buzz: h.buzz, dkg: h.dkg }),
+    ).rejects.toThrow(/already bound/);
+    expect(h.calls).toEqual({
+      createChannel: 0,
+      addBot: 0,
+      publishProfile: 0,
+      createGraph: 0,
+    });
+  });
+
+  it('rejects same-named channel visibility drift before side effects', async () => {
+    const h = harness();
+    h.channels.push({ id: channelId, name: h.config.channelName, visibility: 'private' });
+    await expect(
+      bootstrapExistingRelay(h.config, { buzz: h.buzz, dkg: h.dkg }),
+    ).rejects.toThrow(/visibility 'private'.*expected 'open'/);
     expect(h.calls).toEqual({
       createChannel: 0,
       addBot: 0,

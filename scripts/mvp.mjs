@@ -720,8 +720,6 @@ async function up() {
   // Finish all local build/native compatibility work before starting Docker or
   // a DKG process. From this point onward the ordered reconciliation steps are
   // external mutations and are safe to retry independently.
-  ensureDkgBuild(env.dkg);
-
   await startBuzzDependencies({
     prepareDkg: () => ensureDkgBuild(env.dkg),
     startBuzz: () => {
