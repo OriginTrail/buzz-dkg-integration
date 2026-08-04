@@ -4,7 +4,7 @@ import {
   parseBindings as parseSharedBindings,
   parseTokenFile as parseSharedTokenFile,
 } from '../scripts/bootstrap/core.mjs';
-import type { ChannelBinding, DaemonConfig, PublishMode } from './types.ts';
+import type { ChannelBinding, DaemonConfig, MentionLabels, PublishMode } from './types.ts';
 
 function required(name: string, env: NodeJS.ProcessEnv = process.env): string {
   const v = env[name];
@@ -38,6 +38,17 @@ export function parseBindings(raw: string): ChannelBinding[] {
   return parseSharedBindings(raw);
 }
 
+/** Own mention-label cleanup at the config boundary, not in the trigger parser. */
+export function normalizeMentionLabels(values: readonly (string | undefined)[]): MentionLabels {
+  const labels = [
+    ...new Set(
+      values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)),
+    ),
+  ].sort((a, b) => b.length - a.length);
+  if (labels.length === 0) throw new Error('at least one non-empty mention label is required');
+  return [labels[0]!, ...labels.slice(1)];
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
   const publishMode = (env.BDI_PUBLISH_MODE ?? 'disabled') as PublishMode;
   if (!['disabled', 'devnet', 'mainnet'].includes(publishMode)) {
@@ -56,12 +67,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
       `BDI_MAX_PUBLISHES_PER_DAY must be a non-negative number, got '${env.BDI_MAX_PUBLISHES_PER_DAY}'`,
     );
   }
+  const mentionHandle = env.BDI_MENTION_HANDLE?.trim() || 'dkg';
+  const mentionDisplayName = env.BDI_MENTION_DISPLAY_NAME?.trim();
+  const mentionLabels = normalizeMentionLabels([mentionHandle, mentionDisplayName]);
   return {
     relayHttpUrl: (env.BDI_BUZZ_HTTP ?? 'http://127.0.0.1:9440').replace(/\/$/, ''),
     relayWsUrl:
       env.BDI_BUZZ_WS ?? (env.BDI_BUZZ_HTTP ?? 'ws://127.0.0.1:9440').replace(/^http/, 'ws'),
     serviceSecretKeyHex: required('BDI_SERVICE_KEY', env),
-    mentionHandle: env.BDI_MENTION_HANDLE ?? 'dkg',
+    mentionLabels,
     dkgApiUrl: (env.BDI_DKG_API ?? 'http://127.0.0.1:9200').replace(/\/$/, ''),
     dkgToken,
     approvalEmoji: env.BDI_APPROVAL_EMOJI ?? '✅',

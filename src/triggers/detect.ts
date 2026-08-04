@@ -1,4 +1,4 @@
-import type { NostrEvent } from '../types.ts';
+import type { MentionLabels, NostrEvent } from '../types.ts';
 
 export type Trigger =
   | { type: 'pin'; event: NostrEvent; channelId: string; targetEventId: string }
@@ -16,6 +16,8 @@ const lastETag = (e: NostrEvent): string | undefined =>
 
 const mentionsPubkey = (e: NostrEvent, pubkey: string): boolean =>
   e.tags.some((t) => t[0] === 'p' && t[1] === pubkey);
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * Hard cap on question length. Retrieval builds O(n²) term pairs and
@@ -38,7 +40,7 @@ export const MAX_QUESTION_CHARS = 512;
  */
 export function classify(
   event: NostrEvent,
-  opts: { servicePubkey: string; mentionHandle: string },
+  opts: { servicePubkey: string; mentionLabels: MentionLabels },
 ): Trigger {
   if (event.pubkey === opts.servicePubkey) return null; // never self-trigger
 
@@ -58,7 +60,14 @@ export function classify(
   if (event.kind === 9 && mentionsPubkey(event, opts.servicePubkey)) {
     const channelId = firstTag(event, 'h');
     if (!channelId) return null;
-    const re = new RegExp(`@${opts.mentionHandle}\\b\\s+(distill|ask)\\b\\s*(.*)`, 'is');
+    // Buzz renders one of the configured labels into message content while the
+    // signed p tag carries the authoritative identity. Interior whitespace is
+    // presentation-tolerant; every non-whitespace character remains literal.
+    const names = opts.mentionLabels
+      .map(escapeRegExp)
+      .map((name) => name.replace(/\s+/g, '\\s+'))
+      .join('|');
+    const re = new RegExp(`@(?:${names})(?=\\s)\\s+(distill|ask)\\b\\s*(.*)`, 'is');
     const m = event.content.match(re);
     if (!m) return null;
     const verb = m[1]!.toLowerCase();

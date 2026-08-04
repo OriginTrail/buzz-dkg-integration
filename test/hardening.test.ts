@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { nip19 } from 'nostr-tools';
 import { loadConfig, normalizePubkey, parseBindings } from '../src/config.ts';
@@ -32,12 +35,26 @@ describe('config hardening', () => {
     const raw = JSON.stringify([{ channelId: 'c', contextGraphId: 'g', promoters: ['not-a-key'] }]);
     expect(() => parseBindings(raw)).toThrow(/not a 64-hex pubkey or npub/);
   });
+
+  it('normalizes mention labels from environment configuration', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bdi-config-'));
+    const bindingsPath = join(dir, 'bindings.json');
+    writeFileSync(bindingsPath, '[]');
+    const config = loadConfig({
+      BDI_DKG_TOKEN: 'x',
+      BDI_SERVICE_KEY: '11'.repeat(32),
+      BDI_BINDINGS_PATH: bindingsPath,
+      BDI_MENTION_HANDLE: '',
+      BDI_MENTION_DISPLAY_NAME: '  DKG Memory  ',
+    });
+    expect(config.mentionLabels).toEqual(['DKG Memory', 'dkg']);
+  });
 });
 
 // ── triggers: question cap + bare-distill guard (review #6, nit) ──────────────
 
 describe('trigger classification hardening', () => {
-  const opts = { servicePubkey, mentionHandle: 'dkg' };
+  const opts = { servicePubkey, mentionLabels: ['dkg'] as const };
 
   it('drops an over-length ask instead of building a giant SPARQL filter', () => {
     const huge = makeEvent({
@@ -80,7 +97,7 @@ function setup(overrides: Partial<DaemonConfig> = {}) {
     relayHttpUrl: 'http://mock',
     relayWsUrl: 'ws://mock',
     serviceSecretKeyHex: '11'.repeat(32),
-    mentionHandle: 'dkg',
+    mentionLabels: ['dkg'] as const,
     dkgApiUrl: 'http://mock',
     dkgToken: 'mock',
     approvalEmoji: '✅',

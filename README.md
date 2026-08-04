@@ -29,12 +29,18 @@ one operator-approved SWM share → one operator-approved on-chain publication.
 
 ## What it does
 
-- **Capture**: a pin (kind 40004) or `@dkg distill` mention snapshots the
+- **Capture**: a pin (kind 40004) or bot mention followed by `distill`
+  (`@dkg distill`, or the configured Buzz display name) snapshots the
   thread *as of the trigger* (full signed events), distills it
   deterministically into one PROV-O decision cluster, walks it through
   `create → write → finalize (seal) → full SWM share`, verifies with a scoped
   read-back, and replies in-thread with a receipt (assertion coordinate,
   KA name, source digest).
+  Mention authorization is identity-bound, not label-bound: the signed event
+  must carry the integration service pubkey in a `p` tag. Any channel member
+  who can mention that service may request `distill`; the display-name alias
+  makes the existing capability easier to discover but does not widen who may
+  invoke it.
 - **Approval**: an authorized promoter's ✅ on that receipt is validated
   against the nine SPEC §6 invariants in code (including a re-read of the
   shared graph's source-set digest at approval time). Publication is
