@@ -1,19 +1,21 @@
 #!/bin/sh
 set -eu
 
-repo=${BUZZ_DKG_REPOSITORY:-OriginTrail/buzz-dkg-integration}
-release_base=${BUZZ_DKG_RELEASE_BASE_URL:-https://github.com/$repo/releases/latest/download}
-install_root=${BUZZ_DKG_INSTALL_ROOT:-/usr/local/lib/buzz-dkg}
-bin_dir=${BUZZ_DKG_BIN_DIR:-/usr/local/bin}
-skip_launch=${BUZZ_DKG_SKIP_LAUNCH:-0}
-
 fail() {
   printf 'buzz-dkg bootstrap: %s\n' "$*" >&2
   exit 1
 }
 
+repo=OriginTrail/buzz-dkg-integration
+release_base=https://github.com/$repo/releases/latest/download
+install_root=${BUZZ_DKG_INSTALL_ROOT:-/usr/local/lib/buzz-dkg}
+bin_dir=${BUZZ_DKG_BIN_DIR:-/usr/local/bin}
+skip_launch=${BUZZ_DKG_SKIP_LAUNCH:-0}
+
 command -v tar >/dev/null 2>&1 || fail "tar is required"
 command -v mktemp >/dev/null 2>&1 || fail "mktemp is required"
+command -v gh >/dev/null 2>&1 ||
+  fail "GitHub CLI (gh) is required to authenticate the release attestation"
 
 case "$(uname -s)" in
   Linux) platform=linux ;;
@@ -54,7 +56,7 @@ sha256_file() {
   fi
 }
 
-printf 'Downloading Buzz + DKG installer for %s/%s...\n' "$platform" "$arch"
+printf 'Downloading Buzz + DKG installer for %s/%s from %s...\n' "$platform" "$arch" "$release_base"
 download "$release_base/$asset" "$temp_dir/$asset"
 download "$release_base/$checksum_asset" "$temp_dir/$checksum_asset"
 
@@ -65,16 +67,22 @@ printf '%s\n' "$expected" | grep -Eq '^[0-9a-fA-F]{64}$' ||
 [ "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" = "$actual" ] ||
   fail "release checksum verification failed"
 
-if tar -tzf "$temp_dir/$asset" | awk '
-  /^\// { bad=1 }
-  { n=split($0, p, "/"); for (i=1; i<=n; i++) if (p[i] == "..") bad=1 }
+printf 'Authenticating GitHub build provenance...\n'
+gh attestation verify "$temp_dir/$asset" --repo "$repo" >/dev/null ||
+  fail "release provenance verification failed"
+
+if tar -tvzf "$temp_dir/$asset" | awk '
+  substr($1, 1, 1) !~ /^[-d]$/ { bad=1 }
+  $NF ~ /^\// { bad=1 }
+  { n=split($NF, p, "/"); for (i=1; i<=n; i++) if (p[i] == "..") bad=1 }
   END { exit bad ? 0 : 1 }
 '; then
-  fail "release archive contains an unsafe path"
+  fail "release archive contains an unsafe path or entry type"
 fi
 
 mkdir -p "$temp_dir/payload"
-tar -xzf "$temp_dir/$asset" -C "$temp_dir/payload"
+tar -xzf "$temp_dir/$asset" -C "$temp_dir/payload" --no-same-owner --no-same-permissions
+chmod -R a-s "$temp_dir/payload"
 [ -f "$temp_dir/payload/VERSION" ] || fail "release archive has no VERSION file"
 [ -x "$temp_dir/payload/buzz-dkg" ] || fail "release archive has no executable CLI"
 [ -x "$temp_dir/payload/runtime/bin/node" ] || fail "release archive has no bundled Node runtime"

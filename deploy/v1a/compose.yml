@@ -1,10 +1,10 @@
 name: buzz-dkg-v1a
 
 x-runtime: &runtime
-  image: node:22.14.0-bookworm-slim
+  image: node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b
   working_dir: /app
   network_mode: host
-  user: '${BUZZ_DKG_RUNTIME_UID:-0}:${BUZZ_DKG_RUNTIME_GID:-0}'
+  user: '${BUZZ_DKG_RUNTIME_UID:-65534}:${BUZZ_DKG_RUNTIME_GID:-65534}'
   volumes:
     - ${BUZZ_DKG_APP_DIR:?set BUZZ_DKG_APP_DIR}:/app:ro
     - ${BUZZ_DKG_STATE_DIR:?set BUZZ_DKG_STATE_DIR}:/runtime
@@ -37,7 +37,7 @@ services:
   bootstrap:
     <<: *runtime
     profiles: [tools]
-    command: ['node', 'deploy/existing-core/bootstrap.mjs']
+    command: ['node', 'scripts/bootstrap/existing-relay.mjs']
     environment:
       <<: *runtime-environment
       BDI_RUNTIME_DIR_IN_CONTAINER: /runtime

@@ -8,6 +8,7 @@ import {
   readFileSync,
   readlinkSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -59,17 +60,24 @@ function fixture(
     '#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; *) echo Linux;; esac\n',
   );
   chmodSync(join(fakeBin, 'uname'), 0o755);
+  writeFileSync(join(fakeBin, 'gh'), '#!/bin/sh\nexit 0\n');
+  chmodSync(join(fakeBin, 'gh'), 0o755);
 
   return { release, installRoot, binDir };
 }
 
 function runBootstrap(paths: ReturnType<typeof fixture>) {
-  return spawnSync('sh', [bootstrap], {
+  const testBootstrap = join(dirname(paths.release), 'install.test.sh');
+  const source = readFileSync(bootstrap, 'utf8').replace(
+    'release_base=https://github.com/$repo/releases/latest/download',
+    `release_base=file://${paths.release}`,
+  );
+  writeFileSync(testBootstrap, source);
+  return spawnSync('sh', [testBootstrap], {
     encoding: 'utf8',
     env: {
       ...process.env,
       PATH: `${join(dirname(paths.release), 'fake-bin')}:${process.env.PATH}`,
-      BUZZ_DKG_RELEASE_BASE_URL: `file://${paths.release}`,
       BUZZ_DKG_INSTALL_ROOT: paths.installRoot,
       BUZZ_DKG_BIN_DIR: paths.binDir,
       BUZZ_DKG_SKIP_LAUNCH: '1',
@@ -118,5 +126,21 @@ describe('one-line release bootstrap', () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('is not a symlink');
     expect(readFileSync(join(paths.binDir, 'buzz-dkg'), 'utf8')).toBe('operator-owned\n');
+  });
+
+  it('rejects archive symlinks before root extraction', () => {
+    const root = tempRoot();
+    const paths = fixture(root);
+    const payload = join(root, 'linked-payload');
+    mkdirSync(payload, { recursive: true });
+    symlinkSync('/etc', join(payload, 'escape'));
+    const asset = join(paths.release, 'buzz-dkg-linux-x64.tar.gz');
+    const packed = spawnSync('tar', ['-czf', asset, '-C', payload, '.'], { encoding: 'utf8' });
+    expect(packed.status, packed.stderr).toBe(0);
+    const digest = createHash('sha256').update(readFileSync(asset)).digest('hex');
+    writeFileSync(`${asset}.sha256`, `${digest}  buzz-dkg-linux-x64.tar.gz\n`);
+    const result = runBootstrap(paths);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('unsafe path or entry type');
   });
 });

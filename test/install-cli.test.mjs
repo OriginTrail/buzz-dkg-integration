@@ -1,5 +1,78 @@
-import { describe, expect, it } from 'vitest';
+import { spawn } from 'node:child_process';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import { parseArgs, relayEndpoints } from '../scripts/install.mjs';
+
+const roots = [];
+const servers = [];
+
+afterEach(async () => {
+  await Promise.all(servers.splice(0).map((server) => new Promise((done) => server.close(done))));
+});
+
+async function apiServer(role = 'edge') {
+  const server = createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+    if (request.url === '/api/status') {
+      response.end(JSON.stringify({ nodeRole: role, version: '10.0.11' }));
+      return;
+    }
+    response.statusCode = 200;
+    response.end('{}');
+  });
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  servers.push(server);
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
+function fixture() {
+  const root = mkdtempSync(join(tmpdir(), 'buzz-dkg-install-test-'));
+  roots.push(root);
+  const bin = join(root, 'bin');
+  const config = join(root, 'config');
+  const state = join(root, 'state');
+  const token = join(root, 'auth.token');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(token, 'test-token\n', { mode: 0o600 });
+  writeFileSync(
+    join(bin, 'docker'),
+    `#!/bin/sh
+case "$*" in
+  *"compose version"*) echo "Docker Compose version v2.30.0" ;;
+  *"logs --no-color daemon"*) echo '{"message":"daemon started"}' ;;
+  *"run --rm bootstrap"*)
+    mkdir -p "$BUZZ_DKG_STATE_DIR"
+    printf '%s\n' '{"channelName":"Web of Trust","channelId":"550e8400-e29b-41d4-a716-446655440000","contextGraphId":"buzz-test"}' > "$BUZZ_DKG_STATE_DIR/bootstrap.json"
+    ;;
+  *) echo "Docker version 27.0.0" ;;
+esac
+`,
+  );
+  chmodSync(join(bin, 'docker'), 0o755);
+  return { root, bin, config, state, token };
+}
+
+function runInstaller(f, args) {
+  const child = spawn(process.execPath, [resolve('scripts/install.mjs'), ...args], {
+    env: {
+      ...process.env,
+      PATH: `${f.bin}:${process.env.PATH}`,
+      BUZZ_DKG_CONFIG_DIR: f.config,
+      BUZZ_DKG_STATE_DIR: f.state,
+      BUZZ_DKG_ALLOW_NON_ROOT: '1',
+      BUZZ_DKG_ALLOW_UNSUPPORTED: '1',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (chunk) => (stdout += chunk));
+  child.stderr.on('data', (chunk) => (stderr += chunk));
+  return new Promise((done) => child.on('close', (status) => done({ status, stdout, stderr })));
+}
 
 describe('Buzz-first installer CLI', () => {
   it('derives matching HTTP and WebSocket relay origins', () => {
@@ -21,6 +94,8 @@ describe('Buzz-first installer CLI', () => {
         'wss://community.example.com',
         '--dkg-role',
         'edge',
+        '--dkg-network',
+        'testnet',
         '--dkg-api',
         'http://127.0.0.1:9200',
         '--yes',
@@ -29,17 +104,81 @@ describe('Buzz-first installer CLI', () => {
       command: 'install',
       relay: 'wss://community.example.com',
       dkgRole: 'edge',
+      dkgNetwork: 'testnet',
       dkgApi: 'http://127.0.0.1:9200',
       yes: true,
     });
   });
 
-  it('rejects unsupported node roles and relay protocols', () => {
+  it('rejects unsupported node roles, networks, and relay protocols', () => {
     expect(() => parseArgs(['install', '--dkg-role', 'validator'])).toThrow(
       '--dkg-role must be auto, edge, or core',
+    );
+    expect(() => parseArgs(['install', '--dkg-network', 'testent'])).toThrow(
+      '--dkg-network must be one of',
     );
     expect(() => relayEndpoints('ftp://community.example.com')).toThrow(
       'unsupported Buzz Relay URL protocol',
     );
+  });
+
+  it('writes safe runtime config and invokes bootstrap, daemon, and smoke', async () => {
+    const f = fixture();
+    const api = await apiServer();
+    const result = await runInstaller(f, [
+      'install',
+      '--relay',
+      api,
+      '--dkg-api',
+      api,
+      '--dkg-token-path',
+      f.token,
+      '--dkg-role',
+      'edge',
+      '--yes',
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    const runtime = readFileSync(join(f.config, 'runtime.env'), 'utf8');
+    expect(runtime).toContain('BDI_PUBLISH_MODE=disabled');
+    expect(runtime).toContain('BDI_MAX_PUBLISHES_PER_DAY=0');
+    expect(runtime).toContain(`BDI_DKG_TOKEN_PATH=${f.token}`);
+    expect(runtime).toMatch(/BUZZ_DKG_RUNTIME_UID=\d+/);
+    expect(existsSync(join(f.state, 'bootstrap.json'))).toBe(true);
+    expect(result.stdout).toContain('Buzz + DKG is ready.');
+  });
+
+  it('aborts before persistent config for a missing token or role mismatch', async () => {
+    const api = await apiServer('edge');
+    const missing = fixture();
+    const missingResult = await runInstaller(missing, [
+      'install',
+      '--relay',
+      api,
+      '--dkg-api',
+      api,
+      '--dkg-token-path',
+      join(missing.root, 'missing.token'),
+      '--yes',
+    ]);
+    expect(missingResult.status).not.toBe(0);
+    expect(missingResult.stderr).toContain('DKG token does not exist');
+    expect(existsSync(join(missing.config, 'runtime.env'))).toBe(false);
+
+    const mismatch = fixture();
+    const mismatchResult = await runInstaller(mismatch, [
+      'install',
+      '--relay',
+      api,
+      '--dkg-api',
+      api,
+      '--dkg-token-path',
+      mismatch.token,
+      '--dkg-role',
+      'core',
+      '--yes',
+    ]);
+    expect(mismatchResult.status).not.toBe(0);
+    expect(mismatchResult.stderr).toContain('is edge, but core was requested');
+    expect(existsSync(join(mismatch.config, 'runtime.env'))).toBe(false);
   });
 });

@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  chownSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +21,10 @@ const configDir = process.env.BUZZ_DKG_CONFIG_DIR || '/etc/buzz-dkg';
 const stateDir = process.env.BUZZ_DKG_STATE_DIR || '/var/lib/buzz-dkg';
 const envPath = join(configDir, 'runtime.env');
 const composePath = join(appDir, 'deploy', 'v1a', 'compose.yml');
-const dkgVersion = process.env.BUZZ_DKG_DKG_VERSION || '10.0.11';
+const dkgVersion = '10.0.11';
+const dkgIntegrity =
+  'sha512-QNsjad2eBADuuWWUjzIfdmjh1Xxd8lRy5QGLH6pTxMyOOQsIyeHQWMTGMIb24F6g533Zu/Iil9HtNdcrei8rFA==';
+const supportedNetworks = ['mainnet-gnosis', 'mainnet-base', 'testnet'];
 const managedDkgRoot = join(stateDir, 'dkg-cli');
 const managedDkgHome = join(stateDir, 'dkg');
 const managedDkgBin = join(managedDkgRoot, 'node_modules', '.bin', 'dkg');
@@ -32,6 +43,8 @@ function run(command, args, options = {}) {
     stdio: options.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     encoding: options.capture ? 'utf8' : undefined,
     env: options.env || process.env,
+    uid: options.uid,
+    gid: options.gid,
   });
   if (result.error) fail(`${command}: ${result.error.message}`);
   if (result.status !== 0 && !options.allowFailure) {
@@ -61,6 +74,9 @@ export function parseArgs(argv) {
   }
   if (parsed.dkgRole && !['auto', 'edge', 'core'].includes(parsed.dkgRole)) {
     fail('--dkg-role must be auto, edge, or core');
+  }
+  if (parsed.dkgNetwork && !supportedNetworks.includes(parsed.dkgNetwork)) {
+    fail(`--dkg-network must be one of: ${supportedNetworks.join(', ')}`);
   }
   return parsed;
 }
@@ -180,9 +196,42 @@ function managedDkgEnv() {
   const runtimeBin = join(appDir, 'runtime', 'bin');
   return {
     ...process.env,
+    HOME: managedDkgHome,
+    // This boundary prevents the managed install from reading or mutating an
+    // operator's existing ~/.dkg state.
     DKG_HOME: managedDkgHome,
     PATH: `${runtimeBin}:${process.env.PATH || ''}`,
   };
+}
+
+function invokingIdentity() {
+  const currentUid = process.getuid?.() ?? 0;
+  const currentGid = process.getgid?.() ?? 0;
+  const sudoUid = Number(process.env.SUDO_UID);
+  const sudoGid = Number(process.env.SUDO_GID);
+  if (Number.isSafeInteger(sudoUid) && sudoUid > 0 && Number.isSafeInteger(sudoGid)) {
+    return { uid: sudoUid, gid: sudoGid };
+  }
+  if (currentUid > 0) return { uid: currentUid, gid: currentGid };
+  // Direct root invocation has no calling user. Use the conventional nobody
+  // identity rather than executing package lifecycle hooks as uid 0.
+  return { uid: 65534, gid: 65534 };
+}
+
+function prepareManagedDkg(identity) {
+  for (const path of [stateDir, managedDkgRoot, managedDkgHome]) {
+    mkdirSync(path, { recursive: true, mode: 0o750 });
+    chownSync(path, identity.uid, identity.gid);
+    chmodSync(path, 0o750);
+  }
+}
+
+function verifyManagedDkgLock() {
+  const lock = JSON.parse(readFileSync(join(managedDkgRoot, 'package-lock.json'), 'utf8'));
+  const installed = lock.packages?.['node_modules/@origintrail-official/dkg'];
+  if (installed?.version !== dkgVersion || installed?.integrity !== dkgIntegrity) {
+    fail('managed DKG package lock does not match the pinned release integrity');
+  }
 }
 
 async function waitForDkg(api) {
@@ -225,11 +274,14 @@ function writeRuntimeEnv(values) {
   const ordered = [
     'BUZZ_DKG_APP_DIR',
     'BUZZ_DKG_STATE_DIR',
+    'BUZZ_DKG_RUNTIME_UID',
+    'BUZZ_DKG_RUNTIME_GID',
     'BDI_BUZZ_HTTP',
     'BDI_BUZZ_WS',
     'BDI_DKG_API',
     'BDI_DKG_TOKEN_PATH',
     'BDI_DKG_ROLE',
+    'BDI_DKG_NETWORK',
     'BDI_SERVICE_KEY',
     'BDI_BUZZ_OWNER_KEY',
     'BDI_CHANNEL_NAME',
@@ -255,6 +307,7 @@ function showPlan(plan) {
   console.log('  Memory:      create or reuse one managed Web of Trust channel and Context Graph');
   console.log(`  State:       ${stateDir}`);
   console.log('  Public ports: none added by the integration');
+  console.log('  Network:     sidecar uses the Linux host network to reach loopback Buzz/DKG APIs');
 }
 
 async function resolvePlan(options, prompt) {
@@ -290,7 +343,10 @@ async function resolvePlan(options, prompt) {
   if (existingStatus && requestedRole !== 'auto' && existingStatus.nodeRole !== requestedRole) {
     fail(`DKG node at ${dkgApi} is ${existingStatus.nodeRole}, but ${requestedRole} was requested`);
   }
-  const network = options.dkgNetwork || 'mainnet-gnosis';
+  if (!existingStatus && options.yes && !options.dkgNetwork && !prior.BDI_DKG_NETWORK) {
+    fail('a fresh unattended DKG install requires --dkg-network testnet|mainnet-gnosis|mainnet-base');
+  }
+  const network = options.dkgNetwork || prior.BDI_DKG_NETWORK || 'testnet';
   return {
     relay,
     dkgApi,
@@ -312,21 +368,39 @@ async function ensureDkg(plan, prompt, options) {
     if (answer && answer !== 'y' && answer !== 'yes')
       fail('installation cancelled before DKG setup');
   }
-  mkdirSync(managedDkgRoot, { recursive: true, mode: 0o700 });
-  mkdirSync(managedDkgHome, { recursive: true, mode: 0o700 });
+  const identity = invokingIdentity();
+  prepareManagedDkg(identity);
   console.log(`Installing @origintrail-official/dkg@${dkgVersion}...`);
+  // The pinned DKG package and better-sqlite3 dependency require lifecycle
+  // hooks. Execute them as the managed non-root identity, never as installer
+  // root, then verify npm's generated lock against the reviewed integrity.
   run(
     npmCommand(),
-    ['install', '--prefix', managedDkgRoot, `@origintrail-official/dkg@${dkgVersion}`],
+    [
+      'install',
+      '--save-exact',
+      '--prefix',
+      managedDkgRoot,
+      `@origintrail-official/dkg@${dkgVersion}`,
+    ],
     {
       env: managedDkgEnv(),
+      uid: identity.uid,
+      gid: identity.gid,
     },
   );
+  verifyManagedDkgLock();
   console.log('Starting the supported DKG setup wizard...');
   run(managedDkgBin, ['init', '--role', plan.dkgRole, '--network', plan.network], {
     env: managedDkgEnv(),
+    uid: identity.uid,
+    gid: identity.gid,
   });
-  run(managedDkgBin, ['start'], { env: managedDkgEnv() });
+  run(managedDkgBin, ['start'], {
+    env: managedDkgEnv(),
+    uid: identity.uid,
+    gid: identity.gid,
+  });
   return waitForDkg(plan.dkgApi);
 }
 
@@ -342,7 +416,7 @@ async function resolveTokenPath(options, prompt) {
   return prompt.question('DKG auth.token path: ');
 }
 
-async function install(options, prompt) {
+export async function install(options, prompt) {
   if (process.platform !== 'linux' && process.env.BUZZ_DKG_ALLOW_UNSUPPORTED !== '1') {
     fail('Beta V1 supports Linux only');
   }
@@ -362,16 +436,26 @@ async function install(options, prompt) {
   const status = await ensureDkg(plan, prompt, options);
   const tokenPath = await resolveTokenPath(options, prompt);
   if (!existsSync(tokenPath)) fail(`DKG token does not exist: ${tokenPath}`);
+  const tokenOwner = statSync(tokenPath);
+  // Match the sidecar uid/gid to the credential it must read, and make only the
+  // integration state root writable by that identity. The token remains a
+  // read-only bind mount and is never copied.
+  mkdirSync(stateDir, { recursive: true, mode: 0o750 });
+  chownSync(stateDir, tokenOwner.uid, tokenOwner.gid);
+  chmodSync(stateDir, 0o750);
   const prior = parseEnvFile(envPath);
   const secrets = generatedSecrets(prior);
   writeRuntimeEnv({
     BUZZ_DKG_APP_DIR: appDir,
     BUZZ_DKG_STATE_DIR: stateDir,
+    BUZZ_DKG_RUNTIME_UID: String(tokenOwner.uid),
+    BUZZ_DKG_RUNTIME_GID: String(tokenOwner.gid),
     BDI_BUZZ_HTTP: plan.relay.http,
     BDI_BUZZ_WS: plan.relay.ws,
     BDI_DKG_API: plan.dkgApi,
     BDI_DKG_TOKEN_PATH: tokenPath,
     BDI_DKG_ROLE: status.nodeRole,
+    BDI_DKG_NETWORK: plan.network,
     ...secrets,
     BDI_CHANNEL_NAME: 'Web of Trust',
     BDI_PUBLISH_MODE: 'disabled',
@@ -436,15 +520,17 @@ function help() {
   console.log(`buzz-dkg — Buzz-first DKG installer preview
 
 Usage:
-  buzz-dkg plan [--relay URL] [--dkg-role auto|edge|core]
-  buzz-dkg install [--relay URL] [--dkg-role auto|edge|core]
+  buzz-dkg plan [--relay URL] [--dkg-role auto|edge|core] [--dkg-network NETWORK]
+  buzz-dkg install [--relay URL] [--dkg-role auto|edge|core] [--dkg-network NETWORK]
   buzz-dkg status
   buzz-dkg logs
   buzz-dkg smoke
   buzz-dkg remove
 
 Install adopts a reachable Buzz Relay without replacing its process, identity,
-database, URL, or TLS configuration. Verifiable Memory publication stays off.`);
+database, URL, or TLS configuration. Fresh guided installs default to testnet;
+fresh unattended installs must name testnet, mainnet-gnosis, or mainnet-base.
+Verifiable Memory publication stays off.`);
 }
 
 async function main() {

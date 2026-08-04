@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { getPublicKey } from 'nostr-tools/pure';
 import { BuzzClient } from '../../phase0/bridge/lib/nostr.mjs';
 import { DkgHttpTransport } from '../../src/dkg/http.mjs';
@@ -345,4 +346,11 @@ export async function runExistingRelayBootstrap(env = process.env) {
   const result = await bootstrapExistingRelay(loadExistingRelayConfig(env));
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return result;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
+  runExistingRelayBootstrap().catch((error) => {
+    process.stderr.write(`${JSON.stringify({ ok: false, error: String(error?.message || error) })}\n`);
+    process.exitCode = 1;
+  });
 }
