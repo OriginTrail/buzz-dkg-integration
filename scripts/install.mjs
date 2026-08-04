@@ -25,9 +25,9 @@ import {
 export { relayEndpoints };
 
 const installContext = createInstallContext();
-const dkgVersion = '10.0.11';
+const dkgVersion = '10.0.12';
 const dkgIntegrity =
-  'sha512-QNsjad2eBADuuWWUjzIfdmjh1Xxd8lRy5QGLH6pTxMyOOQsIyeHQWMTGMIb24F6g533Zu/Iil9HtNdcrei8rFA==';
+  'sha512-AwUiqLXLLrUMuEN8maGSt5ijmAsgFsp2Ur4CZaHWlsxrHIHDk4QBbmQV7GyfD2LPZXknKIL8oIvlXYKxFhdJxA==';
 
 function fail(message) {
   throw new Error(message);
@@ -81,6 +81,36 @@ export function parseArgs(argv) {
   return parsed;
 }
 
+export function relayCandidatesFromContainer(container) {
+  const env = Object.fromEntries(
+    (container?.Config?.Env || []).map((entry) => {
+      const at = entry.indexOf('=');
+      return at < 0 ? [entry, ''] : [entry.slice(0, at), entry.slice(at + 1)];
+    }),
+  );
+  const image = String(container?.Config?.Image || '').toLowerCase();
+  const service = String(
+    container?.Config?.Labels?.['com.docker.compose.service'] || '',
+  ).toLowerCase();
+  if (!image.includes('buzz') && service !== 'relay' && !env.BUZZ_BIND_ADDR) return [];
+
+  const local = (container?.NetworkSettings?.Ports?.['3000/tcp'] || [])
+    .map((binding) => {
+      const port = String(binding?.HostPort || '');
+      if (!/^\d+$/.test(port)) return null;
+      let host = String(binding?.HostIp || '127.0.0.1');
+      if (!host || host === '0.0.0.0') host = '127.0.0.1';
+      if (host === '::') host = '::1';
+      if (host.includes(':')) host = `[${host}]`;
+      return `http://${host}:${port}`;
+    })
+    .filter(Boolean);
+
+  // Prefer a host-local mapping. It avoids hairpin TLS/auth failures and keeps
+  // the integration working when the relay's public URL is private-network gated.
+  return [...new Set(local.length > 0 ? local : env.RELAY_URL ? [env.RELAY_URL] : [])];
+}
+
 function dockerRelayCandidates() {
   if (!executable('docker')) return [];
   const ids = run('docker', ['ps', '--format', '{{.ID}}'], { capture: true, allowFailure: true });
@@ -89,24 +119,11 @@ function dockerRelayCandidates() {
   for (const id of ids.stdout.split(/\s+/).filter(Boolean)) {
     const inspected = run('docker', ['inspect', id], { capture: true, allowFailure: true });
     if (inspected.status !== 0) continue;
-    let container;
     try {
-      container = JSON.parse(inspected.stdout)[0];
+      candidates.push(...relayCandidatesFromContainer(JSON.parse(inspected.stdout)[0]));
     } catch {
       continue;
     }
-    const env = Object.fromEntries(
-      (container?.Config?.Env || []).map((entry) => {
-        const at = entry.indexOf('=');
-        return at < 0 ? [entry, ''] : [entry.slice(0, at), entry.slice(at + 1)];
-      }),
-    );
-    const image = String(container?.Config?.Image || '').toLowerCase();
-    const service = String(
-      container?.Config?.Labels?.['com.docker.compose.service'] || '',
-    ).toLowerCase();
-    if (!image.includes('buzz') && service !== 'relay' && !env.BUZZ_BIND_ADDR) continue;
-    if (env.RELAY_URL) candidates.push(env.RELAY_URL);
   }
   return [...new Set(candidates)];
 }

@@ -35,6 +35,12 @@ describe('installer services', () => {
         requestedRole: 'auto',
       }),
     ).toMatchObject({ dkgExisting: true, dkgRole: 'core', network: 'testnet' });
+    expect(
+      resolveDkgPlan({
+        existingStatus: { nodeRole: 'edge', version: '10.0.12', networkId: 'testnet' },
+        requestedRole: 'auto',
+      }),
+    ).toMatchObject({ dkgExisting: true, dkgRole: 'edge', network: 'testnet' });
     expect(() =>
       resolveDkgPlan({ requestedRole: 'edge', unattended: true }),
     ).toThrow(/requires --dkg-network/);

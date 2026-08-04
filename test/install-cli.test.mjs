@@ -4,7 +4,11 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { parseArgs, relayEndpoints } from '../scripts/install.mjs';
+import {
+  parseArgs,
+  relayCandidatesFromContainer,
+  relayEndpoints,
+} from '../scripts/install.mjs';
 
 const roots = [];
 const servers = [];
@@ -34,7 +38,7 @@ async function apiServer(role = 'edge', status = {}) {
       response.end(
         JSON.stringify({
           nodeRole: role,
-          version: '10.0.11',
+          version: '10.0.12',
           networkId: 'testnet',
           ...status,
         }),
@@ -124,6 +128,33 @@ describe('Buzz-first installer CLI', () => {
       http: 'http://127.0.0.1:9440',
       ws: 'ws://127.0.0.1:9440',
     });
+  });
+
+  it('prefers a Buzz container local port over its public relay URL', () => {
+    expect(
+      relayCandidatesFromContainer({
+        Config: {
+          Image: 'ghcr.io/block/buzz:sha-test',
+          Env: ['RELAY_URL=wss://community.example.com'],
+          Labels: { 'com.docker.compose.service': 'relay' },
+        },
+        NetworkSettings: {
+          Ports: { '3000/tcp': [{ HostIp: '127.0.0.1', HostPort: '9440' }] },
+        },
+      }),
+    ).toEqual(['http://127.0.0.1:9440']);
+  });
+
+  it('uses the configured relay URL when the Buzz container has no host mapping', () => {
+    expect(
+      relayCandidatesFromContainer({
+        Config: {
+          Image: 'ghcr.io/block/buzz:sha-test',
+          Env: ['RELAY_URL=wss://community.example.com'],
+        },
+        NetworkSettings: { Ports: {} },
+      }),
+    ).toEqual(['wss://community.example.com']);
   });
 
   it('accepts explicit Buzz and DKG selections', () => {

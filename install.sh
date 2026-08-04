@@ -68,8 +68,19 @@ printf '%s\n' "$expected" | grep -Eq '^[0-9a-fA-F]{64}$' ||
   fail "release checksum verification failed"
 
 printf 'Authenticating GitHub build provenance...\n'
-gh attestation verify "$temp_dir/$asset" --repo "$repo" >/dev/null ||
-  fail "release provenance verification failed"
+case "${SUDO_USER:-}" in
+  ''|root|*[!A-Za-z0-9._-]*)
+    gh attestation verify "$temp_dir/$asset" --repo "$repo" >/dev/null ||
+      fail "release provenance verification failed; authenticate GitHub CLI and retry"
+    ;;
+  *)
+    # The one-line command normally runs this script through sudo. Verify as
+    # the invoking operator so their existing gh login is used; do not require
+    # a second GitHub credential store under /root.
+    sudo -H -u "$SUDO_USER" -- gh attestation verify "$temp_dir/$asset" --repo "$repo" >/dev/null ||
+      fail "release provenance verification failed; run 'gh auth login' as $SUDO_USER and retry"
+    ;;
+esac
 
 if tar -tvzf "$temp_dir/$asset" | awk '
   substr($1, 1, 1) !~ /^[-d]$/ { bad=1 }

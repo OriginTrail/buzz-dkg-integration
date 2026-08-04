@@ -1,5 +1,5 @@
 export const SUPPORTED_DKG_NETWORKS = ['mainnet-gnosis', 'mainnet-base', 'testnet'];
-export const SUPPORTED_DKG_VERSION = '10.0.11';
+export const SUPPORTED_DKG_VERSIONS = ['10.0.11', '10.0.12'];
 
 function detectedNetwork(status) {
   const named = status?.networkId || status?.network || status?.chain?.network;
@@ -23,9 +23,9 @@ export function resolveDkgPlan({
   let existingNetwork = null;
   if (existingStatus) {
     const version = String(existingStatus.version || '').replace(/^v/, '');
-    if (version !== SUPPORTED_DKG_VERSION) {
+    if (!SUPPORTED_DKG_VERSIONS.includes(version)) {
       throw new Error(
-        `existing DKG node version ${version || 'unknown'} is incompatible; expected ${SUPPORTED_DKG_VERSION}`,
+        `existing DKG node version ${version || 'unknown'} is incompatible; expected one of: ${SUPPORTED_DKG_VERSIONS.join(', ')}`,
       );
     }
     existingNetwork = detectedNetwork(existingStatus);
