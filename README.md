@@ -9,6 +9,13 @@ questions using evidence exclusively from the room's designated Context Graph.
 Canonical specification: [SPEC.md](SPEC.md) · Design: [docs/DESIGN.md](docs/DESIGN.md) ·
 Verified interfaces: [INTERFACES.md](INTERFACES.md) · Gate reports: `docs/gates/`.
 
+> **🐝◈ Run the full integration with the memory-layers UI built in:**
+> **[docs/ot-rfc-67/BUILDING.md](docs/ot-rfc-67/BUILDING.md)** — prebuilt
+> clients from Releases or a one-patch build against `block/buzz`, plus the
+> server-side recipe (relay + Edge node + projector + community provider).
+> Live example: [docs/ot-rfc-67/reference-instance.md](docs/ot-rfc-67/reference-instance.md)
+> (the OT-RFC-67 Beta V1 reference instance).
+
 **Status: all stages executed (A–E), 2026-07-26.** Source audit → isolated
 spike → daemon (74 tests, zero-mock acceptance demo) → production validation →
 one operator-approved SWM share → one operator-approved on-chain publication.

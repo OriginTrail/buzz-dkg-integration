@@ -55,6 +55,13 @@ the resolving node):
 
 ![evidence trail](screenshots/evidence-trail.png)
 
+Any sub-graph opens into **Traces** (the decision timeline with evidence
+hanging off each box) or **Graph** — the knowledge graph in the DKG node's own
+visual idiom (dark canvas, hexagonal entities, entity-type colors, the node's
+click-inspector), so the Buzz surface and the node UI read as one product:
+
+![graph view, node-UI parity](screenshots/graph-node-parity.png)
+
 ## Acceptance criteria observed on this instance
 
 Mapped to the RFC's Beta V1 release-candidate checks (manual instance — not a
