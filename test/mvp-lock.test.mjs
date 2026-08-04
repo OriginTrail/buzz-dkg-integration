@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -81,5 +81,18 @@ describe('M0 lifecycle lock', () => {
     writeFileSync(f.ownerPath, '{partial');
     expect(f.manager.unlock()).toBe(true);
     expect(f.recovered()).toBe(1);
+  });
+
+  it('clears a stale atomic-owner temp file but still rejects unknown entries', () => {
+    const stale = fixture();
+    mkdirSync(stale.lockDir);
+    writeFileSync(join(stale.lockDir, '.owner-123-456.tmp'), '{"partial":true}\n');
+    expect(stale.manager.unlock()).toBe(true);
+    expect(existsSync(stale.lockDir)).toBe(false);
+
+    const unsafe = fixture();
+    mkdirSync(unsafe.lockDir);
+    writeFileSync(join(unsafe.lockDir, 'foreign-file'), 'do not remove');
+    expect(() => unsafe.manager.unlock()).toThrow(/unexpected contents/);
   });
 });
