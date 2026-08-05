@@ -27,10 +27,11 @@ BUZZ_DKG_QUERY_TOKEN=<same secret as BDI_QUERY_GATEWAY_TOKEN>
 ```
 
 If an adopted relay remains on a Docker bridge, its `127.0.0.1` is not the
-host-networked daemon's loopback. The optional `query-bridge` profile provides
-a bounded transport without weakening the gateway bind. Set
-`BDI_QUERY_BRIDGE_BIND` to that Docker network's private host-gateway address,
-start the profile, and point the relay at the same address and port:
+host-networked daemon's loopback. The query bridge supports two bounded
+transports without weakening the gateway bind.
+
+On hosts that allow container-to-host-gateway traffic, bind the bridge to the
+Docker network's private host-gateway address and point the relay at it:
 
 ```dotenv
 BDI_QUERY_BRIDGE_BIND=172.18.0.1
@@ -42,6 +43,30 @@ The bridge binds only the explicit RFC1918 address, carries no credential, and
 forwards opaque TCP to the loopback gateway. The relay still supplies the
 dedicated bearer token and the gateway still enforces it. Discover the actual
 gateway with `docker network inspect`; do not assume the example address.
+
+On hosts whose firewall blocks that traffic, use a shared Unix socket and two
+credential-free bridge processes. The host-networked process listens on the
+socket and forwards to the gateway; the second process shares the relay's
+network namespace, listens only on that namespace's loopback, and forwards to
+the socket:
+
+```dotenv
+# host-networked bridge
+BDI_QUERY_BRIDGE_LISTEN_SOCKET=/runtime/query-gateway.sock
+BDI_QUERY_GATEWAY_PORT=9296
+
+# bridge sharing the relay network namespace
+BDI_QUERY_BRIDGE_BIND=127.0.0.1
+BDI_QUERY_BRIDGE_PORT=9297
+BDI_QUERY_BRIDGE_TARGET_SOCKET=/runtime/query-gateway.sock
+
+# relay
+BUZZ_DKG_QUERY_URL=http://127.0.0.1:9297/v1/query
+```
+
+Mount the same private runtime directory into both bridge processes and run
+them as the runtime directory owner. The listener refuses to replace a
+non-socket path and creates the socket with mode `0660`.
 
 ## Request contract
 
