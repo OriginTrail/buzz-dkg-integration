@@ -104,23 +104,43 @@ const LAYERS = [
   ['VM', 'verifiable-memory'],
 ];
 
+const _layerCache = new Map(); // cg -> {at, value}
+const LAYER_CACHE_MS = 30_000;
+
 async function layerOverview(cg) {
+  const hit = _layerCache.get(cg);
+  if (hit && Date.now() - hit.at < LAYER_CACHE_MS) return hit.value;
   const out = {};
-  for (const [tag, view] of LAYERS) {
-    try {
-      const rows = await sparql(
-        cg,
-        view,
-        `SELECT ?g (SAMPLE(?n) AS ?name) WHERE { GRAPH ?g { ?s ?p ?o . OPTIONAL { ?s <http://schema.org/name> ?n } } } GROUP BY ?g LIMIT 200`,
-      );
-      out[tag] = rows.map((r) => {
-        const g = term(r.g);
-        return { graph: g, label: r.name ? term(r.name) : g.split('/').slice(-2).join('/') };
-      });
-    } catch {
-      out[tag] = null; // layer not readable on this node (e.g. WM is daemon-local)
-    }
-  }
+  // All six queries in flight together — a panel open must not serialize
+  // 3 layer listings + 3 uncapped counts into seconds of latency.
+  await Promise.all(
+    LAYERS.map(async ([tag, view]) => {
+      try {
+        const [rows, cnt] = await Promise.all([
+          sparql(
+            cg,
+            view,
+            `SELECT ?g (SAMPLE(?n) AS ?name) WHERE { GRAPH ?g { ?s ?p ?o . OPTIONAL { ?s <http://schema.org/name> ?n } } } GROUP BY ?g LIMIT 200`,
+          ),
+          sparql(cg, view,
+            `SELECT (COUNT(DISTINCT ?g) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }`,
+          ).catch(() => null),
+        ]);
+        out[tag] = rows.map((r) => {
+          const g = term(r.g);
+          return { graph: g, label: r.name ? term(r.name) : g.split('/').slice(-2).join('/') };
+        });
+        // No silent caps: the list is display-bounded, the COUNT is real.
+        const v = cnt?.[0]?.n ? term(cnt[0].n) : null;
+        out[`${tag}Count`] = v
+          ? parseInt(String(v).match(/\d+/)?.[0] ?? '0', 10)
+          : out[tag].length;
+      } catch {
+        out[tag] = null; // layer not readable on this node (e.g. WM is daemon-local)
+      }
+    }),
+  );
+  _layerCache.set(cg, { at: Date.now(), value: out });
   return out;
 }
 
