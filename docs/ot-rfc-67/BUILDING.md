@@ -24,7 +24,7 @@ The memory feature is maintained as one consolidated patch against
 
 ```bash
 git clone https://github.com/block/buzz.git && cd buzz
-git checkout 63496cc1d          # the base the patch is maintained against
+git checkout 8342dfcc5          # the base the patch is maintained against (Desktop 0.5.5)
 git apply /path/to/patches/buzz-desktop-dkg-memory-gateway.patch
 
 . ./bin/activate-hermit          # toolchain (Rust, Node, pnpm)
