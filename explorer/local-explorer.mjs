@@ -376,7 +376,7 @@ async function channelMemory(cg) {
          OPTIONAL { ?s <http://schema.org/name> ?name }
          OPTIONAL { ?s <https://w3id.org/buzz-dkg/buzz#sourceSetDigest> ?digest }
          OPTIONAL { ?s <http://www.w3.org/ns/prov#endedAtTime> ?t }
-       } } LIMIT 200`);
+       } } LIMIT 1000`);
     decisions = rows.map(r => ({ uri: term(r.s), name: r.name ? term(r.name) : null, digest: r.digest ? term(r.digest) : null, at: r.t ? term(r.t) : null }));
   } catch { /* view may be empty */ }
 
@@ -391,11 +391,20 @@ async function channelMemory(cg) {
     contributors = rows.map(r => ({ pubkey: term(r.pk), events: Number(term(r.n)), latest: r.latest ? Number(term(r.latest)) : null }));
   } catch { /* ignore */ }
 
-  // Named subgraphs registered on the CG.
+  // Named subgraphs registered on the CG. Experiment partitions (POLLEN
+  // battery runs etc.) are hidden from the topic lenses — they are shared
+  // SWM state with no retraction path, so they stay in the honest layer
+  // COUNTS, but they are not curated reading lenses for the panel.
+  const EXCLUDE_SUBGRAPHS = new RegExp(
+    process.env.EXCLUDE_SUBGRAPHS ?? '^(p5-|exp-r|pollen|[0-9]+$)', 'i');
   let subgraphs = [];
   try {
     const res = await node(`/api/sub-graph/list?contextGraphId=${encodeURIComponent(cg)}`);
-    if (res.ok) { const j = await res.json(); subgraphs = j.subGraphs ?? j.sub_graphs ?? []; }
+    if (res.ok) {
+      const j = await res.json();
+      subgraphs = (j.subGraphs ?? j.sub_graphs ?? []).filter(
+        (sg) => !EXCLUDE_SUBGRAPHS.test(sg.name ?? sg.displayName ?? ''));
+    }
   } catch { /* endpoint optional */ }
 
   return { gate: 'ok', cg, layers, decisions, contributors, subgraphs };
