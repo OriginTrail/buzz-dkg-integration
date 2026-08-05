@@ -26,9 +26,22 @@ BUZZ_DKG_QUERY_URL=http://127.0.0.1:9296/v1/query
 BUZZ_DKG_QUERY_TOKEN=<same secret as BDI_QUERY_GATEWAY_TOKEN>
 ```
 
-The `deploy/existing-core` relay is bridge-networked, so its `127.0.0.1` is not
-the host-networked daemon's loopback. That deployment intentionally does not
-wire these `BUZZ_DKG_QUERY_*` variables into the relay.
+If an adopted relay remains on a Docker bridge, its `127.0.0.1` is not the
+host-networked daemon's loopback. The optional `query-bridge` profile provides
+a bounded transport without weakening the gateway bind. Set
+`BDI_QUERY_BRIDGE_BIND` to that Docker network's private host-gateway address,
+start the profile, and point the relay at the same address and port:
+
+```dotenv
+BDI_QUERY_BRIDGE_BIND=172.18.0.1
+BDI_QUERY_BRIDGE_PORT=9297
+BUZZ_DKG_QUERY_URL=http://172.18.0.1:9297/v1/query
+```
+
+The bridge binds only the explicit RFC1918 address, carries no credential, and
+forwards opaque TCP to the loopback gateway. The relay still supplies the
+dedicated bearer token and the gateway still enforces it. Discover the actual
+gateway with `docker network inspect`; do not assume the example address.
 
 ## Request contract
 
