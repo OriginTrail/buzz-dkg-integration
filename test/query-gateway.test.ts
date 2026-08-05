@@ -39,6 +39,7 @@ class GatewayDkg {
   }> = [];
   failWith: string | null = null;
   hang = false;
+  tripleBindings: Array<Record<string, { value: string }>> = [];
 
   async query(
     options: { contextGraphId: string; view: string; sparql: string },
@@ -59,6 +60,9 @@ class GatewayDkg {
         },
       };
     }
+    if (options.sparql.includes('SELECT ?s ?p ?o ?g')) {
+      return { result: { bindings: this.tripleBindings } };
+    }
     return { result: { bindings: [] } };
   }
 
@@ -73,6 +77,11 @@ class GatewayDkg {
           uri: 'https://example.test/subgraph/core',
           entityCount: 2,
           tripleCount: 3,
+        },
+        {
+          name: 'no_uri',
+          entityCount: 1,
+          tripleCount: 1,
         },
       ],
     };
@@ -243,6 +252,15 @@ describe('query gateway HTTP boundary', () => {
             entityCount: 2,
             tripleCount: 3,
           },
+          {
+            name: 'no_uri',
+            uri: 'no_uri',
+            description: null,
+            createdBy: null,
+            createdAt: null,
+            entityCount: 1,
+            tripleCount: 1,
+          },
         ],
       },
     });
@@ -290,6 +308,34 @@ describe('query gateway HTTP boundary', () => {
       operation,
       result: expected,
     });
+  });
+
+  it('preserves raw N-Triples objects in topology triples', async () => {
+    const dkg = new GatewayDkg();
+    dkg.tripleBindings = [
+      {
+        s: { value: '<urn:buzz:subject:1>' },
+        p: { value: '<urn:buzz:predicate:1>' },
+        o: { value: '"quoted literal"@en' },
+        g: { value: '<https://example.test/core/_shared_memory/graph>' },
+      },
+      {
+        s: { value: '<urn:buzz:subject:2>' },
+        p: { value: '<urn:buzz:predicate:2>' },
+        o: { value: '<urn:buzz:object:2>' },
+        g: { value: '<https://example.test/core/_shared_memory/graph>' },
+      },
+    ];
+    const { url } = await startGateway(dkg);
+    const response = await request(url, body('subgraph_triples', { name: 'core' }));
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      result: { triples: Array<{ object: string; layer: string }> };
+    };
+    expect(payload.result.triples).toEqual([
+      expect.objectContaining({ object: '"quoted literal"@en', layer: 'VM' }),
+      expect.objectContaining({ object: '<urn:buzz:object:2>', layer: 'VM' }),
+    ]);
   });
 
   it('rejects unknown channels, query parameters, and invalid authorization before DKG access', async () => {

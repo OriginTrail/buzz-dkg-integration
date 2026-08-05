@@ -39,7 +39,7 @@ export interface ContributorSummary {
 
 export interface SubGraphSummary {
   name: string;
-  uri: string | null;
+  uri: string;
   description: string | null;
   createdBy: string | null;
   createdAt: string | null;

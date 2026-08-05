@@ -368,7 +368,7 @@ export class QueryGatewayService {
       .filter((item) => SUBGRAPH_NAME.test(String(item.name ?? '')))
       .map((item) => ({
         name: String(item.name),
-        uri: item.uri ? bounded(String(item.uri), 1_000) : null,
+        uri: item.uri ? bounded(String(item.uri), 1_000) : String(item.name),
         description: item.description ? bounded(String(item.description), 500) : null,
         createdBy: item.createdBy ? bounded(String(item.createdBy), 256) : null,
         createdAt: item.createdAt ? bounded(String(item.createdAt), 128) : null,
@@ -590,7 +590,7 @@ export class QueryGatewayService {
     for (const { row, layer } of rows) {
       const subject = bounded(term(row, 's'), 1_000);
       const predicate = bounded(term(row, 'p'), 1_000);
-      const object = bounded(term(row, 'o'), 4_000);
+      const object = bounded(rawTerm(row.o), 4_000);
       if (!subject || !predicate) continue;
       const key = JSON.stringify([subject, predicate, object]);
       const existing = triples.get(key);

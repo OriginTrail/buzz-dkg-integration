@@ -34,7 +34,7 @@ export interface SubGraphListResponse {
 
 export interface SubGraphListItem {
   name: string;
-  uri: string;
+  uri?: string;
   description?: string;
   createdBy?: string;
   createdAt?: string;
