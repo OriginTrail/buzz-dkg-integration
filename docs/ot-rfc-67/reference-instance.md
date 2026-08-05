@@ -62,6 +62,14 @@ click-inspector), so the Buzz surface and the node UI read as one product:
 
 ![graph view, node-UI parity](screenshots/graph-node-parity.png)
 
+Selecting any decision opens its evidence rail with the **entity-precise
+resolve link** into the viewer's node UI; zooming the graph fades in the
+node UI's humanized labels:
+
+![evidence rail with resolve link](screenshots/traces-evidence-rail.png)
+
+![zoomed graph with humanized labels](screenshots/graph-zoom-labels.png)
+
 ## Acceptance criteria observed on this instance
 
 Mapped to the RFC's Beta V1 release-candidate checks (manual instance — not a
