@@ -47,13 +47,14 @@ const PROV = 'http://www.w3.org/ns/prov#';
 const SCHEMA = 'http://schema.org/';
 
 export class QueryGatewayError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-    message: string,
-  ) {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(status: number, code: string, message: string) {
     super(message);
     this.name = 'QueryGatewayError';
+    this.status = status;
+    this.code = code;
   }
 }
 
@@ -212,12 +213,12 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 
 export class QueryGatewayService {
   readonly #bindings: Map<string, string>;
+  readonly dkg: DkgClient;
+  readonly config: EnabledGatewayConfig;
 
-  constructor(
-    bindings: readonly ChannelBinding[],
-    readonly dkg: DkgClient,
-    readonly config: EnabledGatewayConfig,
-  ) {
+  constructor(bindings: readonly ChannelBinding[], dkg: DkgClient, config: EnabledGatewayConfig) {
+    this.dkg = dkg;
+    this.config = config;
     this.#bindings = new Map();
     for (const binding of bindings) {
       if (this.#bindings.has(binding.channelId)) {

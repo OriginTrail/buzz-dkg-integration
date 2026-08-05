@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { loadQueryGatewayConfig } from '../src/config.ts';
 import type { DkgClient } from '../src/dkg/client.ts';
 import { QueryGateway } from '../src/query-gateway/server.ts';
@@ -10,6 +12,7 @@ const REQUESTER = 'ab'.repeat(32);
 const CONTRIBUTOR = 'cd'.repeat(32);
 const CHANNEL = 'channel-one';
 const CONTEXT_GRAPH = 'did:dkg:otp/0xabc/42';
+const REPO = fileURLToPath(new URL('..', import.meta.url));
 
 type EnabledConfig = Extract<QueryGatewayConfig, { enabled: true }>;
 
@@ -139,6 +142,20 @@ function body(operation: string, args: Record<string, unknown> = {}) {
 }
 
 describe('query gateway configuration', () => {
+  it('loads under the production Node type-stripper', () => {
+    const loaded = spawnSync(
+      process.execPath,
+      [
+        '--experimental-strip-types',
+        '--input-type=module',
+        '--eval',
+        "await import('./src/query-gateway/server.ts')",
+      ],
+      { cwd: REPO, encoding: 'utf8' },
+    );
+    expect(loaded.status, loaded.stderr).toBe(0);
+  });
+
   it('is disabled by default and accepts only literal loopback binds', () => {
     expect(loadQueryGatewayConfig({})).toEqual({ enabled: false });
     expect(

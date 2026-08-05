@@ -104,14 +104,16 @@ export class QueryGateway {
   readonly #server: Server;
   readonly #service: QueryGatewayService;
   readonly #log: GatewayLogger;
+  readonly config: EnabledGatewayConfig;
   #inFlight = 0;
 
   constructor(
-    readonly config: EnabledGatewayConfig,
+    config: EnabledGatewayConfig,
     bindings: readonly ChannelBinding[],
     dkg: DkgClient,
     dependencies: { log?: GatewayLogger } = {},
   ) {
+    this.config = config;
     this.#service = new QueryGatewayService(bindings, dkg, config);
     this.#log = dependencies.log ?? logger;
     this.#server = createServer((req, res) => void this.handle(req, res));
