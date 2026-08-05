@@ -71,6 +71,62 @@ async function sparql(cg, view, query) {
   return (await res.json()).result?.bindings ?? [];
 }
 
+// _meta lifecycle graphs are OUTSIDE every layer view's allow-list; the node
+// UI queries them with contextGraphId scoping only. Same here.
+async function sparqlNoView(cg, query) {
+  const res = await node('/api/query', {
+    method: 'POST',
+    body: JSON.stringify({ contextGraphId: cg, sparql: query }),
+  });
+  if (!res.ok) throw new Error(`sparql ${res.status}`);
+  return (await res.json()).result?.bindings ?? [];
+}
+
+/**
+ * Knowledge-asset counts per layer, replicating the node UI's listAssertions
+ * algorithm EXACTLY (packages/node-ui ui/api.ts): lifecycle markers
+ * `dkg:memoryLayer "<LAYER>"` in <cg>/_meta, both URI forms deduped by
+ * (subGraph, name), reserved `meta` sub-graph excluded, and assertions with a
+ * vmCurrentAssertion pointer excluded — so Buzz shows the same number the
+ * node UI's layer views show.
+ */
+async function assetCount(cg, layer) {
+  const metaGraph = `did:dkg:context-graph:${cg}/_meta`;
+  const cgPrefix = `did:dkg:context-graph:${cg}/`;
+  const urnPrefix = `urn:dkg:assertion:${cg}:`;
+  const rows = await sparqlNoView(cg, `SELECT ?g ?vm WHERE {
+    GRAPH <${metaGraph}> { ?g <http://dkg.io/ontology/memoryLayer> "${layer}"
+      OPTIONAL { ?g <http://dkg.io/ontology/vmCurrentAssertion> ?vm } }
+    FILTER(!CONTAINS(STR(?g), "/meta/assertion/"))
+  }`);
+  const published = new Set();
+  const keys = [];
+  for (const b of rows) {
+    const g = term(b.g ?? '');
+    const vm = b.vm ? term(b.vm) : null;
+    let sub, name;
+    if (g.startsWith(cgPrefix)) {
+      const seg = g.slice(cgPrefix.length).split('/');
+      if (seg.length === 3 && seg[0] === 'assertion') name = seg[2];
+      else if (seg.length === 4 && seg[1] === 'assertion') { sub = seg[0]; name = seg[3]; }
+      else continue;
+    } else if (g.startsWith(urnPrefix)) {
+      const rest = g.slice(urnPrefix.length);
+      let m = /^(0x[0-9a-fA-F]{40}):(.+)$/.exec(rest);
+      if (m) name = m[2];
+      else { m = /^([^:]+):(0x[0-9a-fA-F]{40}):(.+)$/.exec(rest); if (m) { sub = m[1]; name = m[3]; } }
+    } else continue;
+    if (!name || sub === 'meta') continue;
+    const key = `${sub ?? ''} ${name}`;
+    keys.push(key);
+    if (vm) published.add(key);
+  }
+  const seen = new Set();
+  let n = 0;
+  for (const k of keys) { if (published.has(k) || seen.has(k)) continue; seen.add(k); n++; }
+  return n;
+}
+
 // Node serializes SELECT bindings N-Triples-style.
 function term(raw) {
   if (typeof raw !== 'string') return String(raw);
@@ -116,25 +172,22 @@ async function layerOverview(cg) {
   await Promise.all(
     LAYERS.map(async ([tag, view]) => {
       try {
-        const [rows, cnt] = await Promise.all([
+        const [rows, assets] = await Promise.all([
           sparql(
             cg,
             view,
             `SELECT ?g (SAMPLE(?n) AS ?name) WHERE { GRAPH ?g { ?s ?p ?o . OPTIONAL { ?s <http://schema.org/name> ?n } } } GROUP BY ?g LIMIT 200`,
           ),
-          sparql(cg, view,
-            `SELECT (COUNT(DISTINCT ?g) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }`,
-          ).catch(() => null),
+          assetCount(cg, tag).catch(() => null),
         ]);
         out[tag] = rows.map((r) => {
           const g = term(r.g);
           return { graph: g, label: r.name ? term(r.name) : g.split('/').slice(-2).join('/') };
         });
-        // No silent caps: the list is display-bounded, the COUNT is real.
-        const v = cnt?.[0]?.n ? term(cnt[0].n) : null;
-        out[`${tag}Count`] = v
-          ? parseInt(String(v).match(/\d+/)?.[0] ?? '0', 10)
-          : out[tag].length;
+        // Count = Knowledge Assets exactly as the node UI counts them
+        // (lifecycle markers, deduped, published excluded) — never the
+        // display-bounded graph list length.
+        out[`${tag}Count`] = assets ?? out[tag].length;
       } catch {
         out[tag] = null; // layer not readable on this node (e.g. WM is daemon-local)
       }
