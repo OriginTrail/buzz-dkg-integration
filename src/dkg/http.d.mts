@@ -25,6 +25,23 @@ export interface QueryResult {
   phases?: Record<string, unknown>;
 }
 
+export interface SubGraphListResponse {
+  contextGraphId: string;
+  subGraphs?: Array<SubGraphListItem>;
+  /** Compatibility with the alternate field observed on older v10 nodes. */
+  sub_graphs?: Array<SubGraphListItem>;
+}
+
+export interface SubGraphListItem {
+  name: string;
+  uri: string;
+  description?: string;
+  createdBy?: string;
+  createdAt?: string;
+  entityCount: number;
+  tripleCount: number;
+}
+
 export class DkgHttpTransport {
   constructor(options: DkgHttpTransportOptions);
   request<T>(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<T>;
@@ -64,9 +81,13 @@ export class DkgClient extends DkgHttpTransport {
     contextGraphId: string,
   ): Promise<{ status: string; ual: string; txHash: string; kaId?: string; merkleRoot?: string }>;
   descriptor(name: string, contextGraphId: string): Promise<DescriptorResponse>;
-  query(options: {
-    sparql: string;
-    contextGraphId: string;
-    view: 'working-memory' | 'shared-working-memory' | 'verifiable-memory';
-  }): Promise<QueryResult>;
+  query(
+    options: {
+      sparql: string;
+      contextGraphId: string;
+      view: 'working-memory' | 'shared-working-memory' | 'verifiable-memory';
+    },
+    timeoutMs?: number,
+  ): Promise<QueryResult>;
+  listSubGraphs(contextGraphId: string, timeoutMs?: number): Promise<SubGraphListResponse>;
 }

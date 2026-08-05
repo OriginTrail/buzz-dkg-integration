@@ -397,6 +397,9 @@ export async function install(options, prompt, context = installContext) {
     BDI_CHANNEL_NAME: 'Web of Trust',
     BDI_PUBLISH_MODE: 'disabled',
     BDI_MAX_PUBLISHES_PER_DAY: '0',
+    BDI_QUERY_GATEWAY_ENABLED: 'true',
+    BDI_QUERY_GATEWAY_BIND: '127.0.0.1',
+    BDI_QUERY_GATEWAY_PORT: '9296',
   });
 
   console.log('Creating or reusing the Web of Trust channel and Context Graph...');

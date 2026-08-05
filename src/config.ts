@@ -4,7 +4,13 @@ import {
   parseBindings as parseSharedBindings,
   parseTokenFile as parseSharedTokenFile,
 } from '../scripts/bootstrap/core.mjs';
-import type { ChannelBinding, DaemonConfig, MentionLabels, PublishMode } from './types.ts';
+import type {
+  ChannelBinding,
+  DaemonConfig,
+  MentionLabels,
+  PublishMode,
+  QueryGatewayConfig,
+} from './types.ts';
 
 function required(name: string, env: NodeJS.ProcessEnv = process.env): string {
   const v = env[name];
@@ -49,6 +55,94 @@ export function normalizeMentionLabels(values: readonly (string | undefined)[]):
   return [labels[0]!, ...labels.slice(1)];
 }
 
+function envBoolean(name: string, raw: string | undefined, fallback: boolean): boolean {
+  if (raw === undefined || raw === '') return fallback;
+  if (raw === '1' || raw === 'true') return true;
+  if (raw === '0' || raw === 'false') return false;
+  throw new Error(`${name} must be true/false or 1/0`);
+}
+
+function envInteger(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const value = raw === undefined || raw === '' ? fallback : Number(raw);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${name} must be an integer between ${min} and ${max}`);
+  }
+  return value;
+}
+
+export function loadQueryGatewayConfig(env: NodeJS.ProcessEnv): QueryGatewayConfig {
+  if (!envBoolean('BDI_QUERY_GATEWAY_ENABLED', env.BDI_QUERY_GATEWAY_ENABLED, false)) {
+    return { enabled: false };
+  }
+  const bind = env.BDI_QUERY_GATEWAY_BIND || '127.0.0.1';
+  if (bind !== '127.0.0.1' && bind !== '::1') {
+    throw new Error('BDI_QUERY_GATEWAY_BIND must be the loopback literal 127.0.0.1 or ::1');
+  }
+  const token = required('BDI_QUERY_GATEWAY_TOKEN', env);
+  if (token.length < 32 || token.length > 512) {
+    throw new Error('BDI_QUERY_GATEWAY_TOKEN must contain 32 to 512 characters');
+  }
+  const operationTimeoutMs = envInteger(
+    'BDI_QUERY_GATEWAY_TIMEOUT_MS',
+    env.BDI_QUERY_GATEWAY_TIMEOUT_MS,
+    15_000,
+    1_000,
+    60_000,
+  );
+  const dkgTimeoutMs = envInteger(
+    'BDI_QUERY_GATEWAY_DKG_TIMEOUT_MS',
+    env.BDI_QUERY_GATEWAY_DKG_TIMEOUT_MS,
+    5_000,
+    500,
+    30_000,
+  );
+  if (dkgTimeoutMs > operationTimeoutMs) {
+    throw new Error('BDI_QUERY_GATEWAY_DKG_TIMEOUT_MS must not exceed the operation timeout');
+  }
+  return {
+    enabled: true,
+    bind,
+    port: envInteger('BDI_QUERY_GATEWAY_PORT', env.BDI_QUERY_GATEWAY_PORT, 9296, 1, 65_535),
+    token,
+    maxBodyBytes: envInteger(
+      'BDI_QUERY_GATEWAY_MAX_BODY_BYTES',
+      env.BDI_QUERY_GATEWAY_MAX_BODY_BYTES,
+      16 * 1024,
+      1_024,
+      64 * 1024,
+    ),
+    maxResultBytes: envInteger(
+      'BDI_QUERY_GATEWAY_MAX_RESULT_BYTES',
+      env.BDI_QUERY_GATEWAY_MAX_RESULT_BYTES,
+      1024 * 1024,
+      64 * 1024,
+      8 * 1024 * 1024,
+    ),
+    maxQueryBytes: envInteger(
+      'BDI_QUERY_GATEWAY_MAX_QUERY_BYTES',
+      env.BDI_QUERY_GATEWAY_MAX_QUERY_BYTES,
+      8 * 1024,
+      512,
+      32 * 1024,
+    ),
+    operationTimeoutMs,
+    dkgTimeoutMs,
+    maxConcurrent: envInteger(
+      'BDI_QUERY_GATEWAY_MAX_CONCURRENT',
+      env.BDI_QUERY_GATEWAY_MAX_CONCURRENT,
+      4,
+      1,
+      32,
+    ),
+  };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
   const publishMode = (env.BDI_PUBLISH_MODE ?? 'disabled') as PublishMode;
   if (!['disabled', 'devnet', 'mainnet'].includes(publishMode)) {
@@ -83,5 +177,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     maxPublishesPerDay,
     dbPath: env.BDI_DB_PATH ?? './data/daemon.db',
     bindings: parseBindings(readFileSync(required('BDI_BINDINGS_PATH', env), 'utf8')),
+    queryGateway: loadQueryGatewayConfig(env),
   };
 }

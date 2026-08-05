@@ -18,6 +18,10 @@ const RUNTIME_ENV_ORDER = [
   'BDI_CHANNEL_NAME',
   'BDI_PUBLISH_MODE',
   'BDI_MAX_PUBLISHES_PER_DAY',
+  'BDI_QUERY_GATEWAY_ENABLED',
+  'BDI_QUERY_GATEWAY_BIND',
+  'BDI_QUERY_GATEWAY_PORT',
+  'BDI_QUERY_GATEWAY_TOKEN',
 ];
 
 export function parseEnvFile(path) {
@@ -37,6 +41,7 @@ export function generatedSecrets(prior) {
   return {
     BDI_SERVICE_KEY: prior.BDI_SERVICE_KEY || randomBytes(32).toString('hex'),
     BDI_BUZZ_OWNER_KEY: prior.BDI_BUZZ_OWNER_KEY || randomBytes(32).toString('hex'),
+    BDI_QUERY_GATEWAY_TOKEN: prior.BDI_QUERY_GATEWAY_TOKEN || randomBytes(32).toString('hex'),
   };
 }
 

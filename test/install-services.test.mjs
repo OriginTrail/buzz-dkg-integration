@@ -6,7 +6,7 @@ import {
   DKG_RELEASE_POLICY,
 } from '../scripts/install/dkg-release.mjs';
 import { resolveDkgPlan } from '../scripts/install/dkg-plan.mjs';
-import { serializeRuntimeEnv } from '../scripts/install/runtime-env.mjs';
+import { generatedSecrets, serializeRuntimeEnv } from '../scripts/install/runtime-env.mjs';
 
 describe('installer services', () => {
   it('validates the exact published managed DKG version and integrity', () => {
@@ -76,6 +76,14 @@ describe('installer services', () => {
     expect(() =>
       serializeRuntimeEnv({ ...values, BDI_CHANNEL_NAME: 'bad\nINJECTED=value' }),
     ).toThrow(/contains a newline/);
+  });
+
+  it('generates and preserves a dedicated query gateway credential', () => {
+    const generated = generatedSecrets({});
+    expect(generated.BDI_QUERY_GATEWAY_TOKEN).toMatch(/^[0-9a-f]{64}$/);
+    expect(generatedSecrets(generated).BDI_QUERY_GATEWAY_TOKEN).toBe(
+      generated.BDI_QUERY_GATEWAY_TOKEN,
+    );
   });
 
   it('resolves reuse and fresh DKG plans without process environment state', () => {

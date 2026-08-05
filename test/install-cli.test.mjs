@@ -308,6 +308,10 @@ describe('Buzz-first installer CLI', () => {
     const runtime = readFileSync(join(f.config, 'runtime.env'), 'utf8');
     expect(runtime).toContain('BDI_PUBLISH_MODE=disabled');
     expect(runtime).toContain('BDI_MAX_PUBLISHES_PER_DAY=0');
+    expect(runtime).toContain('BDI_QUERY_GATEWAY_ENABLED=true');
+    expect(runtime).toContain('BDI_QUERY_GATEWAY_BIND=127.0.0.1');
+    expect(runtime).toContain('BDI_QUERY_GATEWAY_PORT=9296');
+    expect(runtime).toMatch(/BDI_QUERY_GATEWAY_TOKEN=[0-9a-f]{64}/);
     expect(runtime).toContain(`BDI_DKG_TOKEN_PATH=${f.token}`);
     expect(runtime).toMatch(/BUZZ_DKG_RUNTIME_UID=\d+/);
     expect(existsSync(join(f.state, 'bootstrap.json'))).toBe(true);

@@ -102,7 +102,16 @@ export class DkgClient extends DkgHttpTransport {
     );
   }
 
-  query(options) {
-    return this.request('POST', '/api/query', options);
+  query(options, timeoutMs) {
+    return this.request('POST', '/api/query', options, timeoutMs);
+  }
+
+  listSubGraphs(contextGraphId, timeoutMs) {
+    return this.request(
+      'GET',
+      `/api/sub-graph/list?contextGraphId=${encodeURIComponent(contextGraphId)}`,
+      undefined,
+      timeoutMs,
+    );
   }
 }

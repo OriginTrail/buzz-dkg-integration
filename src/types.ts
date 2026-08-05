@@ -78,6 +78,21 @@ export interface EvidenceRecord {
 
 export type PublishMode = 'disabled' | 'devnet' | 'mainnet';
 
+export type QueryGatewayConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      bind: '127.0.0.1' | '::1';
+      port: number;
+      token: string;
+      maxBodyBytes: number;
+      maxResultBytes: number;
+      maxQueryBytes: number;
+      operationTimeoutMs: number;
+      dkgTimeoutMs: number;
+      maxConcurrent: number;
+    };
+
 /** Normalized, non-empty labels Buzz may render for a service mention. */
 export type MentionLabels = readonly [string, ...string[]];
 
@@ -103,4 +118,6 @@ export interface DaemonConfig {
   maxPublishesPerDay: number;
   dbPath: string;
   bindings: ChannelBinding[];
+  /** Optional loopback-only read API for a trusted Buzz authorization front. */
+  queryGateway?: QueryGatewayConfig;
 }
