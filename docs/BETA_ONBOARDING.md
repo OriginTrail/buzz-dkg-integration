@@ -32,6 +32,14 @@ and signed attestation bundle, verifies its SHA-256 checksum and GitHub build
 provenance locally without signing in, installs `buzz-dkg`, and opens the guided
 setup. Review the displayed plan before accepting it.
 
+When the discovered Buzz container has relay membership enabled, that plan
+also shows one native Buzz administration step. The installer generates a
+separate DKG channel-owner identity and DKG Memory service identity, then adds
+both as ordinary relay members with `/usr/local/bin/buzz-admin`. The command is
+idempotent and does not require your Buzz/Nostr private key, edit the relay's
+configuration, or write directly to its database. The public keys and retained
+credentials belong only to the integration.
+
 To install only the CLI and inspect the plan first:
 
 ```bash
@@ -49,6 +57,31 @@ the relay, pass its existing community URL explicitly:
 ```bash
 sudo buzz-dkg install --relay wss://community.example.com
 ```
+
+If a discovered closed relay does not expose the native CLI, the installer
+stops before bootstrap and prints both stable public keys. You can print them
+again without exposing their private keys:
+
+```bash
+sudo buzz-dkg identities
+```
+
+Enroll both public keys through that relay's supported administration path.
+Then explicitly confirm that prerequisite:
+
+```bash
+sudo buzz-dkg install \
+  --relay wss://community.example.com \
+  --relay-members-enrolled
+```
+
+Do not use `--relay-members-enrolled` as a bypass: bootstrap still authenticates
+both identities and fails if they cannot reach the relay.
+
+For a remote closed relay, the plan reports membership as external/unknown and
+does not attempt administration. If bootstrap reports a membership denial, run
+`sudo buzz-dkg identities`, enroll both public keys on that relay, and rerun
+with `--relay-members-enrolled`.
 
 For an existing DKG node on a non-default API port or token path:
 
@@ -105,7 +138,8 @@ sudo buzz-dkg remove
 ```
 
 `remove` stops only the integration sidecar. It retains Buzz history, DKG
-state, integration state, credentials, the channel, and the Context Graph.
+state, integration state, credentials, relay memberships, the channel, and the
+Context Graph.
 Rerunning `install` converges on the managed objects instead of creating new
 ones.
 
@@ -116,6 +150,8 @@ host's protected backup policy.
 ## Beta acceptance checklist
 
 - The existing relay remains healthy and clients use its unchanged public URL.
+- On a closed relay, both managed identities appear exactly once in the relay
+  membership list after installation and after a rerun.
 - `buzz-dkg status` reports the expected relay and DKG role/version.
 - `buzz-dkg smoke` passes.
 - A Buzz user can join **Web of Trust**, distill a thread, and ask a grounded

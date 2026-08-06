@@ -24,6 +24,40 @@ function containerEnv(container) {
   );
 }
 
+function isBuzzContainer(container, env = containerEnv(container)) {
+  const image = String(container?.Config?.Image || '').toLowerCase();
+  const service = String(
+    container?.Config?.Labels?.['com.docker.compose.service'] || '',
+  ).toLowerCase();
+  return (
+    image.includes('buzz') ||
+    Boolean(env.BUZZ_BIND_ADDR) ||
+    (service === 'relay' && Boolean(env.RELAY_URL))
+  );
+}
+
+function enabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+/**
+ * Host-local management information is deliberately kept separate from the
+ * public relay URL. It is used only to invoke Buzz's own administrative CLI on
+ * a relay container that Docker has already identified; remote relays never
+ * acquire an inferred management path.
+ */
+export function relayManagementFromContainer(container, fallbackId = '') {
+  const env = containerEnv(container);
+  if (!isBuzzContainer(container, env)) return null;
+  const containerId = String(container?.Id || fallbackId || '');
+  if (!/^[a-f0-9]{12,64}$/i.test(containerId)) return null;
+  return {
+    containerId,
+    containerName: String(container?.Name || '').replace(/^\//, ''),
+    membershipRequired: enabled(env.BUZZ_REQUIRE_RELAY_MEMBERSHIP),
+  };
+}
+
 function hostBindingUrl(binding) {
   const port = String(binding?.HostPort || '');
   if (!/^\d+$/.test(port)) return null;
@@ -36,15 +70,7 @@ function hostBindingUrl(binding) {
 
 export function relayCandidatesFromContainer(container) {
   const env = containerEnv(container);
-  const image = String(container?.Config?.Image || '').toLowerCase();
-  const service = String(
-    container?.Config?.Labels?.['com.docker.compose.service'] || '',
-  ).toLowerCase();
-  const isBuzz =
-    image.includes('buzz') ||
-    Boolean(env.BUZZ_BIND_ADDR) ||
-    (service === 'relay' && Boolean(env.RELAY_URL));
-  if (!isBuzz) return [];
+  if (!isBuzzContainer(container, env)) return [];
 
   const local = (container?.NetworkSettings?.Ports?.['3000/tcp'] || [])
     .map(hostBindingUrl)

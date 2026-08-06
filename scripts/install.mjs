@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
+import { getPublicKey } from 'nostr-tools/pure';
 import { createInstallContext } from './install/context.mjs';
 import {
   assertManagedDkgPackageLock,
@@ -22,6 +23,7 @@ import { resolveDkgPlan, SUPPORTED_DKG_NETWORKS } from './install/dkg-plan.mjs';
 import {
   probeRelay,
   relayCandidatesFromContainer,
+  relayManagementFromContainer,
   relayEndpoints,
 } from './install/relay.mjs';
 import {
@@ -75,6 +77,7 @@ export function parseArgs(argv) {
     else if (arg === '--dkg-token-path') parsed.dkgTokenPath = value();
     else if (arg === '--dkg-role') parsed.dkgRole = value();
     else if (arg === '--dkg-network') parsed.dkgNetwork = value();
+    else if (arg === '--relay-members-enrolled') parsed.relayMembersEnrolled = true;
     else if (arg === '--yes') parsed.yes = true;
     else fail(`unknown argument: ${arg}`);
   }
@@ -92,11 +95,18 @@ function dockerRelayCandidates() {
   const ids = run('docker', ['ps', '--format', '{{.ID}}'], { capture: true, allowFailure: true });
   if (ids.status !== 0) return [];
   const candidates = [];
-  for (const id of ids.stdout.split(/\s+/).filter(Boolean)) {
+  for (const id of ids.stdout.split(/\s+/).filter((value) => /^[a-f0-9]{12,64}$/i.test(value))) {
     const inspected = run('docker', ['inspect', id], { capture: true, allowFailure: true });
     if (inspected.status !== 0) continue;
     try {
-      candidates.push(...relayCandidatesFromContainer(JSON.parse(inspected.stdout)[0]));
+      const container = JSON.parse(inspected.stdout)[0];
+      const management = relayManagementFromContainer(container, id);
+      candidates.push(
+        ...relayCandidatesFromContainer(container).map((candidate) => ({
+          ...candidate,
+          management,
+        })),
+      );
     } catch {
       continue;
     }
@@ -227,6 +237,21 @@ function showPlan(context, plan) {
     `  DKG node:   ${plan.dkgExisting ? `reuse ${plan.dkgRole} at ${plan.dkgApi}` : `install ${plan.dkgRole} ${dkgVersion} on ${plan.network}`}`,
   );
   console.log('  Integration: install projector/provider sidecar with VM publication disabled');
+  if (plan.relayManagement?.membershipRequired) {
+    console.log(
+      plan.relayMembersEnrolled
+        ? '  Relay access: operator confirms the managed identities are already enrolled'
+        : `  Relay access: enroll two managed identities with Buzz's native admin CLI (${plan.relayManagement.containerName || plan.relayManagement.containerId.slice(0, 12)})`,
+    );
+  } else if (plan.relayManagement) {
+    console.log('  Relay access: no managed membership change required');
+  } else {
+    console.log(
+      plan.relayMembersEnrolled
+        ? '  Relay access: operator confirms external relay membership is already enrolled'
+        : '  Relay access: external/unknown; no automatic membership change',
+    );
+  }
   console.log('  Memory:      create or reuse one managed Web of Trust channel and Context Graph');
   console.log(`  State:       ${context.stateDir}`);
   console.log('  Public ports: none added by the integration');
@@ -235,15 +260,33 @@ function showPlan(context, plan) {
 
 async function resolvePlan(context, options, prompt) {
   const prior = parseEnvFile(context.envPath);
+  const candidates = dockerRelayCandidates();
   let relayCandidate;
   const configuredRelay = options.relay || prior.BDI_BUZZ_WS;
   if (configuredRelay) {
+    let configuredEndpoints;
+    try {
+      configuredEndpoints = relayEndpoints(configuredRelay);
+    } catch {
+      configuredEndpoints = null;
+    }
+    const discovered = configuredEndpoints
+      ? candidates.find((candidate) => {
+          try {
+            return relayEndpoints(candidate.relayUrl).ws === configuredEndpoints.ws;
+          } catch {
+            return false;
+          }
+        })
+      : null;
     relayCandidate = {
       relayUrl: configuredRelay,
-      probeUrl: options.relay ? configuredRelay : prior.BDI_BUZZ_PROBE_HTTP || configuredRelay,
+      probeUrl:
+        discovered?.probeUrl ||
+        (options.relay ? configuredRelay : prior.BDI_BUZZ_PROBE_HTTP || configuredRelay),
+      management: discovered?.management || null,
     };
   } else {
-    const candidates = dockerRelayCandidates();
     if (candidates.length === 1) {
       relayCandidate = candidates[0];
       console.log(`Found Buzz Relay: ${relayCandidate.relayUrl}`);
@@ -288,9 +331,77 @@ async function resolvePlan(context, options, prompt) {
   return {
     relay,
     relayProbeHttp: relayProbe.http,
+    relayManagement: relayCandidate.management || null,
+    relayMembersEnrolled: options.relayMembersEnrolled === true,
     dkgApi,
     ...dkgPlan,
   };
+}
+
+function publicKey(secretKeyHex) {
+  return getPublicKey(Uint8Array.from(Buffer.from(secretKeyHex, 'hex')));
+}
+
+const enrollmentPauseMs = 1_100;
+
+async function ensureRelayEnrollment(plan, secrets) {
+  const management = plan.relayManagement;
+  if (!management?.membershipRequired) return;
+  if (plan.relayMembersEnrolled) {
+    console.log('Using operator-confirmed Buzz relay membership.');
+    return;
+  }
+
+  const available = run(
+    'docker',
+    ['exec', management.containerId, 'test', '-x', '/usr/local/bin/buzz-admin'],
+    { capture: true, allowFailure: true },
+  );
+  if (available.status !== 0) {
+    const ownerPubkey = publicKey(secrets.BDI_BUZZ_OWNER_KEY);
+    const servicePubkey = publicKey(secrets.BDI_SERVICE_KEY);
+    fail(
+      `Buzz relay membership is enforced, but ${management.containerName || management.containerId} does not expose /usr/local/bin/buzz-admin; enroll these public keys as relay members with the relay's supported administration path, then rerun with --relay-members-enrolled:\n  DKG channel owner: ${ownerPubkey}\n  DKG Memory service: ${servicePubkey}`,
+    );
+  }
+
+  const identities = [
+    ['DKG channel owner', publicKey(secrets.BDI_BUZZ_OWNER_KEY)],
+    ['DKG Memory service', publicKey(secrets.BDI_SERVICE_KEY)],
+  ];
+  console.log("Enrolling managed identities with Buzz's native admin CLI...");
+  for (let index = 0; index < identities.length; index += 1) {
+    const [label, pubkey] = identities[index];
+    run('docker', [
+      'exec',
+      management.containerId,
+      '/usr/local/bin/buzz-admin',
+      'add-member',
+      '--pubkey',
+      pubkey,
+      '--role',
+      'member',
+    ]);
+    console.log(`  enrolled ${label} (${pubkey.slice(0, 12)}...)`);
+    // Buzz's roster is a replaceable event. Keep successive native admin
+    // writes out of the same second so the second snapshot cannot dominate or
+    // collide with the first one.
+    if (index + 1 < identities.length) {
+      await new Promise((resolve) => setTimeout(resolve, enrollmentPauseMs));
+    }
+  }
+
+  const listed = run(
+    'docker',
+    ['exec', management.containerId, '/usr/local/bin/buzz-admin', 'list-members'],
+    { capture: true },
+  ).stdout.toLowerCase();
+  const missing = identities.filter(([, pubkey]) => !listed.includes(pubkey));
+  if (missing.length > 0) {
+    fail(
+      `Buzz relay membership verification failed for ${missing.map(([label]) => label).join(', ')}`,
+    );
+  }
 }
 
 async function ensureDkg(context, plan, prompt, options) {
@@ -399,6 +510,8 @@ export async function install(options, prompt, context = installContext) {
     BDI_MAX_PUBLISHES_PER_DAY: '0',
   });
 
+  await ensureRelayEnrollment(plan, secrets);
+
   console.log('Creating or reusing the Web of Trust channel and Context Graph...');
   run('docker', composeArgs(context, 'run', '--rm', 'bootstrap'));
   run('docker', composeArgs(context, 'up', '-d', 'daemon'));
@@ -447,6 +560,15 @@ function smoke(context) {
   run('docker', composeArgs(context, 'run', '--rm', 'smoke'));
 }
 
+function identities(context) {
+  const values = parseEnvFile(context.envPath);
+  if (!values.BDI_BUZZ_OWNER_KEY || !values.BDI_SERVICE_KEY) {
+    fail(`no managed Buzz identities found at ${context.envPath}`);
+  }
+  console.log(`DKG channel owner: ${publicKey(values.BDI_BUZZ_OWNER_KEY)}`);
+  console.log(`DKG Memory service: ${publicKey(values.BDI_SERVICE_KEY)}`);
+}
+
 function remove(context) {
   if (!existsSync(context.envPath)) fail(`no V1a installation found at ${context.envPath}`);
   run('docker', composeArgs(context, 'down'));
@@ -461,14 +583,19 @@ function help() {
 Usage:
   buzz-dkg plan [--relay URL] [--dkg-role auto|edge|core] [--dkg-network NETWORK]
   buzz-dkg install [--relay URL] [--dkg-role auto|edge|core] [--dkg-network NETWORK]
+                   [--relay-members-enrolled]
   buzz-dkg status
   buzz-dkg logs
   buzz-dkg smoke
+  buzz-dkg identities
   buzz-dkg remove
 
 Install adopts a reachable Buzz Relay without replacing its process, identity,
 database, URL, or TLS configuration. Fresh guided installs default to testnet;
 fresh unattended installs must name testnet, mainnet-gnosis, or mainnet-base.
+On a discovered closed Buzz Relay, install uses the relay's native buzz-admin
+command to enroll its two managed identities. Use --relay-members-enrolled only
+after enrolling them through another supported relay administration path.
 Verifiable Memory publication stays off.`);
 }
 
@@ -482,6 +609,7 @@ async function main() {
       await status(installContext);
     else if (options.command === 'logs') logs(installContext);
     else if (options.command === 'smoke') smoke(installContext);
+    else if (options.command === 'identities') identities(installContext);
     else if (options.command === 'remove') remove(installContext);
     else help();
   } catch (error) {
