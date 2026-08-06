@@ -22,6 +22,10 @@ x-runtime: &runtime
     BDI_MAX_PUBLISHES_PER_DAY: '0'
     BDI_DB_PATH: /runtime/daemon.db
     BDI_LOG_LEVEL: ${BDI_LOG_LEVEL:-info}
+    BDI_QUERY_GATEWAY_ENABLED: ${BDI_QUERY_GATEWAY_ENABLED:-false}
+    BDI_QUERY_GATEWAY_BIND: ${BDI_QUERY_GATEWAY_BIND:-127.0.0.1}
+    BDI_QUERY_GATEWAY_PORT: ${BDI_QUERY_GATEWAY_PORT:-9296}
+    BDI_QUERY_GATEWAY_TOKEN: ${BDI_QUERY_GATEWAY_TOKEN:-}
   logging:
     driver: local
     options:
@@ -33,6 +37,33 @@ services:
     <<: *runtime
     command: ['node', '--experimental-strip-types', 'src/index.ts']
     restart: unless-stopped
+
+  # Optional transport for an adopted relay that remains on a Docker bridge.
+  # It binds only the bridge gateway address and forwards opaque TCP to the
+  # loopback-only authenticated query gateway. No DKG or Buzz credential is
+  # present in this container.
+  query-bridge:
+    image: node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b
+    working_dir: /app
+    network_mode: host
+    user: '65534:65534'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ${BUZZ_DKG_APP_DIR:?set BUZZ_DKG_APP_DIR}:/app:ro
+    environment:
+      BDI_QUERY_BRIDGE_BIND: ${BDI_QUERY_BRIDGE_BIND:-}
+      BDI_QUERY_BRIDGE_PORT: ${BDI_QUERY_BRIDGE_PORT:-9297}
+      BDI_QUERY_GATEWAY_PORT: ${BDI_QUERY_GATEWAY_PORT:-9296}
+    command: ['node', 'scripts/query-bridge.mjs']
+    profiles: [bridge-relay]
+    restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: '3'
 
   bootstrap:
     <<: *runtime

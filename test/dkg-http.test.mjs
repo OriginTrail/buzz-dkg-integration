@@ -77,4 +77,14 @@ describe('shared DKG HTTP transport', () => {
       }),
     );
   });
+
+  it('lists subgraphs through the scoped v10 route', async () => {
+    const fetchImpl = vi.fn(async () => new Response('{"subGraphs":[]}', { status: 200 }));
+    const client = new DkgClient({ baseUrl: 'http://dkg', token: 'secret', fetchImpl });
+    await client.listSubGraphs('did:dkg:test/a b', 321);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'http://dkg/api/sub-graph/list?contextGraphId=did%3Adkg%3Atest%2Fa%20b',
+      expect.objectContaining({ method: 'GET', body: undefined, signal: expect.any(AbortSignal) }),
+    );
+  });
 });
