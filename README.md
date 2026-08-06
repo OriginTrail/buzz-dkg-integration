@@ -136,6 +136,7 @@ sudo buzz-dkg plan
 sudo buzz-dkg status
 sudo buzz-dkg logs
 sudo buzz-dkg smoke
+sudo buzz-dkg identities
 sudo buzz-dkg remove
 ```
 
@@ -143,10 +144,14 @@ The guided installer discovers common containerized Buzz Relay deployments. It
 preserves the relay's advertised community URL for tenant routing and NIP-98
 authentication, while using a loopback host mapping only for readiness and
 NIP-11 discovery probes when the public endpoint is private-network gated. It
-also accepts an explicit
-`--relay wss://community.example.com`. It validates and adopts that
-endpoint without replacing the relay process, database, identity, domain, or
-TLS configuration. It then reuses a compatible DKG node on `127.0.0.1:9200`,
+also accepts an explicit `--relay wss://community.example.com`. If a discovered
+Buzz container enforces relay membership, the reviewed plan enrolls two
+generated integration identities as ordinary members through Buzz's own
+`buzz-admin` CLI. The operation is idempotent, does not require the human
+owner's Nostr private key, and never writes directly to the Buzz database. The
+installer validates and adopts that endpoint without replacing the relay
+process, database, identity, domain, or TLS configuration. It then reuses a
+compatible DKG node on `127.0.0.1:9200`,
 currently v10.0.11 or v10.0.12, or invokes the supported DKG npm installer and
 setup wizard for a managed v10.0.12 Edge
 (default) or Core node. A fresh guided install defaults to DKG testnet; a fresh
@@ -165,18 +170,14 @@ sudo buzz-dkg install \
 ```
 
 `remove` stops only the integration sidecar. It does not delete Buzz history,
-integration state, DKG state, or an operator-managed node. Release bundles pin
-their own Node runtime; the host does not need Node.js preinstalled. The
+integration state, retained relay memberships, DKG state, or an
+operator-managed node. Release bundles pin their own Node runtime; the host
+does not need Node.js preinstalled. The
 sidecar adds no public port, but it deliberately joins the Linux host network
 to reach loopback-only Buzz and DKG APIs. It runs with the uid/gid that owns the
-mounted DKG token rather than defaulting to container root. Until the
-first installer tag is published, the `releases/latest/download` URL above is
-expected to return 404.
-
-Before the first installer release, repository maintainers must configure the
-`installer-release` GitHub environment with required reviewers and protect the
-`v*` tag pattern. The workflow additionally scopes write permission to the
-gated release job and refuses tags whose commit is not already on `main`.
+mounted DKG token rather than defaulting to container root. The release
+workflow scopes write permission to the gated release job and refuses tags
+whose commit is not already on `main`.
 
 ## Local one-command M0
 

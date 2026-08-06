@@ -3,9 +3,14 @@ import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileS
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { getPublicKey } from 'nostr-tools/pure';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseArgs, relayEndpoints } from '../scripts/install.mjs';
-import { probeRelay, relayCandidatesFromContainer } from '../scripts/install/relay.mjs';
+import {
+  probeRelay,
+  relayCandidatesFromContainer,
+  relayManagementFromContainer,
+} from '../scripts/install/relay.mjs';
 
 const roots = [];
 const servers = [];
@@ -70,6 +75,8 @@ function fixture() {
   const token = join(root, 'auth.token');
   const dockerLog = join(root, 'docker.log');
   const daemonReady = join(root, 'daemon.ready');
+  const relayInspect = join(root, 'relay-inspect.json');
+  const relayMembers = join(root, 'relay-members.txt');
   mkdirSync(bin, { recursive: true });
   writeFileSync(token, 'test-token\n', { mode: 0o600 });
   writeFileSync(
@@ -77,6 +84,18 @@ function fixture() {
     `#!/bin/sh
 printf '%s\n' "$*" >> "$BUZZ_DKG_DOCKER_LOG"
 case "$*" in
+  *"ps --format"*)
+    test ! -f "$BUZZ_DKG_RELAY_INSPECT" || echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    ;;
+  "inspect "*) cat "$BUZZ_DKG_RELAY_INSPECT" ;;
+  *"test -x /usr/local/bin/buzz-admin"*)
+    test "$BUZZ_DKG_FAKE_BUZZ_ADMIN" = present
+    ;;
+  *"/usr/local/bin/buzz-admin add-member"*)
+    touch "$BUZZ_DKG_RELAY_MEMBERS"
+    grep -Fqx "$6" "$BUZZ_DKG_RELAY_MEMBERS" || printf '%s\n' "$6" >> "$BUZZ_DKG_RELAY_MEMBERS"
+    ;;
+  *"/usr/local/bin/buzz-admin list-members"*) cat "$BUZZ_DKG_RELAY_MEMBERS" ;;
   *"compose version"*) echo "Docker Compose version v2.30.0" ;;
   *"up -d daemon"*) touch "$BUZZ_DKG_DAEMON_READY" ;;
   *"logs --no-color daemon"*)
@@ -91,7 +110,40 @@ esac
 `,
   );
   chmodSync(join(bin, 'docker'), 0o755);
-  return { root, bin, config, state, token, dockerLog, daemonReady };
+  return {
+    root,
+    bin,
+    config,
+    state,
+    token,
+    dockerLog,
+    daemonReady,
+    relayInspect,
+    relayMembers,
+    buzzAdmin: 'present',
+  };
+}
+
+function configureBuzzRelay(f, relayUrl, { membershipRequired = true, buzzAdmin = 'present' } = {}) {
+  f.buzzAdmin = buzzAdmin;
+  writeFileSync(
+    f.relayInspect,
+    JSON.stringify([
+      {
+        Id: 'a'.repeat(64),
+        Name: '/buzz-relay-1',
+        Config: {
+          Image: 'ghcr.io/block/buzz:sha-test',
+          Env: [
+            `RELAY_URL=${relayUrl}`,
+            `BUZZ_REQUIRE_RELAY_MEMBERSHIP=${membershipRequired}`,
+          ],
+          Labels: { 'com.docker.compose.service': 'relay' },
+        },
+        NetworkSettings: { Ports: {} },
+      },
+    ]),
+  );
 }
 
 function runInstaller(f, args) {
@@ -105,6 +157,9 @@ function runInstaller(f, args) {
       BUZZ_DKG_ALLOW_UNSUPPORTED: '1',
       BUZZ_DKG_DOCKER_LOG: f.dockerLog,
       BUZZ_DKG_DAEMON_READY: f.daemonReady,
+      BUZZ_DKG_RELAY_INSPECT: f.relayInspect,
+      BUZZ_DKG_RELAY_MEMBERS: f.relayMembers,
+      BUZZ_DKG_FAKE_BUZZ_ADMIN: f.buzzAdmin,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -177,6 +232,29 @@ describe('Buzz-first installer CLI', () => {
         },
       }),
     ).toEqual([]);
+  });
+
+  it('extracts only host-local native management from a real Buzz container', () => {
+    expect(
+      relayManagementFromContainer({
+        Id: 'a'.repeat(64),
+        Name: '/buzz-relay-1',
+        Config: {
+          Image: 'ghcr.io/block/buzz:sha-test',
+          Env: ['BUZZ_REQUIRE_RELAY_MEMBERSHIP=true'],
+        },
+      }),
+    ).toEqual({
+      containerId: 'a'.repeat(64),
+      containerName: 'buzz-relay-1',
+      membershipRequired: true,
+    });
+    expect(
+      relayManagementFromContainer({
+        Id: 'b'.repeat(64),
+        Config: { Image: 'example/generic-relay:latest', Env: [] },
+      }),
+    ).toBeNull();
   });
 
   it('normalizes wildcard Buzz host bindings to loopback URLs', () => {
@@ -277,6 +355,14 @@ describe('Buzz-first installer CLI', () => {
     });
   });
 
+  it('accepts an explicit operator confirmation for externally enrolled identities', () => {
+    expect(parseArgs(['install', '--relay-members-enrolled', '--yes'])).toEqual({
+      command: 'install',
+      relayMembersEnrolled: true,
+      yes: true,
+    });
+  });
+
   it('rejects unsupported node roles, networks, and relay protocols', () => {
     expect(() => parseArgs(['install', '--dkg-role', 'validator'])).toThrow(
       '--dkg-role must be auto, edge, or core',
@@ -321,6 +407,99 @@ describe('Buzz-first installer CLI', () => {
     expect(dockerCalls).toContain('logs --no-color daemon');
     expect(dockerCalls).toContain('run --rm smoke');
     expect(result.stdout).toContain('Buzz + DKG is ready.');
+  });
+
+  it('enrolls stable managed identities through the native Buzz admin CLI on a closed relay', async () => {
+    const f = fixture();
+    const api = await apiServer();
+    configureBuzzRelay(f, api);
+    const result = await runInstaller(f, [
+      'install',
+      '--relay',
+      api,
+      '--dkg-api',
+      api,
+      '--dkg-token-path',
+      f.token,
+      '--yes',
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("enroll two managed identities with Buzz's native admin CLI");
+    const runtime = Object.fromEntries(
+      readFileSync(join(f.config, 'runtime.env'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => line.split('=')),
+    );
+    const expectedPubkeys = [runtime.BDI_BUZZ_OWNER_KEY, runtime.BDI_SERVICE_KEY].map((secret) =>
+      getPublicKey(Uint8Array.from(Buffer.from(secret, 'hex'))),
+    );
+    const members = readFileSync(f.relayMembers, 'utf8').trim().split('\n');
+    expect(members).toEqual(expectedPubkeys);
+    const dockerCalls = readFileSync(f.dockerLog, 'utf8');
+    expect(dockerCalls.match(/buzz-admin add-member/g)).toHaveLength(2);
+    expect(dockerCalls).toContain('buzz-admin list-members');
+    for (const secret of [runtime.BDI_BUZZ_OWNER_KEY, runtime.BDI_SERVICE_KEY]) {
+      expect(result.stdout).not.toContain(secret);
+      expect(dockerCalls).not.toContain(secret);
+    }
+
+    const rerun = await runInstaller(f, [
+      'install',
+      '--relay',
+      api,
+      '--dkg-api',
+      api,
+      '--dkg-token-path',
+      f.token,
+      '--yes',
+    ]);
+    expect(rerun.status, rerun.stderr).toBe(0);
+    expect(readFileSync(f.relayMembers, 'utf8').trim().split('\n')).toEqual(expectedPubkeys);
+
+    const identityOutput = await runInstaller(f, ['identities']);
+    expect(identityOutput.status, identityOutput.stderr).toBe(0);
+    expect(identityOutput.stdout).toContain(`DKG channel owner: ${expectedPubkeys[0]}`);
+    expect(identityOutput.stdout).toContain(`DKG Memory service: ${expectedPubkeys[1]}`);
+    for (const secret of [runtime.BDI_BUZZ_OWNER_KEY, runtime.BDI_SERVICE_KEY]) {
+      expect(identityOutput.stdout).not.toContain(secret);
+    }
+  });
+
+  it('fails closed without native relay administration and supports explicit prior enrollment', async () => {
+    const api = await apiServer();
+    const blocked = fixture();
+    configureBuzzRelay(blocked, api, { buzzAdmin: 'absent' });
+    const blockedResult = await runInstaller(blocked, [
+      'install',
+      '--relay',
+      api,
+      '--dkg-api',
+      api,
+      '--dkg-token-path',
+      blocked.token,
+      '--yes',
+    ]);
+    expect(blockedResult.status).not.toBe(0);
+    expect(blockedResult.stderr).toContain('does not expose /usr/local/bin/buzz-admin');
+    expect(readFileSync(blocked.dockerLog, 'utf8')).not.toContain('run --rm bootstrap');
+
+    const enrolled = fixture();
+    configureBuzzRelay(enrolled, api, { buzzAdmin: 'absent' });
+    const enrolledResult = await runInstaller(enrolled, [
+      'install',
+      '--relay',
+      api,
+      '--dkg-api',
+      api,
+      '--dkg-token-path',
+      enrolled.token,
+      '--relay-members-enrolled',
+      '--yes',
+    ]);
+    expect(enrolledResult.status, enrolledResult.stderr).toBe(0);
+    const dockerCalls = readFileSync(enrolled.dockerLog, 'utf8');
+    expect(dockerCalls).not.toContain('buzz-admin add-member');
   });
 
   it('aborts before persistent config for a missing token or role mismatch', async () => {

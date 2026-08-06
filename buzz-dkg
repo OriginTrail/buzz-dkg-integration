@@ -48,13 +48,13 @@ fi
 command=${1:-}
 if [ -f "$repo_dir/VERSION" ]; then
   case "$command" in
-    ''|help|--help|-h|install|plan|doctor|remove|status|logs|smoke)
+    ''|help|--help|-h|install|plan|doctor|remove|status|logs|smoke|identities)
       exec "$node_bin" "$repo_dir/scripts/install.mjs" "$@"
       ;;
   esac
 fi
 case "$command" in
-  install|plan|doctor|remove)
+  install|plan|doctor|remove|identities)
     exec "$node_bin" "$repo_dir/scripts/install.mjs" "$@"
     ;;
   status|logs|smoke)
