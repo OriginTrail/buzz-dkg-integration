@@ -182,12 +182,6 @@ function count(value: unknown): number {
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
 }
 
-function timestamp(value: unknown): number | null {
-  if (value === undefined) return null;
-  const parsed = Number(bindingTerm(value));
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 function dateTimestamp(value: unknown): number | null {
   if (value === undefined) return null;
   const parsed = Date.parse(bindingTerm(value));
@@ -263,12 +257,17 @@ export class QueryGatewayService {
     }
   }
 
-  private async query(cg: string, view: VisibleView, sparql: string): Promise<BindingRow[]> {
+  private async query(
+    cg: string,
+    view: VisibleView,
+    sparql: string,
+    subGraphName?: string,
+  ): Promise<BindingRow[]> {
     if (Buffer.byteLength(sparql, 'utf8') > this.config.maxQueryBytes) {
       throw new QueryGatewayError(500, 'query_bound_exceeded', 'internal query exceeded its bound');
     }
     const response = await this.dkg.query(
-      { contextGraphId: cg, view, sparql },
+      { contextGraphId: cg, view, sparql, ...(subGraphName ? { subGraphName } : {}) },
       this.config.dkgTimeoutMs,
     );
     const rows = response?.result?.bindings;
@@ -276,10 +275,10 @@ export class QueryGatewayService {
     return rows.slice(0, MAX_DKG_ROWS) as BindingRow[];
   }
 
-  private async layered(cg: string, sparql: string): Promise<LayeredRow[]> {
+  private async layered(cg: string, sparql: string, subGraphName?: string): Promise<LayeredRow[]> {
     const batches = await Promise.all(
       VIEWS.map(async ([view, layer]) =>
-        (await this.query(cg, view, sparql)).map((row) => ({ row, layer })),
+        (await this.query(cg, view, sparql, subGraphName)).map((row) => ({ row, layer })),
       ),
     );
     return batches.flat();
@@ -315,9 +314,11 @@ export class QueryGatewayService {
       OPTIONAL { ?s <${BUZZ}sourceSetDigest> ?digest }
       OPTIONAL { ?s <${PROV}endedAtTime> ?t }
     } } LIMIT 200`;
-    const contributorsQuery = `SELECT ?pk (COUNT(DISTINCT ?s) AS ?n) (MAX(?at) AS ?latest)
+    const contributorsQuery = `SELECT ?pk (COUNT(DISTINCT ?event) AS ?n) (MAX(?at) AS ?latest)
       WHERE { GRAPH ?g {
-        ?s <${NOSTR}pubkeyHex> ?pk . OPTIONAL { ?s <${NOSTR}createdAt> ?at }
+        ?event <${PROV}wasAttributedTo> ?agent .
+        ?agent <${NOSTR}pubkeyHex> ?pk .
+        OPTIONAL { ?event <${NOSTR}createdAt> ?at }
       } } GROUP BY ?pk ORDER BY DESC(?n) LIMIT 50`;
     const [swm, vm, decisionRows, contributorRows, subGraphResponse] = await Promise.all([
       this.layerOverview(cg, 'shared-working-memory'),
@@ -349,7 +350,7 @@ export class QueryGatewayService {
       const pubkey = term(row, 'pk').toLowerCase();
       if (!HEX_PUBKEY.test(pubkey)) continue;
       const events = count(row.n);
-      const latest = timestamp(row.latest);
+      const latest = dateTimestamp(row.latest);
       const current = contributorsByPubkey.get(pubkey);
       if (!current) {
         contributorsByPubkey.set(pubkey, { pubkey, events, latest, layer });
@@ -390,23 +391,24 @@ export class QueryGatewayService {
   private async contributorTrail(cg: string, pubkey: string): Promise<ContributorTrailResult> {
     const rows = await this.layered(
       cg,
-      `SELECT ?s ?content ?at ?decision ?dname WHERE { GRAPH ?g {
-         ?s <${NOSTR}pubkeyHex> "${pubkey}" .
-         OPTIONAL { ?s <${NOSTR}content> ?content }
-         OPTIONAL { ?s <${NOSTR}createdAt> ?at }
-         OPTIONAL { ?decision <${PROV}wasDerivedFrom> ?s ; <${SCHEMA}name> ?dname }
+      `SELECT ?event ?content ?at ?decision ?dname WHERE { GRAPH ?g {
+         ?event <${PROV}wasAttributedTo> ?agent .
+         ?agent <${NOSTR}pubkeyHex> "${pubkey}" .
+         OPTIONAL { ?event <${NOSTR}content> ?content }
+         OPTIONAL { ?event <${NOSTR}createdAt> ?at }
+         OPTIONAL { ?decision <${PROV}wasDerivedFrom> ?event ; <${SCHEMA}name> ?dname }
        } } ORDER BY DESC(?at) LIMIT 100`,
     );
     const byKey = new Map<string, ContributorTrailEntry>();
     for (const { row, layer } of rows) {
-      const event = bounded(term(row, 's'), 1_000);
+      const event = bounded(term(row, 'event'), 1_000);
       if (!event) continue;
       const decision = optionalTerm(row, 'decision');
       const key = `${event}\0${decision ?? ''}`;
       const candidate: ContributorTrailEntry = {
         event,
         content: optionalTerm(row, 'content') ? bounded(optionalTerm(row, 'content')!, 240) : null,
-        at: timestamp(row.at),
+        at: dateTimestamp(row.at),
         decision: decision ? bounded(decision, 1_000) : null,
         decisionName: optionalTerm(row, 'dname') ? bounded(optionalTerm(row, 'dname')!, 200) : null,
         layer,
@@ -421,21 +423,20 @@ export class QueryGatewayService {
   }
 
   private async subgraphGraph(cg: string, name: string): Promise<SubgraphGraphResult> {
-    const graphFilter = `FILTER(CONTAINS(STR(?g), "/${name}/"))`;
-    const [claimRows, forgeRows, decisionRows, subgraphDecisionRows, contradictionRows] =
-      await Promise.all([
-        this.layered(
-          cg,
-          `SELECT ?c ?text ?at ?run ?ev WHERE { GRAPH ?g {
+    const [claimRows, forgeRows, decisionRows, contradictionRows] = await Promise.all([
+      this.layered(
+        cg,
+        `SELECT ?c ?text ?at ?run ?ev WHERE { GRAPH ?g {
              ?c a <${BUZZ}Claim> . OPTIONAL { ?c <${SCHEMA}text> ?text }
              OPTIONAL { ?c <${SCHEMA}dateCreated> ?at }
              OPTIONAL { ?run <${PROV}generated> ?c }
              OPTIONAL { ?c <${PROV}wasDerivedFrom> ?ev }
-           } ${graphFilter} } LIMIT 500`,
-        ),
-        this.layered(
-          cg,
-          `SELECT ?f ?type ?name ?at ?ev ?commit WHERE { GRAPH ?g {
+           } } LIMIT 500`,
+        name,
+      ),
+      this.layered(
+        cg,
+        `SELECT ?f ?type ?name ?at ?ev ?commit WHERE { GRAPH ?g {
              ?f a ?type . FILTER(STRSTARTS(STR(?type), "${BUZZ}"))
              FILTER(?type IN (<${BUZZ}Patch>, <${BUZZ}Issue>, <${BUZZ}StatusApplied>,
                <${BUZZ}StatusOpen>, <${BUZZ}Commit>))
@@ -443,31 +444,28 @@ export class QueryGatewayService {
              OPTIONAL { ?f <${SCHEMA}dateCreated> ?at }
              OPTIONAL { ?f <${PROV}wasDerivedFrom> ?ev }
              OPTIONAL { ?f <${BUZZ}commit> ?commit }
-           } ${graphFilter} } LIMIT 200`,
-        ),
-        this.layered(
-          cg,
-          `SELECT ?d ?name ?t ?ev WHERE { GRAPH ?g {
+           } } LIMIT 200`,
+        name,
+      ),
+      this.layered(
+        cg,
+        `SELECT ?d ?name ?t ?ev WHERE { GRAPH ?g {
              ?d a <${BUZZ}DecisionCluster> . OPTIONAL { ?d <${SCHEMA}name> ?name }
              OPTIONAL { ?d <${PROV}endedAtTime> ?t }
              OPTIONAL { ?d <${PROV}wasDerivedFrom> ?ev }
            } } LIMIT 1000`,
-        ),
-        this.layered(
-          cg,
-          `SELECT ?d WHERE { GRAPH ?g { ?d a <${BUZZ}DecisionCluster> } ${graphFilter} }
-           LIMIT 1000`,
-        ),
-        this.layered(
-          cg,
-          `SELECT ?c ?d WHERE { GRAPH ?g {
+        name,
+      ),
+      this.layered(
+        cg,
+        `SELECT ?c ?d WHERE { GRAPH ?g {
              { ?c <${BUZZ}contradicts> ?d } UNION { ?d <${PROV}wasInvalidatedBy> ?c }
            } } LIMIT 200`,
-        ),
-      ]);
+        name,
+      ),
+    ]);
 
-    type DecisionNode = GraphNode & { inSubgraph?: boolean };
-    const decisions = new Map<string, DecisionNode>();
+    const decisions = new Map<string, GraphNode>();
     const eventToDecisions = new Map<string, Set<string>>();
     for (const { row, layer } of decisionRows) {
       const id = bounded(term(row, 'd'), 1_000);
@@ -492,15 +490,6 @@ export class QueryGatewayService {
         eventToDecisions.set(event, set);
       }
     }
-    for (const { row, layer } of subgraphDecisionRows) {
-      const id = term(row, 'd');
-      const decision = decisions.get(id);
-      if (decision) {
-        decision.inSubgraph = true;
-        if (LAYER_RANK[layer] > LAYER_RANK[decision.layer]) decision.layer = layer;
-      }
-    }
-
     const nodes = new Map<string, GraphNode>();
     const edges: GraphEdge[] = [];
     const seenEdges = new Set<string>();
@@ -559,7 +548,7 @@ export class QueryGatewayService {
         }
       }
     }
-    for (const decision of decisions.values()) if (decision.inSubgraph) upsertNode(decision);
+    for (const decision of decisions.values()) upsertNode(decision);
     for (const { row } of contradictionRows) {
       const from = term(row, 'c');
       const to = term(row, 'd');
@@ -584,8 +573,8 @@ export class QueryGatewayService {
   private async subgraphTriples(cg: string, name: string): Promise<SubgraphTriplesResult> {
     const rows = await this.layered(
       cg,
-      `SELECT ?s ?p ?o ?g WHERE { GRAPH ?g { ?s ?p ?o }
-         FILTER(CONTAINS(STR(?g), "/${name}/")) } LIMIT 1200`,
+      `SELECT ?s ?p ?o ?g WHERE { GRAPH ?g { ?s ?p ?o } } LIMIT 1200`,
+      name,
     );
     const triples = new Map<string, GraphTriple>();
     for (const { row, layer } of rows) {
@@ -673,7 +662,10 @@ export class QueryGatewayService {
         `SELECT ?ev ?content ?pk ?at WHERE { GRAPH ?g {
            VALUES ?ev { ${sourceIds.map((id) => `<${id}>`).join(' ')} }
            OPTIONAL { ?ev <${NOSTR}content> ?content }
-           OPTIONAL { ?ev <${NOSTR}pubkeyHex> ?pk }
+           OPTIONAL {
+             ?ev <${PROV}wasAttributedTo> ?agent .
+             ?agent <${NOSTR}pubkeyHex> ?pk
+           }
            OPTIONAL { ?ev <${NOSTR}createdAt> ?at }
          } } LIMIT 50`,
       );
@@ -686,7 +678,7 @@ export class QueryGatewayService {
           ? bounded(optionalTerm(row, 'content')!, 200)
           : source.span;
         source.author = author && HEX_PUBKEY.test(author) ? author : source.author;
-        source.at = timestamp(row.at) ?? source.at;
+        source.at = dateTimestamp(row.at) ?? source.at;
       }
     }
 

@@ -85,6 +85,7 @@ export class DkgClient extends DkgHttpTransport {
     options: {
       sparql: string;
       contextGraphId: string;
+      subGraphName?: string;
       view: 'working-memory' | 'shared-working-memory' | 'verifiable-memory';
     },
     timeoutMs?: number,

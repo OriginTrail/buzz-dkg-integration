@@ -38,19 +38,32 @@ class GatewayDkg {
     contextGraphId: string;
     view?: string;
     sparql?: string;
+    subGraphName?: string;
     timeoutMs?: number;
   }> = [];
   failWith: string | null = null;
   hang = false;
   tripleBindings: Array<Record<string, { value: string }>> = [];
+  bindingResolver:
+    | ((options: {
+        contextGraphId: string;
+        view: string;
+        sparql: string;
+        subGraphName?: string;
+      }) => Array<Record<string, { value: string }>> | null)
+    | null = null;
 
   async query(
-    options: { contextGraphId: string; view: string; sparql: string },
+    options: { contextGraphId: string; view: string; sparql: string; subGraphName?: string },
     timeoutMs?: number,
   ) {
     this.calls.push({ kind: 'query', ...options, timeoutMs });
     if (this.failWith) throw new Error(this.failWith);
     if (this.hang) return new Promise<never>(() => undefined);
+    const resolved = this.bindingResolver?.(options);
+    if (resolved !== null && resolved !== undefined) {
+      return { result: { bindings: resolved } };
+    }
     if (options.sparql.includes('SAMPLE(?n)')) {
       return {
         result: {
@@ -139,6 +152,10 @@ async function request(
 
 function body(operation: string, args: Record<string, unknown> = {}) {
   return { channelId: CHANNEL, operation, arguments: args, requesterPubkey: REQUESTER };
+}
+
+function binding(value: string): { value: string } {
+  return { value };
 }
 
 describe('query gateway configuration', () => {
@@ -353,6 +370,239 @@ describe('query gateway HTTP boundary', () => {
       expect.objectContaining({ object: '"quoted literal"@en', layer: 'VM' }),
       expect.objectContaining({ object: '<urn:buzz:object:2>', layer: 'VM' }),
     ]);
+  });
+
+  it('maps contributors and evidence through the RDF author relation', async () => {
+    const dkg = new GatewayDkg();
+    const event = 'urn:nostr:event:event-one';
+    const decision = 'urn:buzz-dkg:decision:decision-one';
+    const claim = 'urn:buzz:claim:claim-one';
+    const at = '2026-08-05T12:00:00.000Z';
+    const expectedAt = Date.parse(at) / 1_000;
+    dkg.bindingResolver = (options) => {
+      if (options.view !== 'verifiable-memory') return [];
+      if (options.sparql.includes('COUNT(DISTINCT ?event)')) {
+        return [{ pk: binding(CONTRIBUTOR), n: binding('2'), latest: binding(at) }];
+      }
+      if (options.sparql.includes('SELECT ?s ?name ?digest ?t')) {
+        return [
+          {
+            s: binding(decision),
+            name: binding('Choose the graph store'),
+            digest: binding('digest-one'),
+            t: binding(at),
+          },
+        ];
+      }
+      if (options.sparql.includes('SELECT ?event ?content ?at ?decision ?dname')) {
+        return [
+          {
+            event: binding(event),
+            content: binding('Use the embedded graph store.'),
+            at: binding(at),
+            decision: binding(decision),
+            dname: binding('Choose the graph store'),
+          },
+        ];
+      }
+      if (options.sparql.includes(`GRAPH ?g { <${claim}> ?p ?o }`)) {
+        return [
+          {
+            p: binding('http://schema.org/name'),
+            o: binding('Storage claim'),
+            g: binding('urn:g'),
+          },
+          {
+            p: binding('http://www.w3.org/ns/prov#wasDerivedFrom'),
+            o: binding(event),
+            g: binding('urn:g'),
+          },
+          {
+            p: binding('https://w3id.org/buzz-dkg/buzz#sourceSetDigest'),
+            o: binding('digest-one'),
+            g: binding('urn:g'),
+          },
+        ];
+      }
+      if (options.sparql.includes('VALUES ?ev')) {
+        return [
+          {
+            ev: binding(event),
+            content: binding('Use the embedded graph store.'),
+            pk: binding(CONTRIBUTOR),
+            at: binding(at),
+          },
+        ];
+      }
+      if (options.sparql.includes('SELECT ?s ?p WHERE')) {
+        return [
+          {
+            s: binding(decision),
+            p: binding('http://www.w3.org/ns/prov#wasDerivedFrom'),
+          },
+        ];
+      }
+      return null;
+    };
+
+    const { url } = await startGateway(dkg);
+    const memoryResponse = await request(url, body('channel_memory'));
+    expect(memoryResponse.status).toBe(200);
+    const memoryPayload = (await memoryResponse.json()) as { result: unknown };
+    expect(memoryPayload.result).toMatchObject({
+      contributors: [{ pubkey: CONTRIBUTOR, events: 2, latest: expectedAt, layer: 'VM' }],
+      decisions: [{ uri: decision, name: 'Choose the graph store', layer: 'VM' }],
+    });
+
+    const trailResponse = await request(url, body('contributor_trail', { pubkey: CONTRIBUTOR }));
+    expect(trailResponse.status).toBe(200);
+    const trailPayload = (await trailResponse.json()) as { result: unknown };
+    expect(trailPayload.result).toEqual({
+      pubkey: CONTRIBUTOR,
+      trail: [
+        {
+          event,
+          content: 'Use the embedded graph store.',
+          at: expectedAt,
+          decision,
+          decisionName: 'Choose the graph store',
+          layer: 'VM',
+        },
+      ],
+    });
+
+    const evidenceResponse = await request(url, body('evidence', { uri: claim }));
+    expect(evidenceResponse.status).toBe(200);
+    const evidencePayload = (await evidenceResponse.json()) as { result: unknown };
+    expect(evidencePayload.result).toMatchObject({
+      found: true,
+      claimId: claim,
+      name: 'Storage claim',
+      memoryLayer: 'VM',
+      attribution: [CONTRIBUTOR],
+      digest: 'digest-one',
+      sources: [
+        {
+          id: event,
+          span: 'Use the embedded graph store.',
+          author: CONTRIBUTOR,
+          at: expectedAt,
+        },
+      ],
+      relations: [{ from: decision, rel: 'wasDerivedFrom' }],
+    });
+
+    const authorQueries = dkg.calls
+      .filter((call) => call.kind === 'query' && call.sparql?.includes('pubkeyHex'))
+      .map((call) => call.sparql ?? '');
+    expect(authorQueries.length).toBeGreaterThan(0);
+    expect(authorQueries.every((sparql) => sparql.includes('wasAttributedTo'))).toBe(true);
+  });
+
+  it('scopes every topology query with the exact DKG subgraph option', async () => {
+    const dkg = new GatewayDkg();
+    const event = 'urn:nostr:event:core-event';
+    const decision = 'urn:buzz:decision:core';
+    const claim = 'urn:buzz:claim:core';
+    const commit = 'urn:buzz:commit:core';
+    const at = '2026-08-05T12:00:00.000Z';
+    dkg.bindingResolver = (options) => {
+      if (options.view !== 'verifiable-memory') return [];
+      if (options.subGraphName !== 'core') {
+        return [{ d: binding('urn:buzz:decision:foreign'), name: binding('Foreign decision') }];
+      }
+      if (options.sparql.includes('SELECT ?c ?text ?at ?run ?ev')) {
+        return [
+          {
+            c: binding(claim),
+            text: binding('Core claim'),
+            at: binding(at),
+            run: binding('urn:buzz:run:core'),
+            ev: binding(event),
+          },
+        ];
+      }
+      if (options.sparql.includes('SELECT ?f ?type ?name ?at ?ev ?commit')) {
+        return [
+          {
+            f: binding(commit),
+            type: binding('https://w3id.org/buzz-dkg/buzz#Commit'),
+            name: binding('Core commit'),
+            at: binding(at),
+            ev: binding(event),
+            commit: binding('urn:git:commit:abc123'),
+          },
+        ];
+      }
+      if (options.sparql.includes('SELECT ?d ?name ?t ?ev')) {
+        return [
+          {
+            d: binding(decision),
+            name: binding('Core decision'),
+            t: binding(at),
+            ev: binding(event),
+          },
+        ];
+      }
+      if (options.sparql.includes('SELECT ?c ?d WHERE')) {
+        return [{ c: binding(claim), d: binding(decision) }];
+      }
+      if (options.sparql.includes('SELECT ?s ?p ?o ?g')) {
+        return [
+          {
+            s: binding(claim),
+            p: binding('http://schema.org/name'),
+            o: binding('"Core claim"'),
+            g: binding('did:dkg:context-graph:team/core/_verifiable_memory/1'),
+          },
+        ];
+      }
+      return [];
+    };
+
+    const { url } = await startGateway(dkg);
+    const graphResponse = await request(url, body('subgraph_graph', { name: 'core' }));
+    expect(graphResponse.status).toBe(200);
+    const graphPayload = (await graphResponse.json()) as {
+      result: {
+        nodes: Array<{ id: string; kind: string; contested?: number }>;
+        edges: Array<{ from: string; to: string; rel: string }>;
+      };
+    };
+    const graph = graphPayload.result;
+    expect(graph.nodes.map((node) => node.id).sort()).toEqual([claim, commit, decision].sort());
+    expect(graph.nodes).toContainEqual(
+      expect.objectContaining({ id: decision, kind: 'decision', contested: 1 }),
+    );
+    expect(graph.edges).toEqual(
+      expect.arrayContaining([
+        { from: claim, to: decision, rel: 'supports' },
+        { from: commit, to: decision, rel: 'supports' },
+        { from: claim, to: decision, rel: 'contradicts' },
+      ]),
+    );
+
+    const triplesResponse = await request(url, body('subgraph_triples', { name: 'core' }));
+    expect(triplesResponse.status).toBe(200);
+    const triplesPayload = (await triplesResponse.json()) as {
+      result: { triples: unknown[] };
+    };
+    expect(triplesPayload.result.triples).toEqual([
+      expect.objectContaining({ subject: claim, object: '"Core claim"', layer: 'VM' }),
+    ]);
+
+    const topologyCalls = dkg.calls.filter(
+      (call) =>
+        call.kind === 'query' &&
+        (call.sparql?.includes('SELECT ?c ?text') ||
+          call.sparql?.includes('SELECT ?f ?type') ||
+          call.sparql?.includes('SELECT ?d ?name') ||
+          call.sparql?.includes('SELECT ?c ?d WHERE') ||
+          call.sparql?.includes('SELECT ?s ?p ?o ?g')),
+    );
+    expect(topologyCalls.length).toBeGreaterThan(0);
+    expect(topologyCalls.every((call) => call.subGraphName === 'core')).toBe(true);
+    expect(topologyCalls.every((call) => !call.sparql?.includes('CONTAINS(STR(?g)'))).toBe(true);
   });
 
   it('rejects unknown channels, query parameters, and invalid authorization before DKG access', async () => {
