@@ -4,34 +4,66 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing v-prefixed tag to release
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: installer-release-${{ github.ref }}
+  group: installer-release-${{ inputs.release_tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
   source:
     runs-on: ubuntu-24.04
+    outputs:
+      release_sha: ${{ steps.release_source.outputs.release_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
-      - name: Require a reviewed main-branch commit
+      - name: Require a v-prefixed tag on a reviewed main-branch commit
+        id: release_source
         run: |
+          case "$RELEASE_TAG" in
+            v*) ;;
+            *)
+              echo "Release tag must start with v; got $RELEASE_TAG" >&2
+              exit 1
+              ;;
+          esac
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG" || {
+            echo "Release tag does not exist: $RELEASE_TAG" >&2
+            exit 1
+          }
+          release_sha=$(git rev-list -n 1 "$RELEASE_TAG")
+          [ "$release_sha" = "$(git rev-parse HEAD)" ] || {
+            echo "Checked-out source does not match $RELEASE_TAG" >&2
+            exit 1
+          }
           git fetch origin main --no-tags
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+          git merge-base --is-ancestor "$release_sha" origin/main || {
             echo "Release tags must point to commits already merged into main" >&2
             exit 1
           }
+          echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
 
   validate:
     needs: source
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.release_sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22.14.0'
@@ -55,12 +87,14 @@ jobs:
         arch: [x64, arm64]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.release_sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22.14.0'
           cache: npm
       - name: Build and architecture-check release bundle
-        run: ./scripts/build-release-bundle.sh linux ${{ matrix.arch }} "${GITHUB_REF_NAME#v}" "$RUNNER_TEMP/release"
+        run: ./scripts/build-release-bundle.sh linux ${{ matrix.arch }} "${RELEASE_TAG#v}" "$RUNNER_TEMP/release"
       - name: Attest release bundle provenance
         uses: actions/attest-build-provenance@v3
         with:
@@ -91,13 +125,25 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [source, build]
     runs-on: ubuntu-24.04
     environment: installer-release
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.release_sha }}
+      - name: Recheck the release tag binding
+        env:
+          EXPECTED_RELEASE_SHA: ${{ needs.source.outputs.release_sha }}
+        run: |
+          git fetch origin "+refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          actual_release_sha=$(git rev-list -n 1 "$RELEASE_TAG")
+          [ "$actual_release_sha" = "$EXPECTED_RELEASE_SHA" ] || {
+            echo "Release tag moved during the workflow; refusing to publish" >&2
+            exit 1
+          }
       - uses: actions/download-artifact@v4
         with:
           pattern: buzz-dkg-linux-*
@@ -107,7 +153,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          gh release create "$GITHUB_REF_NAME"
+          gh release create "$RELEASE_TAG"
           install.sh
           "$RUNNER_TEMP"/release/*
           --repo "$GITHUB_REPOSITORY"
