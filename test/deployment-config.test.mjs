@@ -7,7 +7,10 @@ const repo = resolve(new URL('..', import.meta.url).pathname);
 
 describe('deployment artifacts', () => {
   it('includes every local Dockerfile COPY input in the build context', () => {
-    const dockerfile = readFileSync(resolve(repo, 'deploy/existing-core/Dockerfile.integration'), 'utf8');
+    const dockerfile = readFileSync(
+      resolve(repo, 'deploy/existing-core/Dockerfile.integration'),
+      'utf8',
+    );
     const sources = [...dockerfile.matchAll(/^COPY\s+(\S+)\s+\S+$/gm)].map((match) => match[1]);
     expect(sources).toContain('scripts/bootstrap');
     for (const source of sources) expect(existsSync(resolve(repo, source))).toBe(true);
@@ -45,11 +48,11 @@ describe('deployment artifacts', () => {
         );
         expect(result.status, result.stderr).toBe(0);
       }
-      const mvp = spawnSync(
-        'docker',
-        ['compose', '-f', 'deploy/mvp/compose.yml', 'config'],
-        { cwd: repo, env, encoding: 'utf8' },
-      );
+      const mvp = spawnSync('docker', ['compose', '-f', 'deploy/mvp/compose.yml', 'config'], {
+        cwd: repo,
+        env,
+        encoding: 'utf8',
+      });
       expect(mvp.status, mvp.stderr).toBe(0);
 
       for (const profileArgs of [[], ['--profile', 'tools']]) {
@@ -79,6 +82,20 @@ describe('deployment artifacts', () => {
         { cwd: repo, encoding: 'utf8', timeout: 120_000 },
       );
       expect(result.status, result.stderr).toBe(0);
+      const smokeDependency = spawnSync(
+        'docker',
+        [
+          'run',
+          '--rm',
+          '--entrypoint',
+          'test',
+          'buzz-dkg-integration:deployment-validation',
+          '-r',
+          '/app/scripts/smoke-command.mjs',
+        ],
+        { cwd: repo, encoding: 'utf8', timeout: 30_000 },
+      );
+      expect(smokeDependency.status, smokeDependency.stderr).toBe(0);
     },
     125_000,
   );
