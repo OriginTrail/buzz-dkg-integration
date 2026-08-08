@@ -36,7 +36,7 @@ setup. Review the displayed plan before accepting it.
 Use a Buzz Relay build that advertises `buzz-dkg-memory-v1` in its NIP-11
 `supported_extensions`. On a discovered local Docker Compose deployment, the
 installer writes a mode-`0600` relay override containing the private proxy URL
-and generated bearer token, performs one controlled restart of only the relay,
+and generated bearer token plus the explicit memory-capability flag, performs one controlled restart of only the relay,
 and starts two credential-free loopback/Unix-socket bridge processes. It
 preserves the relay identity, database, public URL, and TLS configuration. For
 an operator-managed relay on the same host, it prints the two values that its

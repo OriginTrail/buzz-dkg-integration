@@ -477,6 +477,7 @@ describe('Buzz-first installer CLI', () => {
     const override = readFileSync(join(f.config, 'relay.dkg.override.yml'), 'utf8');
     expect(override).toContain('BUZZ_DKG_QUERY_URL: http://127.0.0.1:9297/v1/query');
     expect(override).toMatch(/BUZZ_DKG_QUERY_TOKEN: "[0-9a-f]{64}"/);
+    expect(override).toContain('BUZZ_DKG_MEMORY_ENABLED: "true"');
     const dockerCalls = readFileSync(f.dockerLog, 'utf8');
     expect(dockerCalls).toContain(`--project-name buzz --project-directory ${f.root}`);
     expect(dockerCalls).toContain('--profile bridge-relay up -d daemon host-query-bridge relay-query-bridge');

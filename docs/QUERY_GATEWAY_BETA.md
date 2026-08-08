@@ -26,11 +26,14 @@ A same-host Buzz authorization front should use:
 ```dotenv
 BUZZ_DKG_QUERY_URL=http://127.0.0.1:9296/v1/query
 BUZZ_DKG_QUERY_TOKEN=<same secret as BDI_QUERY_GATEWAY_TOKEN>
+BUZZ_DKG_MEMORY_ENABLED=true
 ```
 
 The relay derives the companion memory endpoint from that URL and forwards to
-`/v1/memory` with the same token. A compatible relay advertises
-`buzz-dkg-memory-v1` through NIP-11.
+`/v1/memory` with the same token. `BUZZ_DKG_MEMORY_ENABLED` is deliberately
+separate from query configuration: set it only when the integration supports
+`/v1/memory`. A compatible relay then advertises `buzz-dkg-memory-v1` through
+NIP-11.
 
 If an adopted relay remains on a Docker bridge, its `127.0.0.1` is not the
 host-networked daemon's loopback. The query bridge supports two bounded
@@ -68,6 +71,7 @@ BDI_QUERY_BRIDGE_TARGET_SOCKET=/runtime/query-gateway.sock
 
 # relay
 BUZZ_DKG_QUERY_URL=http://127.0.0.1:9297/v1/query
+BUZZ_DKG_MEMORY_ENABLED=true
 ```
 
 Mount the same private runtime directory into both bridge processes and run

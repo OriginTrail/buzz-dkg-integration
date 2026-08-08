@@ -23,7 +23,7 @@ import type {
 import { DKG_MEMORY_PROPOSAL_KIND } from '../types.ts';
 
 const HEX_64 = /^[0-9a-f]{64}$/u;
-const CHANNEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const CHANNEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const ITEM_KINDS = new Set(['decision', 'claim', 'question', 'task', 'relationship']);
 const MAX_SOURCES = 16;
 const MAX_ITEMS = 50;
@@ -45,8 +45,13 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[], labe
 }
 
 function text(value: unknown, label: string, max: number): string {
-  if (typeof value !== 'string' || !value.trim() || value.length > max) {
-    invalid(`${label} must contain 1 to ${max} characters`);
+  if (
+    typeof value !== 'string' ||
+    !value.trim() ||
+    Buffer.byteLength(value, 'utf8') > max ||
+    /\p{Cc}/u.test(value)
+  ) {
+    invalid(`${label} must contain 1 to ${max} non-control UTF-8 bytes`);
   }
   return value.trim();
 }

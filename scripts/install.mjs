@@ -269,9 +269,10 @@ async function configureRelayDkgProxy(context, plan, secrets) {
   if (!management?.compose) {
     const localContainer = Boolean(management?.containerName || management?.containerId);
     const port = localContainer ? '9297' : '9296';
-    console.log('\nRelay DKG proxy requires two relay environment values:');
+    console.log('\nRelay DKG proxy requires three relay environment values:');
     console.log(`  BUZZ_DKG_QUERY_URL=http://127.0.0.1:${port}/v1/query`);
     console.log('  BUZZ_DKG_QUERY_TOKEN=<BDI_QUERY_GATEWAY_TOKEN from protected runtime.env>');
+    console.log('  BUZZ_DKG_MEMORY_ENABLED=true');
     console.log(
       '  This relay was not discovered as a local Docker Compose service, so the installer cannot apply and restart it automatically.',
     );
@@ -297,6 +298,7 @@ async function configureRelayDkgProxy(context, plan, secrets) {
     '      BUZZ_DKG_QUERY_URL: http://127.0.0.1:9297/v1/query',
     `      BUZZ_DKG_QUERY_TOKEN: ${JSON.stringify(secrets.BDI_QUERY_GATEWAY_TOKEN)}`,
     '      BUZZ_DKG_QUERY_TIMEOUT_MS: "60000"',
+    '      BUZZ_DKG_MEMORY_ENABLED: "true"',
     '',
   ].join('\n');
   writeFileSync(overridePath, yaml, { mode: 0o600 });

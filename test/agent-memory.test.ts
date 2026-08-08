@@ -135,6 +135,21 @@ describe('agent memory proposal contract', () => {
       content: wrongMarker.proposalEvent.content,
     });
     expect(() => parseAgentMemoryEnvelope(wrongMarker)).toThrow(/source.*marker/);
+
+    expect(() =>
+      parseAgentMemoryEnvelope(
+        envelope({
+          proposalContent: JSON.stringify({
+            schemaVersion: 1,
+            summary: 'contains\na control character',
+            items: [{ kind: 'claim', text: 'x' }],
+          }),
+        }),
+      ),
+    ).toThrow(/non-control UTF-8 bytes/);
+    expect(() => parseAgentMemoryEnvelope(envelope({ channelId: CHANNEL.toUpperCase() }))).toThrow(
+      /channelId is invalid/,
+    );
   });
 });
 
