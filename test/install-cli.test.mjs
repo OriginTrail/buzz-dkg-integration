@@ -32,6 +32,7 @@ async function apiServer(role = 'edge', status = {}) {
           software: 'https://github.com/block/buzz',
           supported_nips: [1, 29],
           version: 'test',
+          supported_extensions: status.supportedExtensions || [],
         }),
       );
       return;
@@ -77,8 +78,10 @@ function fixture() {
   const daemonReady = join(root, 'daemon.ready');
   const relayInspect = join(root, 'relay-inspect.json');
   const relayMembers = join(root, 'relay-members.txt');
+  const relayCompose = join(root, 'relay-compose.yml');
   mkdirSync(bin, { recursive: true });
   writeFileSync(token, 'test-token\n', { mode: 0o600 });
+  writeFileSync(relayCompose, 'services:\n  relay:\n    image: ghcr.io/block/buzz:sha-test\n');
   writeFileSync(
     join(bin, 'docker'),
     `#!/bin/sh
@@ -120,11 +123,16 @@ esac
     daemonReady,
     relayInspect,
     relayMembers,
+    relayCompose,
     buzzAdmin: 'present',
   };
 }
 
-function configureBuzzRelay(f, relayUrl, { membershipRequired = true, buzzAdmin = 'present' } = {}) {
+function configureBuzzRelay(
+  f,
+  relayUrl,
+  { membershipRequired = true, buzzAdmin = 'present', compose = false } = {},
+) {
   f.buzzAdmin = buzzAdmin;
   writeFileSync(
     f.relayInspect,
@@ -138,7 +146,16 @@ function configureBuzzRelay(f, relayUrl, { membershipRequired = true, buzzAdmin 
             `RELAY_URL=${relayUrl}`,
             `BUZZ_REQUIRE_RELAY_MEMBERSHIP=${membershipRequired}`,
           ],
-          Labels: { 'com.docker.compose.service': 'relay' },
+          Labels: {
+            'com.docker.compose.service': 'relay',
+            ...(compose
+              ? {
+                  'com.docker.compose.project': 'buzz',
+                  'com.docker.compose.project.working_dir': f.root,
+                  'com.docker.compose.project.config_files': f.relayCompose,
+                }
+              : {}),
+          },
         },
         NetworkSettings: { Ports: {} },
       },
@@ -255,6 +272,32 @@ describe('Buzz-first installer CLI', () => {
         Config: { Image: 'example/generic-relay:latest', Env: [] },
       }),
     ).toBeNull();
+  });
+
+  it('extracts validated local Compose metadata for controlled relay updates', () => {
+    expect(
+      relayManagementFromContainer({
+        Id: 'a'.repeat(64),
+        Name: '/buzz-relay-1',
+        Config: {
+          Image: 'ghcr.io/block/buzz:sha-test',
+          Env: [],
+          Labels: {
+            'com.docker.compose.project': 'buzz',
+            'com.docker.compose.service': 'relay',
+            'com.docker.compose.project.working_dir': '/srv/buzz',
+            'com.docker.compose.project.config_files': 'compose.yml,/etc/buzz/secure.yml',
+          },
+        },
+      }),
+    ).toMatchObject({
+      compose: {
+        project: 'buzz',
+        service: 'relay',
+        workingDir: '/srv/buzz',
+        configFiles: ['/srv/buzz/compose.yml', '/etc/buzz/secure.yml'],
+      },
+    });
   });
 
   it('normalizes wildcard Buzz host bindings to loopback URLs', () => {
@@ -397,6 +440,10 @@ describe('Buzz-first installer CLI', () => {
     expect(runtime).toContain('BDI_QUERY_GATEWAY_ENABLED=true');
     expect(runtime).toContain('BDI_QUERY_GATEWAY_BIND=127.0.0.1');
     expect(runtime).toContain('BDI_QUERY_GATEWAY_PORT=9296');
+    expect(runtime).toContain('BDI_QUERY_GATEWAY_MAX_BODY_BYTES=262144');
+    expect(runtime).toContain('BDI_QUERY_GATEWAY_TIMEOUT_MS=60000');
+    expect(runtime).toContain('BDI_AUTO_PROVISION_CHANNELS=true');
+    expect(runtime).toContain('BDI_CONTEXT_GRAPH_ACCESS_POLICY=1');
     expect(runtime).toMatch(/BDI_QUERY_GATEWAY_TOKEN=[0-9a-f]{64}/);
     expect(runtime).toContain(`BDI_DKG_TOKEN_PATH=${f.token}`);
     expect(runtime).toMatch(/BUZZ_DKG_RUNTIME_UID=\d+/);
@@ -407,6 +454,32 @@ describe('Buzz-first installer CLI', () => {
     expect(dockerCalls).toContain('logs --no-color daemon');
     expect(dockerCalls).toContain('run --rm smoke');
     expect(result.stdout).toContain('Buzz + DKG is ready.');
+  });
+
+  it('configures and bridges a discovered local Compose relay for agent memory', async () => {
+    const f = fixture();
+    const api = await apiServer('edge', {
+      supportedExtensions: ['buzz-dkg-memory-v1'],
+    });
+    configureBuzzRelay(f, api, { membershipRequired: false, compose: true });
+    const result = await runInstaller(f, [
+      'install',
+      '--relay',
+      api,
+      '--dkg-api',
+      api,
+      '--dkg-token-path',
+      f.token,
+      '--yes',
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Agent memory: enabled');
+    const override = readFileSync(join(f.config, 'relay.dkg.override.yml'), 'utf8');
+    expect(override).toContain('BUZZ_DKG_QUERY_URL: http://127.0.0.1:9297/v1/query');
+    expect(override).toMatch(/BUZZ_DKG_QUERY_TOKEN: "[0-9a-f]{64}"/);
+    const dockerCalls = readFileSync(f.dockerLog, 'utf8');
+    expect(dockerCalls).toContain(`--project-name buzz --project-directory ${f.root}`);
+    expect(dockerCalls).toContain('--profile bridge-relay up -d daemon host-query-bridge relay-query-bridge');
   });
 
   it('enrolls stable managed identities through the native Buzz admin CLI on a closed relay', async () => {

@@ -206,25 +206,35 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 }
 
 export class QueryGatewayService {
-  readonly #bindings: Map<string, string>;
+  readonly #resolveContextGraph: (channelId: string) => string | null | Promise<string | null>;
   readonly dkg: DkgClient;
   readonly config: EnabledGatewayConfig;
 
-  constructor(bindings: readonly ChannelBinding[], dkg: DkgClient, config: EnabledGatewayConfig) {
+  constructor(
+    bindings:
+      readonly ChannelBinding[] | ((channelId: string) => string | null | Promise<string | null>),
+    dkg: DkgClient,
+    config: EnabledGatewayConfig,
+  ) {
     this.dkg = dkg;
     this.config = config;
-    this.#bindings = new Map();
-    for (const binding of bindings) {
-      if (this.#bindings.has(binding.channelId)) {
-        throw new Error(`duplicate query-gateway channel binding '${binding.channelId}'`);
+    if (typeof bindings === 'function') {
+      this.#resolveContextGraph = bindings;
+    } else {
+      const mapped = new Map<string, string>();
+      for (const binding of bindings) {
+        if (mapped.has(binding.channelId)) {
+          throw new Error(`duplicate query-gateway channel binding '${binding.channelId}'`);
+        }
+        mapped.set(binding.channelId, binding.contextGraphId);
       }
-      this.#bindings.set(binding.channelId, binding.contextGraphId);
+      this.#resolveContextGraph = (channelId) => mapped.get(channelId) ?? null;
     }
   }
 
   async execute(input: unknown): Promise<QueryGatewaySuccess> {
     const request = parseQueryGatewayRequest(input);
-    const cg = this.#bindings.get(request.channelId);
+    const cg = await this.#resolveContextGraph(request.channelId);
     if (!cg) {
       throw new QueryGatewayError(
         404,

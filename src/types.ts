@@ -25,6 +25,48 @@ export interface DistillResult {
   quads: Quad[];
 }
 
+export const DKG_MEMORY_PROPOSAL_KIND = 40009;
+
+export type AgentMemoryItemKind = 'decision' | 'claim' | 'question' | 'task' | 'relationship';
+
+export interface AgentMemoryItem {
+  kind: AgentMemoryItemKind;
+  text: string;
+  subject?: string;
+  predicate?: string;
+  object?: string;
+  confidence?: number;
+}
+
+/** Semantic memory emitted by a Buzz agent after a normal chat turn. */
+export interface AgentMemoryProposal {
+  schemaVersion: 1;
+  summary: string;
+  items: AgentMemoryItem[];
+  model?: string;
+  promptVersion?: string;
+}
+
+/** Relay-authenticated envelope accepted only by the loopback gateway. */
+export interface AgentMemoryEnvelope {
+  channelId: string;
+  requesterPubkey: string;
+  proposalEvent: NostrEvent;
+  sourceEvents: NostrEvent[];
+}
+
+export interface AgentMemoryIngestResult {
+  ok: true;
+  outcome: 'stored' | 'duplicate';
+  proposalEventId: string;
+  channelId: string;
+  requesterPubkey: string;
+  contextGraphId: string;
+  kaName: string;
+  digest: string;
+  state: OpState;
+}
+
 /** Operation lifecycle for one trigger → one KA → one receipt. Forward-only. */
 export type OpState =
   | 'distilled' // snapshot + quads computed, nothing external yet
@@ -118,6 +160,10 @@ export interface DaemonConfig {
   maxPublishesPerDay: number;
   dbPath: string;
   bindings: ChannelBinding[];
+  /** Lazily create one private Context Graph when a new Buzz channel first uses DKG memory. */
+  autoProvisionChannels?: boolean;
+  /** DKG access policy used for lazily provisioned channel graphs (1 = private/local). */
+  contextGraphAccessPolicy?: number;
   /** Optional loopback-only read API for a trusted Buzz authorization front. */
   queryGateway?: QueryGatewayConfig;
 }

@@ -1,3 +1,5 @@
+import { isAbsolute, resolve } from 'node:path';
+
 export function relayEndpoints(raw) {
   const parsed = new URL(raw);
   if (!['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol)) {
@@ -51,11 +53,33 @@ export function relayManagementFromContainer(container, fallbackId = '') {
   if (!isBuzzContainer(container, env)) return null;
   const containerId = String(container?.Id || fallbackId || '');
   if (!/^[a-f0-9]{12,64}$/i.test(containerId)) return null;
-  return {
+  const management = {
     containerId,
     containerName: String(container?.Name || '').replace(/^\//, ''),
     membershipRequired: enabled(env.BUZZ_REQUIRE_RELAY_MEMBERSHIP),
   };
+  const labels = container?.Config?.Labels || {};
+  const project = String(labels['com.docker.compose.project'] || '');
+  const service = String(labels['com.docker.compose.service'] || '');
+  const workingDir = String(labels['com.docker.compose.project.working_dir'] || '');
+  const rawFiles = String(labels['com.docker.compose.project.config_files'] || '');
+  if (
+    /^[A-Za-z0-9_.-]{1,128}$/.test(project) &&
+    /^[A-Za-z0-9_.-]{1,128}$/.test(service) &&
+    isAbsolute(workingDir) &&
+    rawFiles &&
+    !rawFiles.includes('\n')
+  ) {
+    const configFiles = rawFiles
+      .split(',')
+      .map((path) => path.trim())
+      .filter(Boolean)
+      .map((path) => (isAbsolute(path) ? path : resolve(workingDir, path)));
+    if (configFiles.length > 0) {
+      management.compose = { project, service, workingDir, configFiles };
+    }
+  }
+  return management;
 }
 
 function hostBindingUrl(binding) {
@@ -111,7 +135,13 @@ export async function probeRelay(httpUrl, fetchImpl = fetch) {
     ) {
       throw new Error('endpoint does not advertise the Buzz Relay NIP-11 contract');
     }
-    return { status: readiness.status, path: '/_readiness' };
+    return {
+      status: readiness.status,
+      path: '/_readiness',
+      supportedExtensions: Array.isArray(document.supported_extensions)
+        ? document.supported_extensions
+        : [],
+    };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`Buzz Relay ${httpUrl} validation failed (${detail})`);

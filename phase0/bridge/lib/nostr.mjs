@@ -65,6 +65,22 @@ export class BuzzClient {
     return this.#post('/query', filters);
   }
 
+  /** Call an authenticated relay JSON API using the same NIP-98 identity. */
+  async postAuthed(path, body) {
+    return this.#post(path, body);
+  }
+
+  /** Sign and submit an evidence-linked DKG memory proposal (not relay history). */
+  async proposeDkgMemory(channelId, sourceEventIds, proposal) {
+    const tags = [
+      ['h', channelId],
+      ['t', 'dkg-memory-proposal'],
+      ...sourceEventIds.map((id) => ['e', id, '', 'source']),
+    ];
+    const event = this.sign({ kind: 40009, tags, content: JSON.stringify(proposal) });
+    return { event, res: await this.#post('/api/dkg/memory', event) };
+  }
+
   // ── Buzz operations (kinds per docs/audit/buzz-audit.md) ──────────────────
   async createChannel(name) {
     return this.publish({ kind: 9007, tags: [['name', name]], content: '' });

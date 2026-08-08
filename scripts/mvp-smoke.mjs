@@ -148,6 +148,52 @@ if (!/can't answer/i.test(refusal.content)) {
 }
 console.log(`✓ unsupported question refused ${refusal.id.slice(0, 12)}…`);
 
+let agentMemory = null;
+const relayInfo = await fetch(`${buzzHttp}/info`, {
+  headers: { accept: 'application/nostr+json' },
+}).then((response) => (response.ok ? response.json() : null));
+if (relayInfo?.supported_extensions?.includes('buzz-dkg-memory-v1')) {
+  const source = await owner.sendMessage(
+    channelId,
+    `Agent-memory canary ${runId}: use signed semantic proposals after every agent turn.`,
+  );
+  const proposal = await owner.proposeDkgMemory(channelId, [source.event.id], {
+    schemaVersion: 1,
+    summary: `Agent-native memory canary ${runId}`,
+    items: [
+      {
+        kind: 'decision',
+        text: 'Buzz agents submit signed semantic memory proposals after normal chat turns.',
+      },
+    ],
+    model: 'installer-smoke',
+    promptVersion: 'agent-memory-v1',
+  });
+  if (proposal.res?.ok !== true || proposal.res?.state !== 'receipted') {
+    throw new Error('agent memory proposal did not reach Shared Working Memory');
+  }
+  const memory = await owner.postAuthed('/api/dkg/query', {
+    channelId,
+    operation: 'channel_memory',
+    arguments: {},
+  });
+  if (
+    !memory?.result?.decisions?.some(
+      (decision) => decision.name === `Agent-native memory canary ${runId}`,
+    )
+  ) {
+    throw new Error('agent memory was not visible through the scoped Buzz query proxy');
+  }
+  agentMemory = {
+    proposalEventId: proposal.event.id,
+    kaName: proposal.res.kaName,
+    contextGraphId: proposal.res.contextGraphId,
+  };
+  console.log(`✓ signed agent memory ${proposal.event.id.slice(0, 12)}… is queryable through Buzz`);
+} else {
+  console.log('○ agent-memory smoke skipped (relay does not advertise buzz-dkg-memory-v1)');
+}
+
 mkdirSync(stateDir, { recursive: true });
 const result = {
   ok: true,
@@ -159,6 +205,7 @@ const result = {
   answerEventId: answer.id,
   refusalEventId: refusal.id,
   publicationMode: 'disabled',
+  agentMemory,
 };
 writeFileSync(join(stateDir, 'smoke.json'), `${JSON.stringify(result, null, 2)}\n`, {
   mode: 0o600,

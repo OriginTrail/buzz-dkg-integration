@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import type { DkgClient } from '../dkg/client.ts';
 import { logger } from '../log.ts';
-import type { ChannelBinding, QueryGatewayConfig } from '../types.ts';
+import type { AgentMemoryIngestResult, ChannelBinding, QueryGatewayConfig } from '../types.ts';
 import { parseQueryGatewayRequest, QueryGatewayError, QueryGatewayService } from './service.ts';
 
 type EnabledGatewayConfig = Extract<QueryGatewayConfig, { enabled: true }>;
@@ -111,10 +111,19 @@ export class QueryGateway {
     config: EnabledGatewayConfig,
     bindings: readonly ChannelBinding[],
     dkg: DkgClient,
-    dependencies: { log?: GatewayLogger } = {},
+    dependencies: {
+      log?: GatewayLogger;
+      resolveContextGraph?: (channelId: string) => string | null | Promise<string | null>;
+      submitAgentMemory?: (raw: unknown) => Promise<AgentMemoryIngestResult>;
+    } = {},
   ) {
     this.config = config;
-    this.#service = new QueryGatewayService(bindings, dkg, config);
+    this.#service = new QueryGatewayService(
+      dependencies.resolveContextGraph ?? bindings,
+      dkg,
+      config,
+    );
+    this.#submitAgentMemory = dependencies.submitAgentMemory;
     this.#log = dependencies.log ?? logger;
     this.#server = createServer((req, res) => void this.handle(req, res));
     this.#server.maxHeadersCount = 32;
@@ -123,6 +132,8 @@ export class QueryGateway {
     this.#server.keepAliveTimeout = 5_000;
     this.#server.setTimeout(config.operationTimeoutMs + 5_000, (socket) => socket.destroy());
   }
+
+  readonly #submitAgentMemory: ((raw: unknown) => Promise<AgentMemoryIngestResult>) | undefined;
 
   get address(): AddressInfo | null {
     const address = this.#server.address();
@@ -161,7 +172,7 @@ export class QueryGateway {
         throw new QueryGatewayError(403, 'loopback_required', 'loopback client required');
       }
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-      if (url.pathname !== '/v1/query') {
+      if (url.pathname !== '/v1/query' && url.pathname !== '/v1/memory') {
         throw new QueryGatewayError(404, 'not_found', 'route not found');
       }
       if (url.search) {
@@ -192,13 +203,27 @@ export class QueryGateway {
       this.#inFlight += 1;
       counted = true;
       const raw = await readJsonBody(req, this.config.maxBodyBytes);
-      const parsed = parseQueryGatewayRequest(raw);
-      audit = {
-        channelId: parsed.channelId,
-        operation: parsed.operation,
-        requesterPubkey: parsed.requesterPubkey,
-      };
-      const output = await this.#service.execute(parsed);
+      let output: unknown;
+      if (url.pathname === '/v1/memory') {
+        if (!this.#submitAgentMemory) {
+          throw new QueryGatewayError(404, 'memory_disabled', 'agent memory ingestion is disabled');
+        }
+        const memory = await this.#submitAgentMemory(raw);
+        output = memory;
+        audit = {
+          channelId: memory.channelId,
+          operation: 'agent_memory',
+          requesterPubkey: memory.requesterPubkey,
+        };
+      } else {
+        const parsed = parseQueryGatewayRequest(raw);
+        audit = {
+          channelId: parsed.channelId,
+          operation: parsed.operation,
+          requesterPubkey: parsed.requesterPubkey,
+        };
+        output = await this.#service.execute(parsed);
+      }
       const body = JSON.stringify(output);
       const resultBytes = Buffer.byteLength(body, 'utf8');
       if (resultBytes > this.config.maxResultBytes) {

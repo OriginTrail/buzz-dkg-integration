@@ -18,7 +18,19 @@ import {
   vmReceipt,
 } from './receipts/compose.ts';
 import { logger } from './log.ts';
-import type { DaemonConfig, NostrEvent, OpRecord } from './types.ts';
+import {
+  DKG_MEMORY_PROPOSAL_KIND,
+  type AgentMemoryIngestResult,
+  type DaemonConfig,
+  type NostrEvent,
+  type OpRecord,
+} from './types.ts';
+import {
+  compileAgentMemory,
+  contextGraphIdForChannel,
+  parseAgentMemoryEnvelope,
+} from './memory/proposal.ts';
+import { QueryGatewayError } from './query-gateway/service.ts';
 
 const CATCHUP_OVERLAP_S = 60;
 const CURSOR_SKEW_S = 300;
@@ -36,6 +48,7 @@ export class Daemon {
   readonly distiller: Distiller;
   #queue: Promise<void> = Promise.resolve();
   #chainId: string | undefined;
+  readonly #graphProvisioning = new Map<string, Promise<string>>();
 
   constructor(
     config: DaemonConfig,
@@ -70,6 +83,58 @@ export class Daemon {
   /** Wait for all queued events to be processed (tests + shutdown). */
   drain(): Promise<void> {
     return this.#queue;
+  }
+
+  /**
+   * Submit work through the same serialized lifecycle as relay events while
+   * preserving an HTTP-visible result/error for the authenticated caller.
+   */
+  submitAgentMemory(raw: unknown): Promise<AgentMemoryIngestResult> {
+    const operation = this.#queue.then(() => this.ingestAgentMemory(raw));
+    this.#queue = operation.then(
+      () => undefined,
+      (error) => logger.error('agent memory ingestion failed', { err: String(error) }),
+    );
+    return operation;
+  }
+
+  /** Resolve or lazily provision the private Context Graph for one Buzz channel. */
+  async ensureContextGraph(channelId: string): Promise<string | null> {
+    const existing = this.registry.contextGraphFor(channelId);
+    if (existing) return existing;
+    if (this.config.autoProvisionChannels !== true) return null;
+    const pending = this.#graphProvisioning.get(channelId);
+    if (pending) return pending;
+    const operation = this.provisionContextGraph(channelId).finally(() =>
+      this.#graphProvisioning.delete(channelId),
+    );
+    this.#graphProvisioning.set(channelId, operation);
+    return operation;
+  }
+
+  private async provisionContextGraph(channelId: string): Promise<string> {
+    const contextGraphId = contextGraphIdForChannel(this.config.relayHttpUrl, channelId);
+    let exists = await this.dkg.contextGraphExists(contextGraphId);
+    if (!exists.exists) {
+      try {
+        await this.dkg.createContextGraph({
+          id: contextGraphId,
+          name: `Buzz channel ${channelId}`,
+          description: `Private DKG memory for Buzz channel ${channelId}`,
+          accessPolicy: this.config.contextGraphAccessPolicy ?? 1,
+          publishPolicy: 0,
+          register: false,
+        });
+      } catch (error) {
+        if ((error as { status?: number }).status !== 409) throw error;
+      }
+      exists = await this.dkg.contextGraphExists(contextGraphId);
+      if (!exists.exists)
+        throw new Error(`created Context Graph '${contextGraphId}' was not visible`);
+    }
+    this.registry.bindChannel(channelId, contextGraphId);
+    logger.info('channel Context Graph ready', { channelId, contextGraphId });
+    return contextGraphId;
   }
 
   async start(): Promise<void> {
@@ -155,7 +220,11 @@ export class Daemon {
     for (const op of this.registry.pendingOps()) {
       if (!captureStates.has(op.state)) continue;
       logger.info('reconnect: retrying parked capture', { opId: op.id, state: op.state });
-      await this.executeOp(op).catch((err) =>
+      const execute =
+        op.triggerKind === DKG_MEMORY_PROPOSAL_KIND
+          ? this.executeAgentMemory(op)
+          : this.executeOp(op);
+      await execute.catch((err) =>
         logger.error('reconnect capture retry failed', { opId: op.id, err: String(err) }),
       );
     }
@@ -180,7 +249,11 @@ export class Daemon {
   async recover(): Promise<void> {
     for (const op of this.registry.pendingOps()) {
       logger.info('recovering op', { opId: op.id, kaName: op.kaName, state: op.state });
-      await this.executeOp(op).catch((err) =>
+      const execute =
+        op.triggerKind === DKG_MEMORY_PROPOSAL_KIND
+          ? this.executeAgentMemory(op)
+          : this.executeOp(op);
+      await execute.catch((err) =>
         logger.error('op recovery failed', { opId: op.id, err: String(err) }),
       );
     }
@@ -267,6 +340,140 @@ export class Daemon {
       return;
     }
     await this.executeOp(op, events);
+  }
+
+  private async ingestAgentMemory(raw: unknown): Promise<AgentMemoryIngestResult> {
+    const parsed = parseAgentMemoryEnvelope(raw);
+    const { envelope, proposal } = parsed;
+    this.registry.saveAgentMemoryEnvelope(envelope.proposalEvent.id, envelope);
+    const contextGraphId = await this.ensureContextGraph(envelope.channelId);
+    if (!contextGraphId) {
+      throw new QueryGatewayError(
+        404,
+        'unknown_channel',
+        'channel is not configured and automatic Context Graph provisioning is disabled',
+      );
+    }
+    const compiled = compileAgentMemory(envelope, proposal);
+    let op = this.registry.opByTrigger(envelope.proposalEvent.id);
+    const duplicate = !!op;
+    if (!op) {
+      op = this.registry.claimTrigger({
+        triggerEventId: envelope.proposalEvent.id,
+        triggerKind: DKG_MEMORY_PROPOSAL_KIND,
+        channelId: envelope.channelId,
+        contextGraphId,
+        rootEventId: envelope.sourceEvents[0]!.id,
+        digest: compiled.digest,
+        kaName: kaNameForDigest(compiled.digest),
+        rootUri: compiled.rootUri,
+        title: compiled.title,
+      });
+      if (!op) op = this.registry.opByTrigger(envelope.proposalEvent.id);
+    }
+    if (!op) throw new Error('could not claim agent memory proposal');
+    if (
+      op.channelId !== envelope.channelId ||
+      op.contextGraphId !== contextGraphId ||
+      op.digest !== compiled.digest
+    ) {
+      throw new QueryGatewayError(
+        409,
+        'proposal_conflict',
+        'proposal event was already recorded with different content',
+      );
+    }
+    if (!['receipted', 'failed'].includes(op.state)) {
+      await this.executeAgentMemory(op, parsed);
+      op = this.registry.opByTrigger(envelope.proposalEvent.id)!;
+    }
+    if (op.state === 'failed') {
+      throw new QueryGatewayError(409, 'proposal_failed', op.error ?? 'proposal ingestion failed');
+    }
+    return {
+      ok: true,
+      outcome: duplicate ? 'duplicate' : 'stored',
+      proposalEventId: envelope.proposalEvent.id,
+      channelId: envelope.channelId,
+      requesterPubkey: envelope.requesterPubkey,
+      contextGraphId,
+      kaName: op.kaName,
+      digest: op.digest,
+      state: op.state,
+    };
+  }
+
+  /** Automatic agent memory follows WM→SWM but stays silent and never enters VM. */
+  private async executeAgentMemory(
+    op: OpRecord,
+    parsed?: ReturnType<typeof parseAgentMemoryEnvelope>,
+  ): Promise<void> {
+    const stored =
+      parsed ??
+      (() => {
+        const envelope = this.registry.agentMemoryEnvelope(op.triggerEventId);
+        if (!envelope) throw new Error(`agent memory envelope ${op.triggerEventId} is missing`);
+        return parseAgentMemoryEnvelope(envelope);
+      })();
+    const compiled = compileAgentMemory(stored.envelope, stored.proposal);
+    if (compiled.digest !== op.digest || compiled.rootUri !== op.rootUri) {
+      this.registry.transition(op.id, 'failed', { error: 'stored proposal changed since claim' });
+      return;
+    }
+    try {
+      if (op.state === 'distilled') {
+        await this.dkg.write(op.kaName, op.contextGraphId, compiled.quads);
+        this.registry.transition(op.id, 'wm_written');
+        op = this.registry.opByTrigger(op.triggerEventId)!;
+      }
+      if (op.state === 'wm_written' || op.state === 'finalized') {
+        const descriptor = await this.dkg
+          .descriptor(op.kaName, op.contextGraphId)
+          .catch(() => null);
+        if (descriptor?.state === 'promoted' || descriptor?.state === 'published') {
+          this.registry.transition(op.id, 'shared', {
+            assertion_uri: descriptor.assertionGraph ?? null,
+          });
+        } else {
+          if (op.state === 'wm_written') {
+            const finalized = await this.dkg.finalize(op.kaName, op.contextGraphId);
+            this.registry.transition(op.id, 'finalized', {
+              assertion_uri: finalized.assertionUri,
+            });
+          }
+          await this.dkg.share(op.kaName, op.contextGraphId);
+          this.registry.transition(op.id, 'shared');
+        }
+        op = this.registry.opByTrigger(op.triggerEventId)!;
+      }
+      if (op.state === 'shared') {
+        const query = await this.dkg.query({
+          sparql: `SELECT ?p ?o WHERE { <${op.rootUri}> ?p ?o }`,
+          contextGraphId: op.contextGraphId,
+          view: 'shared-working-memory',
+        });
+        const value = (term: unknown): string =>
+          String(typeof term === 'string' ? term : ((term as { value?: unknown })?.value ?? ''));
+        const confirmed = (query.result?.bindings ?? []).some(
+          (row) => value(row.p).includes('sourceSetDigest') && value(row.o).includes(op.digest),
+        );
+        if (!confirmed) throw new Error('SWM read-back did not confirm the agent memory digest');
+        this.registry.transition(op.id, 'receipted', { receipt_event_id: null });
+        logger.info('agent memory stored', {
+          opId: op.id,
+          proposalEventId: op.triggerEventId,
+          channelId: op.channelId,
+          contextGraphId: op.contextGraphId,
+          kaName: op.kaName,
+        });
+      }
+    } catch (error) {
+      logger.error('agent memory execution failed; will retry on recovery', {
+        opId: op.id,
+        err: String(error),
+      });
+      throw error;
+    }
   }
 
   /**

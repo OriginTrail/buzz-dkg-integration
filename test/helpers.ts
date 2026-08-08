@@ -139,6 +139,7 @@ export class MockDkg {
   kas = new Map<string, KaState>();
   chainId = 'evm:31337';
   contextGraphs = ['devnet-test'];
+  createdContextGraphs: Record<string, unknown>[] = [];
   evidence: { rootUri: string; name: string; description: string; digest: string | null }[] = [];
   failShareOnce: Error | null = null;
   failWriteOnce: Error | null = null;
@@ -153,6 +154,12 @@ export class MockDkg {
   }
   async contextGraphExists(id: string) {
     return { exists: this.contextGraphs.includes(id) };
+  }
+  async createContextGraph(payload: Record<string, unknown>) {
+    const id = String(payload.id);
+    if (!this.contextGraphs.includes(id)) this.contextGraphs.push(id);
+    this.createdContextGraphs.push(payload);
+    return { id };
   }
   #ka(name: string): KaState {
     let ka = this.kas.get(name);

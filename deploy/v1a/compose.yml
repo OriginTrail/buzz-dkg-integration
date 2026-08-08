@@ -20,12 +20,16 @@ x-runtime: &runtime
     BDI_BINDINGS_PATH: /runtime/bindings.json
     BDI_PUBLISH_MODE: disabled
     BDI_MAX_PUBLISHES_PER_DAY: '0'
+    BDI_AUTO_PROVISION_CHANNELS: ${BDI_AUTO_PROVISION_CHANNELS:-false}
+    BDI_CONTEXT_GRAPH_ACCESS_POLICY: ${BDI_CONTEXT_GRAPH_ACCESS_POLICY:-1}
     BDI_DB_PATH: /runtime/daemon.db
     BDI_LOG_LEVEL: ${BDI_LOG_LEVEL:-info}
     BDI_QUERY_GATEWAY_ENABLED: ${BDI_QUERY_GATEWAY_ENABLED:-false}
     BDI_QUERY_GATEWAY_BIND: ${BDI_QUERY_GATEWAY_BIND:-127.0.0.1}
     BDI_QUERY_GATEWAY_PORT: ${BDI_QUERY_GATEWAY_PORT:-9296}
     BDI_QUERY_GATEWAY_TOKEN: ${BDI_QUERY_GATEWAY_TOKEN:-}
+    BDI_QUERY_GATEWAY_MAX_BODY_BYTES: ${BDI_QUERY_GATEWAY_MAX_BODY_BYTES:-262144}
+    BDI_QUERY_GATEWAY_TIMEOUT_MS: ${BDI_QUERY_GATEWAY_TIMEOUT_MS:-60000}
   logging:
     driver: local
     options:
@@ -38,26 +42,61 @@ services:
     command: ['node', '--experimental-strip-types', 'src/index.ts']
     restart: unless-stopped
 
-  # Optional transport for an adopted relay that remains on a Docker bridge.
-  # It binds only the bridge gateway address and forwards opaque TCP to the
-  # loopback-only authenticated query gateway. No DKG or Buzz credential is
-  # present in this container.
-  query-bridge:
+  # Host side of the credential-free bridge. The relay bridge below shares the
+  # adopted relay's network namespace; this process keeps the DKG gateway bound
+  # strictly to host loopback and exposes it only through a private Unix socket.
+  host-query-bridge:
     image: node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b
     working_dir: /app
     network_mode: host
-    user: '65534:65534'
+    user: '${BUZZ_DKG_RUNTIME_UID:-65534}:${BUZZ_DKG_RUNTIME_GID:-65534}'
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     volumes:
       - ${BUZZ_DKG_APP_DIR:?set BUZZ_DKG_APP_DIR}:/app:ro
+      - ${BUZZ_DKG_STATE_DIR:?set BUZZ_DKG_STATE_DIR}:/runtime
     environment:
-      BDI_QUERY_BRIDGE_BIND: ${BDI_QUERY_BRIDGE_BIND:-}
-      BDI_QUERY_BRIDGE_PORT: ${BDI_QUERY_BRIDGE_PORT:-9297}
+      BDI_QUERY_BRIDGE_LISTEN_SOCKET: /runtime/query-gateway.sock
       BDI_QUERY_GATEWAY_PORT: ${BDI_QUERY_GATEWAY_PORT:-9296}
     command: ['node', 'scripts/query-bridge.mjs']
     profiles: [bridge-relay]
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'test -S /runtime/query-gateway.sock']
+      interval: 1s
+      timeout: 1s
+      retries: 20
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: '3'
+
+  # Relay side of the bridge. Only the adopted relay's own network namespace
+  # can reach 127.0.0.1:9297. The process carries no bearer or DKG credential.
+  relay-query-bridge:
+    image: node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b
+    working_dir: /app
+    network_mode: container:${BUZZ_DKG_RELAY_CONTAINER:-buzz-relay-unconfigured}
+    user: '${BUZZ_DKG_RUNTIME_UID:-65534}:${BUZZ_DKG_RUNTIME_GID:-65534}'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ${BUZZ_DKG_APP_DIR:?set BUZZ_DKG_APP_DIR}:/app:ro
+      - ${BUZZ_DKG_STATE_DIR:?set BUZZ_DKG_STATE_DIR}:/runtime
+    environment:
+      BDI_QUERY_BRIDGE_BIND: 127.0.0.1
+      BDI_QUERY_BRIDGE_PORT: 9297
+      BDI_QUERY_BRIDGE_TARGET_SOCKET: /runtime/query-gateway.sock
+    command: ['node', 'scripts/query-bridge.mjs']
+    profiles: [bridge-relay]
+    depends_on:
+      host-query-bridge:
+        condition: service_healthy
+      daemon:
+        condition: service_started
     restart: unless-stopped
     logging:
       driver: local

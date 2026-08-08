@@ -1,8 +1,10 @@
-# Beta query gateway
+# Beta query and agent-memory gateway
 
-The daemon can expose a loopback-only, read-only HTTP API for a trusted Buzz
-authorization front. It is disabled by default. The V1a installer enables it
-on `127.0.0.1:9296` and creates a separate 64-hex bearer token.
+The daemon can expose loopback-only query and agent-memory HTTP endpoints for a
+trusted Buzz authorization front. They are disabled by default. The V1a
+installer enables them on `127.0.0.1:9296` and creates a separate 64-hex bearer
+token. The relay remains the public authorization boundary; clients never
+receive this token or DKG credentials.
 
 ## Environment
 
@@ -25,6 +27,10 @@ A same-host Buzz authorization front should use:
 BUZZ_DKG_QUERY_URL=http://127.0.0.1:9296/v1/query
 BUZZ_DKG_QUERY_TOKEN=<same secret as BDI_QUERY_GATEWAY_TOKEN>
 ```
+
+The relay derives the companion memory endpoint from that URL and forwards to
+`/v1/memory` with the same token. A compatible relay advertises
+`buzz-dkg-memory-v1` through NIP-11.
 
 If an adopted relay remains on a Docker bridge, its `127.0.0.1` is not the
 host-networked daemon's loopback. The query bridge supports two bounded
@@ -113,3 +119,20 @@ queried and is represented as `null`.
 Errors use `{ "ok": false, "error": { "code": "...", "message": "..." } }`.
 Responses and structured audit logs never include gateway or DKG credentials or
 raw upstream failures.
+
+## Agent-memory write contract
+
+Only the relay calls `POST /v1/memory`. Its exact envelope contains a channel
+UUID, authenticated requester pubkey, one fully signed kind-`40009` proposal,
+and the fully signed source events referenced by that proposal. The sidecar
+independently verifies every signature and ID, exact `h` channel tags, source
+markers, requester/author equality, source-set equality, semantic bounds, and
+that the agent authored at least one source. It does not trust the relay to
+construct RDF.
+
+For a valid proposal the sidecar deterministically creates or reuses that
+channel's private Context Graph, compiles provenance-bearing RDF, writes Working
+Memory, promotes it to Shared Working Memory, and records a terminal local
+operation. The proposal event ID is the idempotency key, so retries do not
+duplicate graph state. This beta performs no Verifiable Memory publication and
+emits no relay chat event for the background write.

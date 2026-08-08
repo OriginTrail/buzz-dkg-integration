@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { loadQueryGatewayConfig } from '../src/config.ts';
 import type { DkgClient } from '../src/dkg/client.ts';
 import { QueryGateway } from '../src/query-gateway/server.ts';
-import { parseQueryGatewayRequest } from '../src/query-gateway/service.ts';
+import { parseQueryGatewayRequest, QueryGatewayService } from '../src/query-gateway/service.ts';
 import type { QueryGatewayConfig } from '../src/types.ts';
 
 const TOKEN = 'gateway-token-'.padEnd(32, 'x');
@@ -121,12 +121,15 @@ async function startGateway(
     info(message: string, fields?: Record<string, unknown>): void;
     warn(message: string, fields?: Record<string, unknown>): void;
   },
+  submitAgentMemory?: NonNullable<
+    ConstructorParameters<typeof QueryGateway>[3]
+  >['submitAgentMemory'],
 ) {
   const gateway = new QueryGateway(
     config,
     [{ channelId: CHANNEL, contextGraphId: CONTEXT_GRAPH, promoters: [] }],
     dkg.asDkg(),
-    { log },
+    { log, submitAgentMemory },
   );
   running.push(gateway);
   await gateway.start();
@@ -249,6 +252,59 @@ describe('query gateway request contract', () => {
 });
 
 describe('query gateway HTTP boundary', () => {
+  it('accepts agent memory only through the authenticated loopback JSON boundary', async () => {
+    const submitted: unknown[] = [];
+    const { url } = await startGateway(
+      new GatewayDkg(),
+      gatewayConfig(),
+      undefined,
+      async (raw) => {
+        submitted.push(raw);
+        return {
+          ok: true,
+          outcome: 'stored',
+          proposalEventId: '11'.repeat(32),
+          channelId: 'c69311ba-a5a2-4b2a-a27f-99f7669af643',
+          requesterPubkey: REQUESTER,
+          contextGraphId: 'buzz-memory-graph',
+          kaName: 'buzz-dkg-memory',
+          digest: '22'.repeat(32),
+          state: 'receipted',
+        };
+      },
+    );
+    const payload = { signed: 'envelope' };
+    const response = await request(url.replace('/v1/query', '/v1/memory'), payload);
+    expect(response.status).toBe(200);
+    expect(submitted).toEqual([payload]);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      outcome: 'stored',
+      requesterPubkey: REQUESTER,
+    });
+
+    const unauthorized = await request(url.replace('/v1/query', '/v1/memory'), payload, {
+      token: 'wrong-token-that-is-still-long-enough',
+    });
+    expect(unauthorized.status).toBe(401);
+    expect(submitted).toHaveLength(1);
+  });
+
+  it('resolves newly provisioned channel bindings at request time', async () => {
+    const dkg = new GatewayDkg();
+    const service = new QueryGatewayService(
+      async (channelId) => (channelId === 'new-channel' ? 'buzz-new-graph' : null),
+      dkg.asDkg(),
+      gatewayConfig(),
+    );
+    const response = await service.execute({
+      ...body('channel_memory'),
+      channelId: 'new-channel',
+    });
+    expect(response.cg).toBe('buzz-new-graph');
+    expect(dkg.calls.every((call) => call.contextGraphId === 'buzz-new-graph')).toBe(true);
+  });
+
   it('resolves the Context Graph server-side and queries only SWM and VM', async () => {
     const { dkg, url } = await startGateway();
     const response = await request(url, body('channel_memory'));

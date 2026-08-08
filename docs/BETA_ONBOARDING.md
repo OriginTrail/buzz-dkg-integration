@@ -1,9 +1,10 @@
 # Buzz + DKG Beta Operator Guide
 
 This beta adds private OriginTrail DKG memory to an existing Buzz community.
-It adopts the relay in place, creates or reuses a **Web of Trust** channel and
-its Context Graph, and runs the integration as a separate sidecar. It does not
-replace the relay, move its database, or enable on-chain publication.
+It adopts the relay in place, creates or reuses a **Web of Trust** seed channel,
+and lazily creates an isolated private Context Graph for every channel where a
+Buzz agent proposes memory. The integration runs as a separate sidecar. It
+does not move the relay database or enable on-chain publication.
 
 ## Before you start
 
@@ -32,12 +33,23 @@ and signed attestation bundle, verifies its SHA-256 checksum and GitHub build
 provenance locally without signing in, installs `buzz-dkg`, and opens the guided
 setup. Review the displayed plan before accepting it.
 
+Use a Buzz Relay build that advertises `buzz-dkg-memory-v1` in its NIP-11
+`supported_extensions`. On a discovered local Docker Compose deployment, the
+installer writes a mode-`0600` relay override containing the private proxy URL
+and generated bearer token, performs one controlled restart of only the relay,
+and starts two credential-free loopback/Unix-socket bridge processes. It
+preserves the relay identity, database, public URL, and TLS configuration. For
+an operator-managed relay on the same host, it prints the two values that its
+operator must apply and leaves that relay untouched. A remote relay cannot use
+the host's loopback gateway: deploy the integration beside that relay instead
+of exposing the bearer-protected gateway over the network.
+
 When the discovered Buzz container has relay membership enabled, that plan
 also shows one native Buzz administration step. The installer generates a
 separate DKG channel-owner identity and DKG Memory service identity, then adds
 both as ordinary relay members with `/usr/local/bin/buzz-admin`. The command is
-idempotent and does not require your Buzz/Nostr private key, edit the relay's
-configuration, or write directly to its database. The public keys and retained
+idempotent and does not require your Buzz/Nostr private key or write directly
+to the relay database. The public keys and retained
 credentials belong only to the integration.
 
 To install only the CLI and inspect the plan first:
@@ -114,19 +126,43 @@ sudo buzz-dkg status
 sudo buzz-dkg smoke
 ```
 
-A successful setup prints the managed channel ID and Context Graph ID. In a
-Buzz client, connect to the community's normal public relay URL and join the
-**Web of Trust** channel. Then test a thread with:
+A successful setup prints the seed channel ID and Context Graph ID. In a Buzz
+client, connect to the community's unchanged public relay URL. A compatible
+Buzz agent detects the relay capability and, after each normal channel turn,
+privately submits a signed semantic proposal referencing the exact signed chat
+events it used. The relay verifies authentication, membership, channel access,
+proposal signature, and source-event binding. The integration then creates the
+channel's private Context Graph if needed and promotes the proposal through
+Working Memory into Shared Working Memory without posting another chat message.
+
+No `@dkg distill` command is required for these agent turns. Human-only chats
+keep the existing explicit workflow in the seeded **Web of Trust** channel
+during the beta:
 
 ```text
 @dkg distill
 @dkg ask <a question answered by the distilled thread>
 ```
 
-The smoke check performs the same real relay-to-DKG path with a synthetic
-decision, verifies its Shared Working Memory receipt and citation, and confirms
-that unsupported questions are refused. Verifiable Memory publication remains
-disabled, so the beta does not spend gas or write on-chain.
+The smoke check performs the existing command path and, when the relay
+advertises agent memory, also submits a real signed kind-`40009` proposal through
+the authenticated relay endpoint and reads the resulting channel memory back.
+Verifiable Memory publication remains disabled, so the beta does not spend gas
+or write on-chain.
+
+Agents can also submit explicitly through the installed Buzz CLI:
+
+```bash
+buzz memory propose \
+  --channel <channel-uuid> \
+  --source <signed-source-event-id> \
+  --input proposal.json
+```
+
+The proposal contains a short summary plus typed decisions, claims, questions,
+tasks, and relationships. It contains no hidden reasoning, secrets, or raw tool
+traces. Multiple agents may contribute to the same channel graph; the signed
+proposal and source events preserve who asserted what.
 
 ## Operate or stop it
 
@@ -153,9 +189,13 @@ host's protected backup policy.
 - On a closed relay, both managed identities appear exactly once in the relay
   membership list after installation and after a rerun.
 - `buzz-dkg status` reports the expected relay and DKG role/version.
+- `buzz-dkg status` reports the agent memory proxy and automatic private channel
+  graphs as enabled.
 - `buzz-dkg smoke` passes.
-- A Buzz user can join **Web of Trust**, distill a thread, and ask a grounded
-  question with a Context Graph citation.
+- A Buzz agent can answer normally in any channel and its signed proposal
+  appears only in that channel's Context Graph without a second chat message.
+- A Buzz user can query grounded channel memory through the authenticated relay
+  proxy; direct DKG credentials are never exposed to the app.
 - Restarting the host and rerunning `buzz-dkg install` do not create duplicate
   channels or graphs.
 - `buzz-dkg remove` stops only the sidecar and leaves relay/DKG data intact.

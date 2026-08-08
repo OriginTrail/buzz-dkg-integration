@@ -78,6 +78,11 @@ export class Registry {
         outcome TEXT NOT NULL, -- 'answered' | 'refused' | 'pending'
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS agent_memory (
+        proposal_event_id TEXT PRIMARY KEY,
+        envelope_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
       INSERT OR IGNORE INTO cursor (id, last_created_at) VALUES (1, 0);
     `);
     // Additive migrations for DBs created before these columns existed. SQLite
@@ -124,6 +129,58 @@ export class Registry {
       .prepare('SELECT context_graph_id FROM channels WHERE channel_id = ?')
       .get(channelId) as { context_graph_id: string } | undefined;
     return row?.context_graph_id ?? null;
+  }
+
+  /** Persist a lazily provisioned mapping; safe under concurrent first use. */
+  bindChannel(channelId: string, contextGraphId: string): void {
+    const existing = this.contextGraphFor(channelId);
+    if (existing && existing !== contextGraphId) {
+      throw new Error(`channel '${channelId}' is already bound to '${existing}'`);
+    }
+    const collision = this.db
+      .prepare('SELECT channel_id FROM channels WHERE context_graph_id = ? AND channel_id <> ?')
+      .get(contextGraphId, channelId) as { channel_id: string } | undefined;
+    if (collision)
+      throw new Error(`context graph '${contextGraphId}' is already bound to another channel`);
+    this.db
+      .prepare('INSERT OR IGNORE INTO channels (channel_id, context_graph_id) VALUES (?, ?)')
+      .run(channelId, contextGraphId);
+  }
+
+  bindings(): ChannelBinding[] {
+    const rows = this.db
+      .prepare('SELECT channel_id, context_graph_id FROM channels ORDER BY channel_id')
+      .all() as {
+      channel_id: string;
+      context_graph_id: string;
+    }[];
+    return rows.map((row) => ({
+      channelId: row.channel_id,
+      contextGraphId: row.context_graph_id,
+      promoters: this.promotersFor(row.channel_id),
+    }));
+  }
+
+  saveAgentMemoryEnvelope(proposalEventId: string, envelope: unknown): void {
+    const json = JSON.stringify(envelope);
+    const existing = this.db
+      .prepare('SELECT envelope_json FROM agent_memory WHERE proposal_event_id = ?')
+      .get(proposalEventId) as { envelope_json: string } | undefined;
+    if (existing && existing.envelope_json !== json) {
+      throw new Error(`proposal event '${proposalEventId}' was replayed with different evidence`);
+    }
+    this.db
+      .prepare(
+        'INSERT OR IGNORE INTO agent_memory (proposal_event_id, envelope_json, created_at) VALUES (?, ?, ?)',
+      )
+      .run(proposalEventId, json, Date.now());
+  }
+
+  agentMemoryEnvelope(proposalEventId: string): unknown | null {
+    const row = this.db
+      .prepare('SELECT envelope_json FROM agent_memory WHERE proposal_event_id = ?')
+      .get(proposalEventId) as { envelope_json: string } | undefined;
+    return row ? (JSON.parse(row.envelope_json) as unknown) : null;
   }
 
   promotersFor(channelId: string): string[] {
