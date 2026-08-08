@@ -57,7 +57,8 @@ export interface AgentMemoryEnvelope {
 
 export interface AgentMemoryIngestResult {
   ok: true;
-  outcome: 'stored' | 'duplicate';
+  /** `accepted` is durably queued; `duplicate` reuses the existing operation. */
+  outcome: 'accepted' | 'duplicate';
   proposalEventId: string;
   channelId: string;
   requesterPubkey: string;

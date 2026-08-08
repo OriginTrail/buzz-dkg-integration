@@ -176,21 +176,23 @@ if (relayInfo?.supported_extensions?.includes('buzz-dkg-memory-v1')) {
     model: 'installer-smoke',
     promptVersion: 'agent-memory-v1',
   });
-  if (proposal.res?.ok !== true || proposal.res?.state !== 'receipted') {
-    throw new Error('agent memory proposal did not reach Shared Working Memory');
+  if (proposal.res?.ok !== true || !['accepted', 'duplicate'].includes(proposal.res?.outcome)) {
+    throw new Error('agent memory proposal was not durably accepted');
   }
-  const memory = await owner.postAuthed('/api/dkg/query', {
-    channelId,
-    operation: 'channel_memory',
-    arguments: {},
-  });
-  if (
-    !memory?.result?.decisions?.some(
-      (decision) => decision.name === `Agent-native memory canary ${runId}`,
-    )
-  ) {
-    throw new Error('agent memory was not visible through the scoped Buzz query proxy');
-  }
+  await waitFor(
+    'agent memory in the scoped Buzz query proxy',
+    async () => {
+      const memory = await owner.postAuthed('/api/dkg/query', {
+        channelId,
+        operation: 'channel_memory',
+        arguments: {},
+      });
+      return memory?.result?.decisions?.some(
+        (decision) => decision.name === `Agent-native memory canary ${runId}`,
+      );
+    },
+    6 * 60_000,
+  );
   agentMemory = {
     proposalEventId: proposal.event.id,
     kaName: proposal.res.kaName,

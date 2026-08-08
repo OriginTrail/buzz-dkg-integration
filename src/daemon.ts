@@ -49,6 +49,7 @@ export class Daemon {
   #queue: Promise<void> = Promise.resolve();
   #chainId: string | undefined;
   readonly #graphProvisioning = new Map<string, Promise<string>>();
+  readonly #scheduledAgentMemory = new Set<string>();
 
   constructor(
     config: DaemonConfig,
@@ -86,16 +87,37 @@ export class Daemon {
   }
 
   /**
-   * Submit work through the same serialized lifecycle as relay events while
-   * preserving an HTTP-visible result/error for the authenticated caller.
+   * Durably accept a proposal, then run the potentially slow DKG lifecycle on
+   * the daemon queue. Production Core nodes can take minutes to finalize/share;
+   * a Buzz agent should receive an acknowledgement, not hold an HTTP socket.
    */
-  submitAgentMemory(raw: unknown): Promise<AgentMemoryIngestResult> {
-    const operation = this.#queue.then(() => this.ingestAgentMemory(raw));
+  async submitAgentMemory(raw: unknown): Promise<AgentMemoryIngestResult> {
+    const accepted = await this.acceptAgentMemory(raw);
+    if (!['receipted', 'failed'].includes(accepted.op.state)) {
+      this.scheduleAgentMemory(accepted.op.triggerEventId);
+    }
+    return accepted.result;
+  }
+
+  private scheduleAgentMemory(triggerEventId: string): void {
+    if (this.#scheduledAgentMemory.has(triggerEventId)) return;
+    this.#scheduledAgentMemory.add(triggerEventId);
+    const operation = this.#queue.then(async () => {
+      const op = this.registry.opByTrigger(triggerEventId);
+      if (op && !['receipted', 'failed'].includes(op.state)) await this.executeAgentMemory(op);
+    });
     this.#queue = operation.then(
-      () => undefined,
-      (error) => logger.error('agent memory ingestion failed', { err: String(error) }),
+      () => {
+        this.#scheduledAgentMemory.delete(triggerEventId);
+      },
+      (error) => {
+        this.#scheduledAgentMemory.delete(triggerEventId);
+        logger.error('agent memory background execution failed; recovery will retry it', {
+          triggerEventId,
+          err: String(error),
+        });
+      },
     );
-    return operation;
   }
 
   /** Resolve or lazily provision the private Context Graph for one Buzz channel. */
@@ -342,7 +364,10 @@ export class Daemon {
     await this.executeOp(op, events);
   }
 
-  private async ingestAgentMemory(raw: unknown): Promise<AgentMemoryIngestResult> {
+  private async acceptAgentMemory(raw: unknown): Promise<{
+    result: AgentMemoryIngestResult;
+    op: OpRecord;
+  }> {
     const parsed = parseAgentMemoryEnvelope(raw);
     const { envelope, proposal } = parsed;
     this.registry.saveAgentMemoryEnvelope(envelope.proposalEvent.id, envelope);
@@ -383,23 +408,22 @@ export class Daemon {
         'proposal event was already recorded with different content',
       );
     }
-    if (!['receipted', 'failed'].includes(op.state)) {
-      await this.executeAgentMemory(op, parsed);
-      op = this.registry.opByTrigger(envelope.proposalEvent.id)!;
-    }
     if (op.state === 'failed') {
       throw new QueryGatewayError(409, 'proposal_failed', op.error ?? 'proposal ingestion failed');
     }
     return {
-      ok: true,
-      outcome: duplicate ? 'duplicate' : 'stored',
-      proposalEventId: envelope.proposalEvent.id,
-      channelId: envelope.channelId,
-      requesterPubkey: envelope.requesterPubkey,
-      contextGraphId,
-      kaName: op.kaName,
-      digest: op.digest,
-      state: op.state,
+      op,
+      result: {
+        ok: true,
+        outcome: duplicate ? 'duplicate' : 'accepted',
+        proposalEventId: envelope.proposalEvent.id,
+        channelId: envelope.channelId,
+        requesterPubkey: envelope.requesterPubkey,
+        contextGraphId,
+        kaName: op.kaName,
+        digest: op.digest,
+        state: op.state,
+      },
     };
   }
 

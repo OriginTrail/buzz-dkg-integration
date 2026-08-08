@@ -262,24 +262,24 @@ describe('query gateway HTTP boundary', () => {
         submitted.push(raw);
         return {
           ok: true,
-          outcome: 'stored',
+          outcome: 'accepted',
           proposalEventId: '11'.repeat(32),
           channelId: 'c69311ba-a5a2-4b2a-a27f-99f7669af643',
           requesterPubkey: REQUESTER,
           contextGraphId: 'buzz-memory-graph',
           kaName: 'buzz-dkg-memory',
           digest: '22'.repeat(32),
-          state: 'receipted',
+          state: 'distilled',
         };
       },
     );
     const payload = { signed: 'envelope' };
     const response = await request(url.replace('/v1/query', '/v1/memory'), payload);
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(202);
     expect(submitted).toEqual([payload]);
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
-      outcome: 'stored',
+      outcome: 'accepted',
       requesterPubkey: REQUESTER,
     });
 

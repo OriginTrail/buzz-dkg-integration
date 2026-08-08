@@ -134,6 +134,8 @@ events it used. The relay verifies authentication, membership, channel access,
 proposal signature, and source-event binding. The integration then creates the
 channel's private Context Graph if needed and promotes the proposal through
 Working Memory into Shared Working Memory without posting another chat message.
+The authenticated request returns as soon as the proposal is durably accepted;
+the bounded DKG lifecycle continues in the background and is crash-recoverable.
 
 No `@dkg distill` command is required for these agent turns. Human-only chats
 keep the existing explicit workflow in the seeded **Web of Trust** channel

@@ -22,9 +22,10 @@ settings are `BDI_QUERY_GATEWAY_MAX_BODY_BYTES`,
 `BDI_QUERY_GATEWAY_MAX_CONCURRENT`.
 
 The installer uses a 120-second end-to-end gateway deadline. Individual DKG
-lifecycle calls use a 60-second deadline; this leaves enough room for observed
-30-second-plus finalize operations on a production Core node while keeping
-every network wait bounded.
+lifecycle calls use a 180-second deadline. Memory submission returns HTTP `202`
+after the signed envelope and operation intent are durably recorded; slow
+finalize/share work continues on the crash-recoverable daemon queue rather than
+holding the agent's HTTP request open.
 
 A same-host Buzz authorization front should use:
 

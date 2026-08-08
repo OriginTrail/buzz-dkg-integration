@@ -162,12 +162,13 @@ describe('automatic channel memory lifecycle', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      outcome: 'stored',
+      outcome: 'accepted',
       channelId: CHANNEL,
       requesterPubkey: PUBKEY,
       contextGraphId: expectedGraph,
-      state: 'receipted',
+      state: 'distilled',
     });
+    await daemon.drain();
     expect(dkg.createdContextGraphs).toEqual([
       expect.objectContaining({
         id: expectedGraph,
@@ -187,6 +188,7 @@ describe('automatic channel memory lifecycle', () => {
 
     const replay = await daemon.submitAgentMemory(request);
     expect(replay.outcome).toBe('duplicate');
+    expect(replay.state).toBe('receipted');
     expect(dkg.createdContextGraphs).toHaveLength(1);
     expect(dkg.kas.get(result.kaName)?.writes).toBe(1);
   });
@@ -198,5 +200,6 @@ describe('automatic channel memory lifecycle', () => {
     const second = await daemon.submitAgentMemory(envelope({ channelId: other }));
     expect(first.contextGraphId).not.toBe(second.contextGraphId);
     expect(dkg.createdContextGraphs).toHaveLength(2);
+    await daemon.drain();
   });
 });

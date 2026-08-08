@@ -204,12 +204,14 @@ export class QueryGateway {
       counted = true;
       const raw = await readJsonBody(req, this.config.maxBodyBytes);
       let output: unknown;
+      let responseStatus = 200;
       if (url.pathname === '/v1/memory') {
         if (!this.#submitAgentMemory) {
           throw new QueryGatewayError(404, 'memory_disabled', 'agent memory ingestion is disabled');
         }
         const memory = await this.#submitAgentMemory(raw);
         output = memory;
+        responseStatus = memory.state === 'receipted' ? 200 : 202;
         audit = {
           channelId: memory.channelId,
           operation: 'agent_memory',
@@ -229,7 +231,7 @@ export class QueryGateway {
       if (resultBytes > this.config.maxResultBytes) {
         throw new QueryGatewayError(502, 'result_too_large', 'query result exceeds the limit');
       }
-      res.writeHead(200, {
+      res.writeHead(responseStatus, {
         ...JSON_HEADERS,
         'content-length': String(resultBytes),
       });
