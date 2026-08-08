@@ -1,6 +1,6 @@
 /** Canonical authenticated HTTP transport shared by the daemon and bootstraps. */
 export class DkgHttpTransport {
-  constructor({ baseUrl, token, timeoutMs = 30_000, fetchImpl = fetch }) {
+  constructor({ baseUrl, token, timeoutMs = 60_000, fetchImpl = fetch }) {
     this.baseUrl = baseUrl.replace(/\/$/, '');
     this.token = token;
     this.timeoutMs = timeoutMs;

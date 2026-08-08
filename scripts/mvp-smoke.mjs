@@ -79,19 +79,11 @@ await owner.query([{ kinds: [39000], '#d': [channelId], limit: 1 }]);
 
 const runId = `${new Date().toISOString()}-${Math.random().toString(16).slice(2, 10)}`;
 console.log(`M0 smoke: channel=${channelId} run=${runId}`);
-
-const root = await owner.sendMessage(
-  channelId,
-  `M0 canary ${runId}: which authentication methods should the Buzz-DKG service support?`,
-);
-const rootId = root.res.event_id;
-await owner.sendMessage(
-  channelId,
-  'DECISION: the Buzz-DKG service supports NIP-42 for WebSockets and NIP-98 for HTTP.',
-  { root: rootId, replyTo: rootId },
-);
-const pin = await owner.pinMessage(channelId, rootId);
-if (!pin.res.accepted) throw new Error('relay rejected the canary pin');
+const agentMemoryOnly = env.BDI_SMOKE_AGENT_MEMORY_ONLY === 'true';
+let rootId = null;
+let receipt = null;
+let answer = null;
+let refusal = null;
 
 const serviceReplies = async (targetId) =>
   (
@@ -100,53 +92,68 @@ const serviceReplies = async (targetId) =>
     ])
   ).sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
 
-const receipt = await waitFor('one SWM receipt', async () => {
-  const replies = await serviceReplies(rootId);
-  return replies.find((event) => event.content.includes('Distilled to Shared Working Memory.'));
-});
-await sleep(1_500);
-const captureReplies = await serviceReplies(rootId);
-const duplicateReceipts = captureReplies.filter((event) =>
-  event.content.includes('Distilled to Shared Working Memory.'),
-);
-if (duplicateReceipts.length !== 1) {
-  throw new Error(`expected one SWM receipt, found ${duplicateReceipts.length}`);
-}
-if (captureReplies.some((event) => event.content.includes('Published to Verifiable Memory.'))) {
-  throw new Error('unexpected VM publication receipt while M0 publication is disabled');
-}
-console.log(`✓ capture receipt ${receipt.id.slice(0, 12)}… (no duplicate, no VM receipt)`);
+if (!agentMemoryOnly) {
+  const root = await owner.sendMessage(
+    channelId,
+    `M0 canary ${runId}: which authentication methods should the Buzz-DKG service support?`,
+  );
+  rootId = root.res.event_id;
+  await owner.sendMessage(
+    channelId,
+    'DECISION: the Buzz-DKG service supports NIP-42 for WebSockets and NIP-98 for HTTP.',
+    { root: rootId, replyTo: rootId },
+  );
+  const pin = await owner.pinMessage(channelId, rootId);
+  if (!pin.res.accepted) throw new Error('relay rejected the canary pin');
 
-const ask = await owner.sendMessage(
-  channelId,
-  askCommand('what authentication methods did we decide the service should support?', env),
-  { mentions: [service.pubkey] },
-);
-const answer = await waitFor('grounded answer', async () => {
-  const replies = await serviceReplies(ask.res.event_id);
-  return replies[0];
-});
-if (
-  !answer.content.includes('Cited (context-graph-scoped):') ||
-  !/^\[1\] urn:buzz-dkg:decision:[0-9a-f]{64}\b/m.test(answer.content)
-) {
-  throw new Error('grounded answer did not include a context-graph-scoped citation');
-}
-console.log(`✓ grounded answer ${answer.id.slice(0, 12)}… includes a scoped citation`);
+  receipt = await waitFor('one SWM receipt', async () => {
+    const replies = await serviceReplies(rootId);
+    return replies.find((event) => event.content.includes('Distilled to Shared Working Memory.'));
+  });
+  await sleep(1_500);
+  const captureReplies = await serviceReplies(rootId);
+  const duplicateReceipts = captureReplies.filter((event) =>
+    event.content.includes('Distilled to Shared Working Memory.'),
+  );
+  if (duplicateReceipts.length !== 1) {
+    throw new Error(`expected one SWM receipt, found ${duplicateReceipts.length}`);
+  }
+  if (captureReplies.some((event) => event.content.includes('Published to Verifiable Memory.'))) {
+    throw new Error('unexpected VM publication receipt while M0 publication is disabled');
+  }
+  console.log(`✓ capture receipt ${receipt.id.slice(0, 12)}… (no duplicate, no VM receipt)`);
 
-const unsupportedAsk = await owner.sendMessage(
-  channelId,
-  askCommand('what is the office Wi-Fi password?', env),
-  { mentions: [service.pubkey] },
-);
-const refusal = await waitFor('unsupported-question refusal', async () => {
-  const replies = await serviceReplies(unsupportedAsk.res.event_id);
-  return replies[0];
-});
-if (!/can't answer/i.test(refusal.content)) {
-  throw new Error('unsupported question was not explicitly refused');
+  const ask = await owner.sendMessage(
+    channelId,
+    askCommand('what authentication methods did we decide the service should support?', env),
+    { mentions: [service.pubkey] },
+  );
+  answer = await waitFor('grounded answer', async () => {
+    const replies = await serviceReplies(ask.res.event_id);
+    return replies[0];
+  });
+  if (
+    !answer.content.includes('Cited (context-graph-scoped):') ||
+    !/^\[1\] urn:buzz-dkg:decision:[0-9a-f]{64}\b/m.test(answer.content)
+  ) {
+    throw new Error('grounded answer did not include a context-graph-scoped citation');
+  }
+  console.log(`✓ grounded answer ${answer.id.slice(0, 12)}… includes a scoped citation`);
+
+  const unsupportedAsk = await owner.sendMessage(
+    channelId,
+    askCommand('what is the office Wi-Fi password?', env),
+    { mentions: [service.pubkey] },
+  );
+  refusal = await waitFor('unsupported-question refusal', async () => {
+    const replies = await serviceReplies(unsupportedAsk.res.event_id);
+    return replies[0];
+  });
+  if (!/can't answer/i.test(refusal.content)) {
+    throw new Error('unsupported question was not explicitly refused');
+  }
+  console.log(`✓ unsupported question refused ${refusal.id.slice(0, 12)}…`);
 }
-console.log(`✓ unsupported question refused ${refusal.id.slice(0, 12)}…`);
 
 let agentMemory = null;
 const relayInfo = await fetch(`${buzzHttp}/info`, {
@@ -201,9 +208,9 @@ const result = {
   channelId,
   contextGraphId: String(bindings[0].contextGraphId),
   rootEventId: rootId,
-  receiptEventId: receipt.id,
-  answerEventId: answer.id,
-  refusalEventId: refusal.id,
+  receiptEventId: receipt?.id ?? null,
+  answerEventId: answer?.id ?? null,
+  refusalEventId: refusal?.id ?? null,
   publicationMode: 'disabled',
   agentMemory,
 };

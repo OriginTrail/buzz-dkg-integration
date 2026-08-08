@@ -297,7 +297,7 @@ async function configureRelayDkgProxy(context, plan, secrets) {
     '    environment:',
     '      BUZZ_DKG_QUERY_URL: http://127.0.0.1:9297/v1/query',
     `      BUZZ_DKG_QUERY_TOKEN: ${JSON.stringify(secrets.BDI_QUERY_GATEWAY_TOKEN)}`,
-    '      BUZZ_DKG_QUERY_TIMEOUT_MS: "60000"',
+    '      BUZZ_DKG_QUERY_TIMEOUT_MS: "120000"',
     '      BUZZ_DKG_MEMORY_ENABLED: "true"',
     '',
   ].join('\n');
@@ -613,7 +613,7 @@ export async function install(options, prompt, context = installContext) {
     BDI_QUERY_GATEWAY_BIND: '127.0.0.1',
     BDI_QUERY_GATEWAY_PORT: '9296',
     BDI_QUERY_GATEWAY_MAX_BODY_BYTES: String(256 * 1024),
-    BDI_QUERY_GATEWAY_TIMEOUT_MS: '60000',
+    BDI_QUERY_GATEWAY_TIMEOUT_MS: '120000',
     BUZZ_DKG_RELAY_CONTAINER:
       plan.relayManagement?.containerName || plan.relayManagement?.containerId || '',
   });

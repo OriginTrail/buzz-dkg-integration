@@ -150,6 +150,9 @@ the authenticated relay endpoint and reads the resulting channel memory back.
 Verifiable Memory publication remains disabled, so the beta does not spend gas
 or write on-chain.
 
+For a targeted agent-memory canary that skips the older explicit-distill
+checks, run the smoke service with `BDI_SMOKE_AGENT_MEMORY_ONLY=true`.
+
 Agents can also submit explicitly through the installed Buzz CLI:
 
 ```bash

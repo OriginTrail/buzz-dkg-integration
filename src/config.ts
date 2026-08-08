@@ -93,7 +93,7 @@ export function loadQueryGatewayConfig(env: NodeJS.ProcessEnv): QueryGatewayConf
     env.BDI_QUERY_GATEWAY_TIMEOUT_MS,
     15_000,
     1_000,
-    60_000,
+    120_000,
   );
   const dkgTimeoutMs = envInteger(
     'BDI_QUERY_GATEWAY_DKG_TIMEOUT_MS',
