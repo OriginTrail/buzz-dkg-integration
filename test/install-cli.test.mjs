@@ -490,6 +490,24 @@ describe('Buzz-first installer CLI', () => {
     );
   });
 
+  it('fails closed when a restarted managed relay lacks the memory capability', async () => {
+    const f = fixture();
+    const api = await apiServer('edge', { supportedExtensions: [] });
+    configureBuzzRelay(f, api, { membershipRequired: false, compose: true });
+    const result = await runInstaller(f, [
+      'install',
+      '--relay',
+      api,
+      '--dkg-api',
+      api,
+      '--dkg-token-path',
+      f.token,
+      '--yes',
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('does not advertise buzz-dkg-memory-v1');
+  });
+
   it('enrolls stable managed identities through the native Buzz admin CLI on a closed relay', async () => {
     const f = fixture();
     const api = await apiServer();

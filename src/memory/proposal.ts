@@ -11,10 +11,11 @@ import {
   pubkeyUri,
   sourceSetDigest,
 } from '../distill/deterministic.ts';
-import { QueryGatewayError } from '../query-gateway/service.ts';
+import { IntegrationApiError } from '../errors.ts';
 import type {
   AgentMemoryEnvelope,
   AgentMemoryItem,
+  AgentMemoryItemKind,
   AgentMemoryProposal,
   DistillResult,
   NostrEvent,
@@ -29,7 +30,7 @@ const MAX_SOURCES = 16;
 const MAX_ITEMS = 50;
 
 function invalid(message: string): never {
-  throw new QueryGatewayError(400, 'invalid_memory_proposal', message);
+  throw new IntegrationApiError(400, 'invalid_memory_proposal', message);
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -70,26 +71,39 @@ function parseItem(raw: unknown, index: number): AgentMemoryItem {
   if (typeof value.kind !== 'string' || !ITEM_KINDS.has(value.kind)) {
     invalid(`items[${index}].kind is invalid`);
   }
-  const item: AgentMemoryItem = {
-    kind: value.kind as AgentMemoryItem['kind'],
-    text: text(value.text, `items[${index}].text`, 2_000),
-  };
+  const kind = value.kind as AgentMemoryItemKind;
+  const itemText = text(value.text, `items[${index}].text`, 2_000);
   const subject = optionalText(value.subject, `items[${index}].subject`, 500);
   const predicate = optionalText(value.predicate, `items[${index}].predicate`, 200);
   const itemObject = optionalText(value.object, `items[${index}].object`, 500);
-  if (subject) item.subject = subject;
-  if (predicate) item.predicate = predicate;
-  if (itemObject) item.object = itemObject;
+  let confidence: number | undefined;
   if (value.confidence !== undefined) {
     if (typeof value.confidence !== 'number' || value.confidence < 0 || value.confidence > 1) {
       invalid(`items[${index}].confidence must be between 0 and 1`);
     }
-    item.confidence = value.confidence;
+    confidence = value.confidence;
   }
-  if (item.kind === 'relationship' && (!subject || !predicate || !itemObject)) {
-    invalid(`items[${index}] relationships require subject, predicate and object`);
+  if (kind === 'relationship') {
+    if (!subject || !predicate || !itemObject) {
+      invalid(`items[${index}] relationships require subject, predicate and object`);
+    }
+    return {
+      kind,
+      text: itemText,
+      subject,
+      predicate,
+      object: itemObject,
+      ...(confidence === undefined ? {} : { confidence }),
+    };
   }
-  return item;
+  return {
+    kind,
+    text: itemText,
+    ...(subject ? { subject } : {}),
+    ...(predicate ? { predicate } : {}),
+    ...(itemObject ? { object: itemObject } : {}),
+    ...(confidence === undefined ? {} : { confidence }),
+  };
 }
 
 export function parseAgentMemoryProposal(content: string): AgentMemoryProposal {
@@ -138,7 +152,17 @@ function parseEvent(raw: unknown, label: string): NostrEvent {
     invalid(`${label}.tags is invalid`);
   }
   if (!verifyEvent(event as SignedNostrEvent)) invalid(`${label} signature or event id is invalid`);
-  return event;
+  // Rebuild in a fixed field order so semantically identical JSON objects have
+  // one durable representation for idempotency checks.
+  return {
+    id: event.id,
+    pubkey: event.pubkey,
+    created_at: event.created_at,
+    kind: event.kind,
+    tags: event.tags.map((tag) => [...tag]),
+    content: event.content,
+    sig: event.sig,
+  };
 }
 
 function tagValues(event: NostrEvent, name: string): string[] {
@@ -201,8 +225,12 @@ export function parseAgentMemoryEnvelope(raw: unknown): {
   if (!sourceEvents.some((event) => event.pubkey === requesterPubkey)) {
     invalid('at least one source event must be authored by the proposing agent');
   }
+  // The signed proposal tag order is authoritative. Relay/database row order
+  // is a transport detail and must not turn a legitimate retry into a conflict.
+  const sourcesById = new Map(sourceEvents.map((event) => [event.id, event]));
+  const orderedSourceEvents = referenced.map((id) => sourcesById.get(id)!);
   return {
-    envelope: { channelId, requesterPubkey, proposalEvent, sourceEvents },
+    envelope: { channelId, requesterPubkey, proposalEvent, sourceEvents: orderedSourceEvents },
     proposal: parseAgentMemoryProposal(proposalEvent.content),
   };
 }

@@ -1,5 +1,6 @@
 import type { DkgClient } from '../dkg/client.ts';
-import type { ChannelBinding, QueryGatewayConfig } from '../types.ts';
+import { IntegrationApiError } from '../errors.ts';
+import type { QueryGatewayConfig } from '../types.ts';
 import type {
   ChannelMemoryResult,
   ContributorSummary,
@@ -46,20 +47,8 @@ const NOSTR = 'https://w3id.org/buzz-dkg/nostr#';
 const PROV = 'http://www.w3.org/ns/prov#';
 const SCHEMA = 'http://schema.org/';
 
-export class QueryGatewayError extends Error {
-  readonly status: number;
-  readonly code: string;
-
-  constructor(status: number, code: string, message: string) {
-    super(message);
-    this.name = 'QueryGatewayError';
-    this.status = status;
-    this.code = code;
-  }
-}
-
 function invalid(message: string): never {
-  throw new QueryGatewayError(400, 'invalid_request', message);
+  throw new IntegrationApiError(400, 'invalid_request', message);
 }
 
 function plainObject(value: unknown): value is Record<string, unknown> {
@@ -192,11 +181,11 @@ function safeDerivedIri(value: string): boolean {
   return SAFE_IRI.test(value);
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+export function withGatewayTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new QueryGatewayError(504, 'gateway_timeout', 'query operation timed out')),
+      () => reject(new IntegrationApiError(504, 'gateway_timeout', 'operation timed out')),
       timeoutMs,
     );
   });
@@ -211,38 +200,29 @@ export class QueryGatewayService {
   readonly config: EnabledGatewayConfig;
 
   constructor(
-    bindings:
-      readonly ChannelBinding[] | ((channelId: string) => string | null | Promise<string | null>),
+    resolveContextGraph: (channelId: string) => string | null | Promise<string | null>,
     dkg: DkgClient,
     config: EnabledGatewayConfig,
   ) {
     this.dkg = dkg;
     this.config = config;
-    if (typeof bindings === 'function') {
-      this.#resolveContextGraph = bindings;
-    } else {
-      const mapped = new Map<string, string>();
-      for (const binding of bindings) {
-        if (mapped.has(binding.channelId)) {
-          throw new Error(`duplicate query-gateway channel binding '${binding.channelId}'`);
-        }
-        mapped.set(binding.channelId, binding.contextGraphId);
-      }
-      this.#resolveContextGraph = (channelId) => mapped.get(channelId) ?? null;
-    }
+    this.#resolveContextGraph = resolveContextGraph;
   }
 
   async execute(input: unknown): Promise<QueryGatewaySuccess> {
     const request = parseQueryGatewayRequest(input);
     const cg = await this.#resolveContextGraph(request.channelId);
     if (!cg) {
-      throw new QueryGatewayError(
+      throw new IntegrationApiError(
         404,
         'unknown_channel',
         'channel is not configured for DKG queries',
       );
     }
-    const result = await withTimeout(this.dispatch(cg, request), this.config.operationTimeoutMs);
+    const result = await withGatewayTimeout(
+      this.dispatch(cg, request),
+      this.config.operationTimeoutMs,
+    );
     return {
       ok: true,
       channelId: request.channelId,
@@ -274,7 +254,11 @@ export class QueryGatewayService {
     subGraphName?: string,
   ): Promise<BindingRow[]> {
     if (Buffer.byteLength(sparql, 'utf8') > this.config.maxQueryBytes) {
-      throw new QueryGatewayError(500, 'query_bound_exceeded', 'internal query exceeded its bound');
+      throw new IntegrationApiError(
+        500,
+        'query_bound_exceeded',
+        'internal query exceeded its bound',
+      );
     }
     const response = await this.dkg.query(
       { contextGraphId: cg, view, sparql, ...(subGraphName ? { subGraphName } : {}) },

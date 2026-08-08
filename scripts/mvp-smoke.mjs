@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { askCommand } from './smoke-command.mjs';
+import { agentMemoryCapability, askCommand } from './smoke-command.mjs';
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const stateDir = process.env.BDI_MVP_STATE_DIR || join(repo, '.mvp');
@@ -159,7 +159,7 @@ let agentMemory = null;
 const relayInfo = await fetch(`${buzzHttp}/info`, {
   headers: { accept: 'application/nostr+json' },
 }).then((response) => (response.ok ? response.json() : null));
-if (relayInfo?.supported_extensions?.includes('buzz-dkg-memory-v1')) {
+if (agentMemoryCapability(relayInfo, agentMemoryOnly)) {
   const source = await owner.sendMessage(
     channelId,
     `Agent-memory canary ${runId}: use signed semantic proposals after every agent turn.`,

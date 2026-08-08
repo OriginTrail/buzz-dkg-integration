@@ -29,14 +29,25 @@ export const DKG_MEMORY_PROPOSAL_KIND = 40009;
 
 export type AgentMemoryItemKind = 'decision' | 'claim' | 'question' | 'task' | 'relationship';
 
-export interface AgentMemoryItem {
-  kind: AgentMemoryItemKind;
+interface AgentMemoryItemBase {
   text: string;
-  subject?: string;
-  predicate?: string;
-  object?: string;
   confidence?: number;
 }
+
+export type AgentMemoryItem =
+  | (AgentMemoryItemBase & {
+      kind: 'relationship';
+      subject: string;
+      predicate: string;
+      object: string;
+    })
+  | (AgentMemoryItemBase & {
+      kind: Exclude<AgentMemoryItemKind, 'relationship'>;
+      /** Optional structured labels; relationships require all three. */
+      subject?: string;
+      predicate?: string;
+      object?: string;
+    });
 
 /** Semantic memory emitted by a Buzz agent after a normal chat turn. */
 export interface AgentMemoryProposal {

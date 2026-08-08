@@ -6,15 +6,21 @@ import {
   contextGraphIdForChannel,
   parseAgentMemoryEnvelope,
 } from '../src/memory/proposal.ts';
+import { QueryGatewayService } from '../src/query-gateway/service.ts';
 import { DKG_MEMORY_PROPOSAL_KIND, type DaemonConfig, type NostrEvent } from '../src/types.ts';
 import { MockDkg, MockRelay, hexId } from './helpers.ts';
 
 const CHANNEL = 'c69311ba-a5a2-4b2a-a27f-99f7669af643';
 const SECRET = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 const PUBKEY = getPublicKey(SECRET);
+const OTHER_SECRET = Uint8Array.from({ length: 32 }, (_, index) => 255 - index);
 
 function signed(template: EventTemplate): NostrEvent {
   return finalizeEvent(template, SECRET) as NostrEvent;
+}
+
+function signedWith(template: EventTemplate, secret: Uint8Array): NostrEvent {
+  return finalizeEvent(template, secret) as NostrEvent;
 }
 
 function envelope(overrides: { proposalContent?: string; channelId?: string } = {}) {
@@ -151,9 +157,84 @@ describe('agent memory proposal contract', () => {
       /channelId is invalid/,
     );
   });
+
+  it('rejects tampered signatures and requester/source authentication mismatches', () => {
+    // JSON round-trip mirrors the HTTP boundary and removes nostr-tools'
+    // private verification cache symbol before tampering.
+    const tamperedSource = JSON.parse(JSON.stringify(envelope())) as ReturnType<typeof envelope>;
+    tamperedSource.sourceEvents[0] = {
+      ...tamperedSource.sourceEvents[0]!,
+      content: 'changed after signing',
+    };
+    expect(() => parseAgentMemoryEnvelope(tamperedSource)).toThrow(/signature or event id/);
+
+    const tamperedProposal = JSON.parse(JSON.stringify(envelope())) as ReturnType<typeof envelope>;
+    tamperedProposal.proposalEvent = {
+      ...tamperedProposal.proposalEvent,
+      content: '{"schemaVersion":1,"summary":"changed","items":[]}',
+    };
+    expect(() => parseAgentMemoryEnvelope(tamperedProposal)).toThrow(/signature or event id/);
+
+    const wrongRequester = envelope();
+    wrongRequester.requesterPubkey = '00'.repeat(32);
+    expect(() => parseAgentMemoryEnvelope(wrongRequester)).toThrow(/author.*requesterPubkey/);
+
+    const otherSource = signedWith(
+      {
+        kind: 9,
+        created_at: 1_788_000_020,
+        tags: [['h', CHANNEL]],
+        content: 'A source written by another participant.',
+      },
+      OTHER_SECRET,
+    );
+    const noRequesterSource = envelope();
+    noRequesterSource.sourceEvents = [otherSource];
+    noRequesterSource.proposalEvent = signed({
+      kind: DKG_MEMORY_PROPOSAL_KIND,
+      created_at: otherSource.created_at + 1,
+      tags: [
+        ['h', CHANNEL],
+        ['e', otherSource.id, '', 'source'],
+        ['t', 'dkg-memory-proposal'],
+      ],
+      content: noRequesterSource.proposalEvent.content,
+    });
+    expect(() => parseAgentMemoryEnvelope(noRequesterSource)).toThrow(/authored by the proposing/);
+  });
 });
 
 describe('automatic channel memory lifecycle', () => {
+  it('keeps an unknown-channel read side-effect-free', async () => {
+    const { daemon, dkg } = setup();
+    const service = new QueryGatewayService(
+      (channelId) => daemon.contextGraphForQuery(channelId),
+      dkg.asDkg(),
+      {
+        enabled: true,
+        bind: '127.0.0.1',
+        port: 0,
+        token: 'x'.repeat(32),
+        maxBodyBytes: 16_384,
+        maxResultBytes: 1_048_576,
+        maxQueryBytes: 8_192,
+        operationTimeoutMs: 1_000,
+        dkgTimeoutMs: 500,
+        maxConcurrent: 4,
+      },
+    );
+    await expect(
+      service.execute({
+        channelId: CHANNEL,
+        operation: 'channel_memory',
+        arguments: {},
+        requesterPubkey: PUBKEY,
+      }),
+    ).rejects.toMatchObject({ code: 'unknown_channel' });
+    expect(dkg.createdContextGraphs).toHaveLength(0);
+    expect(daemon.registry.contextGraphFor(CHANNEL)).toBeNull();
+  });
+
   it('provisions one private Context Graph and stores a proposal in SWM without a chat receipt', async () => {
     const { daemon, relay, dkg } = setup();
     const request = envelope();
@@ -201,5 +282,74 @@ describe('automatic channel memory lifecycle', () => {
     expect(first.contextGraphId).not.toBe(second.contextGraphId);
     expect(dkg.createdContextGraphs).toHaveLength(2);
     await daemon.drain();
+  });
+
+  it('treats reordered source events and JSON object keys as an idempotent retry', async () => {
+    const { daemon, dkg } = setup();
+    const request = envelope();
+    const second = signed({
+      kind: 9,
+      created_at: request.sourceEvents[0]!.created_at + 1,
+      tags: [['h', CHANNEL]],
+      content: 'The second signed source event.',
+    });
+    request.sourceEvents.push(second);
+    request.proposalEvent = signed({
+      kind: DKG_MEMORY_PROPOSAL_KIND,
+      created_at: second.created_at + 1,
+      tags: [
+        ['h', CHANNEL],
+        ['e', request.sourceEvents[0]!.id, '', 'source'],
+        ['e', second.id, '', 'source'],
+        ['t', 'dkg-memory-proposal'],
+      ],
+      content: request.proposalEvent.content,
+    });
+    const first = await daemon.submitAgentMemory(request);
+    await daemon.drain();
+
+    const retry = {
+      sourceEvents: [...request.sourceEvents].reverse().map((event) => ({
+        sig: event.sig,
+        content: event.content,
+        tags: event.tags,
+        kind: event.kind,
+        created_at: event.created_at,
+        pubkey: event.pubkey,
+        id: event.id,
+      })),
+      proposalEvent: {
+        sig: request.proposalEvent.sig,
+        content: request.proposalEvent.content,
+        tags: request.proposalEvent.tags,
+        kind: request.proposalEvent.kind,
+        created_at: request.proposalEvent.created_at,
+        pubkey: request.proposalEvent.pubkey,
+        id: request.proposalEvent.id,
+      },
+      requesterPubkey: request.requesterPubkey,
+      channelId: request.channelId,
+    };
+    const duplicate = await daemon.submitAgentMemory(retry);
+    expect(duplicate.outcome).toBe('duplicate');
+    expect(duplicate.kaName).toBe(first.kaName);
+    expect(dkg.kas.get(first.kaName)?.writes).toBe(1);
+  });
+
+  it('recovers a proposal interrupted after finalize without repeating completed steps', async () => {
+    const { daemon, dkg } = setup();
+    dkg.failShareOnce = new Error('transient share failure');
+    const accepted = await daemon.submitAgentMemory(envelope());
+    await daemon.drain();
+    expect(daemon.registry.opByTrigger(accepted.proposalEventId)?.state).toBe('finalized');
+
+    await daemon.recover();
+    expect(daemon.registry.opByTrigger(accepted.proposalEventId)?.state).toBe('receipted');
+    expect(dkg.kas.get(accepted.kaName)).toMatchObject({
+      writes: 1,
+      finalizes: 1,
+      shares: 1,
+      state: 'promoted',
+    });
   });
 });

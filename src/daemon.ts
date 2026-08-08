@@ -18,6 +18,7 @@ import {
   vmReceipt,
 } from './receipts/compose.ts';
 import { logger } from './log.ts';
+import { IntegrationApiError } from './errors.ts';
 import {
   DKG_MEMORY_PROPOSAL_KIND,
   type AgentMemoryIngestResult,
@@ -30,7 +31,6 @@ import {
   contextGraphIdForChannel,
   parseAgentMemoryEnvelope,
 } from './memory/proposal.ts';
-import { QueryGatewayError } from './query-gateway/service.ts';
 
 const CATCHUP_OVERLAP_S = 60;
 const CURSOR_SKEW_S = 300;
@@ -132,6 +132,11 @@ export class Daemon {
     );
     this.#graphProvisioning.set(channelId, operation);
     return operation;
+  }
+
+  /** Side-effect-free resolver used exclusively by read/query requests. */
+  contextGraphForQuery(channelId: string): string | null {
+    return this.registry.contextGraphFor(channelId);
   }
 
   private async provisionContextGraph(channelId: string): Promise<string> {
@@ -373,7 +378,7 @@ export class Daemon {
     this.registry.saveAgentMemoryEnvelope(envelope.proposalEvent.id, envelope);
     const contextGraphId = await this.ensureContextGraph(envelope.channelId);
     if (!contextGraphId) {
-      throw new QueryGatewayError(
+      throw new IntegrationApiError(
         404,
         'unknown_channel',
         'channel is not configured and automatic Context Graph provisioning is disabled',
@@ -402,14 +407,18 @@ export class Daemon {
       op.contextGraphId !== contextGraphId ||
       op.digest !== compiled.digest
     ) {
-      throw new QueryGatewayError(
+      throw new IntegrationApiError(
         409,
         'proposal_conflict',
         'proposal event was already recorded with different content',
       );
     }
     if (op.state === 'failed') {
-      throw new QueryGatewayError(409, 'proposal_failed', op.error ?? 'proposal ingestion failed');
+      throw new IntegrationApiError(
+        409,
+        'proposal_failed',
+        op.error ?? 'proposal ingestion failed',
+      );
     }
     return {
       op,

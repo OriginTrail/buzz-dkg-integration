@@ -2,9 +2,10 @@ import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { DkgClient } from '../dkg/client.ts';
+import { IntegrationApiError } from '../errors.ts';
 import { logger } from '../log.ts';
 import type { AgentMemoryIngestResult, ChannelBinding, QueryGatewayConfig } from '../types.ts';
-import { parseQueryGatewayRequest, QueryGatewayError, QueryGatewayService } from './service.ts';
+import { parseQueryGatewayRequest, QueryGatewayService, withGatewayTimeout } from './service.ts';
 
 type EnabledGatewayConfig = Extract<QueryGatewayConfig, { enabled: true }>;
 type GatewayLogger = Pick<typeof logger, 'info' | 'warn'>;
@@ -47,9 +48,9 @@ function responseJson(
   res.end(body);
 }
 
-function gatewayFailure(error: unknown): QueryGatewayError {
-  if (error instanceof QueryGatewayError) return error;
-  return new QueryGatewayError(502, 'upstream_failure', 'DKG query failed');
+function gatewayFailure(error: unknown): IntegrationApiError {
+  if (error instanceof IntegrationApiError) return error;
+  return new IntegrationApiError(502, 'upstream_failure', 'DKG query failed');
 }
 
 async function readJsonBody(req: IncomingMessage, maxBytes: number): Promise<unknown> {
@@ -57,10 +58,10 @@ async function readJsonBody(req: IncomingMessage, maxBytes: number): Promise<unk
   if (declared !== undefined) {
     const value = Number(declared);
     if (!Number.isSafeInteger(value) || value < 0) {
-      throw new QueryGatewayError(400, 'invalid_request', 'content-length is invalid');
+      throw new IntegrationApiError(400, 'invalid_request', 'content-length is invalid');
     }
     if (value > maxBytes) {
-      throw new QueryGatewayError(413, 'body_too_large', 'request body exceeds the limit');
+      throw new IntegrationApiError(413, 'body_too_large', 'request body exceeds the limit');
     }
   }
 
@@ -79,7 +80,7 @@ async function readJsonBody(req: IncomingMessage, maxBytes: number): Promise<unk
       bytes += buffer.length;
       if (bytes > maxBytes) {
         req.resume();
-        fail(new QueryGatewayError(413, 'body_too_large', 'request body exceeds the limit'));
+        fail(new IntegrationApiError(413, 'body_too_large', 'request body exceeds the limit'));
         return;
       }
       chunks.push(buffer);
@@ -89,14 +90,16 @@ async function readJsonBody(req: IncomingMessage, maxBytes: number): Promise<unk
       settled = true;
       resolve();
     });
-    req.on('aborted', () => fail(new QueryGatewayError(400, 'invalid_request', 'request aborted')));
-    req.on('error', () => fail(new QueryGatewayError(400, 'invalid_request', 'request failed')));
+    req.on('aborted', () =>
+      fail(new IntegrationApiError(400, 'invalid_request', 'request aborted')),
+    );
+    req.on('error', () => fail(new IntegrationApiError(400, 'invalid_request', 'request failed')));
   });
-  if (bytes === 0) throw new QueryGatewayError(400, 'invalid_request', 'request body is empty');
+  if (bytes === 0) throw new IntegrationApiError(400, 'invalid_request', 'request body is empty');
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
   } catch {
-    throw new QueryGatewayError(400, 'invalid_request', 'request body is not valid JSON');
+    throw new IntegrationApiError(400, 'invalid_request', 'request body is not valid JSON');
   }
 }
 
@@ -118,11 +121,16 @@ export class QueryGateway {
     } = {},
   ) {
     this.config = config;
-    this.#service = new QueryGatewayService(
-      dependencies.resolveContextGraph ?? bindings,
-      dkg,
-      config,
-    );
+    const mapped = new Map<string, string>();
+    for (const binding of bindings) {
+      if (mapped.has(binding.channelId)) {
+        throw new Error(`duplicate query-gateway channel binding '${binding.channelId}'`);
+      }
+      mapped.set(binding.channelId, binding.contextGraphId);
+    }
+    const resolveContextGraph =
+      dependencies.resolveContextGraph ?? ((channelId: string) => mapped.get(channelId) ?? null);
+    this.#service = new QueryGatewayService(resolveContextGraph, dkg, config);
     this.#submitAgentMemory = dependencies.submitAgentMemory;
     this.#log = dependencies.log ?? logger;
     this.#server = createServer((req, res) => void this.handle(req, res));
@@ -169,14 +177,14 @@ export class QueryGateway {
     let counted = false;
     try {
       if (!isLoopback(req.socket.remoteAddress)) {
-        throw new QueryGatewayError(403, 'loopback_required', 'loopback client required');
+        throw new IntegrationApiError(403, 'loopback_required', 'loopback client required');
       }
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       if (url.pathname !== '/v1/query' && url.pathname !== '/v1/memory') {
-        throw new QueryGatewayError(404, 'not_found', 'route not found');
+        throw new IntegrationApiError(404, 'not_found', 'route not found');
       }
       if (url.search) {
-        throw new QueryGatewayError(400, 'invalid_request', 'query parameters are not accepted');
+        throw new IntegrationApiError(400, 'invalid_request', 'query parameters are not accepted');
       }
       if (req.method !== 'POST') {
         responseJson(
@@ -188,17 +196,17 @@ export class QueryGateway {
         return;
       }
       if (!secretsEqual(bearer(req), this.config.token)) {
-        throw new QueryGatewayError(401, 'unauthorized', 'valid bearer token required');
+        throw new IntegrationApiError(401, 'unauthorized', 'valid bearer token required');
       }
       const contentType = String(req.headers['content-type'] ?? '')
         .split(';', 1)[0]
         ?.trim()
         .toLowerCase();
       if (contentType !== 'application/json') {
-        throw new QueryGatewayError(415, 'unsupported_media_type', 'application/json required');
+        throw new IntegrationApiError(415, 'unsupported_media_type', 'application/json required');
       }
       if (this.#inFlight >= this.config.maxConcurrent) {
-        throw new QueryGatewayError(429, 'busy', 'query gateway concurrency limit reached');
+        throw new IntegrationApiError(429, 'busy', 'query gateway concurrency limit reached');
       }
       this.#inFlight += 1;
       counted = true;
@@ -207,9 +215,16 @@ export class QueryGateway {
       let responseStatus = 200;
       if (url.pathname === '/v1/memory') {
         if (!this.#submitAgentMemory) {
-          throw new QueryGatewayError(404, 'memory_disabled', 'agent memory ingestion is disabled');
+          throw new IntegrationApiError(
+            404,
+            'memory_disabled',
+            'agent memory ingestion is disabled',
+          );
         }
-        const memory = await this.#submitAgentMemory(raw);
+        const memory = await withGatewayTimeout(
+          this.#submitAgentMemory(raw),
+          this.config.operationTimeoutMs,
+        );
         output = memory;
         responseStatus = memory.state === 'receipted' ? 200 : 202;
         audit = {
@@ -229,7 +244,7 @@ export class QueryGateway {
       const body = JSON.stringify(output);
       const resultBytes = Buffer.byteLength(body, 'utf8');
       if (resultBytes > this.config.maxResultBytes) {
-        throw new QueryGatewayError(502, 'result_too_large', 'query result exceeds the limit');
+        throw new IntegrationApiError(502, 'result_too_large', 'query result exceeds the limit');
       }
       res.writeHead(responseStatus, {
         ...JSON_HEADERS,
