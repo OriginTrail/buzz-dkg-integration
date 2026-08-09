@@ -15,11 +15,11 @@ not introduce a parallel `buzz-code:` namespace.
 
 ## Profile composition
 
-| Profile | Selected by | Purpose |
-| --- | --- | --- |
-| `dkg-memory@1` | Always | General decisions, claims, questions, tasks, relationships, evidence, and provenance |
+| Profile          | Selected by                             | Purpose                                                                                                |
+| ---------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `dkg-memory@1`   | Always                                  | General decisions, claims, questions, tasks, relationships, evidence, and provenance                   |
 | `dkg-software@1` | Agent when software evidence is present | Repositories, commits, pull requests, issues, packages, files, symbols, builds, tests, and deployments |
-| `buzz-nostr@1` | Buzz integration, never the LLM | Buzz channel and signed Nostr source-event provenance |
+| `buzz-nostr@1`   | Buzz integration, never the LLM         | Buzz channel and signed Nostr source-event provenance                                                  |
 
 Profiles are additive. A coding agent discussing an event or assigning a task
 can emit only general terms. A turn that connects an architectural decision to
@@ -60,8 +60,7 @@ predicate and deterministically mints RDF identifiers.
       "name": "Authentication gateway",
       "locator": {
         "kind": "code",
-        "repository": "acme/api",
-        "path": "packages/auth"
+        "package": "@acme/auth"
       }
     },
     {
@@ -70,9 +69,8 @@ predicate and deterministically mints RDF identifiers.
       "name": "verifyToken",
       "locator": {
         "kind": "code",
-        "repository": "acme/api",
-        "commit": "a1b2c3d4",
-        "path": "packages/auth/src/token.ts",
+        "package": "@acme/auth",
+        "path": "src/token.ts",
         "symbol": "verifyToken",
         "symbolKind": "function"
       }
@@ -92,7 +90,8 @@ predicate and deterministically mints RDF identifiers.
         "repository": "acme/api",
         "resource": "commit",
         "id": "a1b2c3d4"
-      }
+      },
+      "attributes": [{ "predicate": "schema:dateCreated", "value": "2026-07-14T10:15:00Z" }]
     }
   ],
   "relations": [
@@ -123,6 +122,7 @@ predicate and deterministically mints RDF identifiers.
 - 1 to 100 entities and 0 to 200 relations.
 - Local IDs match `[a-z][a-z0-9-]{0,63}` and are unique.
 - Types and predicates must be in the selected profiles' allowlists.
+- Literal attributes are also allowlisted and receive compiler-owned RDF datatypes.
 - Every relation endpoint must resolve to an entity in the proposal.
 - An optional relation confidence is a decimal from 0 through 1.
 - Text remains bounded by the existing 64 KiB proposal-event limit.
@@ -133,17 +133,17 @@ predicate and deterministically mints RDF identifiers.
 
 The compiler, not the LLM, owns identifiers.
 
-| Locator | Canonical identifier |
-| --- | --- |
-| GitHub repository | `urn:dkg:github:repo:<owner>/<repo>` |
-| Pull request | `urn:dkg:github:pr:<owner>/<repo>/<number>` |
-| Issue | `urn:dkg:github:issue:<owner>/<repo>/<number>` |
-| Commit | `urn:dkg:github:commit:<owner>/<repo>/<sha>` |
-| Code package | `urn:dkg:code:package:<repository-or-package>` |
-| Code file | `urn:dkg:code:file:<repository-or-package>/<encoded-path>` |
-| Code symbol | canonical file identifier plus `#<kind>:<encoded-symbol>` |
-| Explicit external URI | exact URI after scheme and profile validation |
-| Local/general entity | `urn:buzz-dkg:entity:<source-set-digest>:<local-id>` |
+| Locator               | Canonical identifier                                       |
+| --------------------- | ---------------------------------------------------------- |
+| GitHub repository     | `urn:dkg:github:repo:<owner>/<repo>`                       |
+| Pull request          | `urn:dkg:github:pr:<owner>/<repo>/<number>`                |
+| Issue                 | `urn:dkg:github:issue:<owner>/<repo>/<number>`             |
+| Commit                | `urn:dkg:github:commit:<owner>/<repo>/<sha>`               |
+| Code package          | `urn:dkg:code:package:<repository-or-package>`             |
+| Code file             | `urn:dkg:code:file:<repository-or-package>/<encoded-path>` |
+| Code symbol           | canonical file identifier plus `#<kind>:<encoded-symbol>`  |
+| Explicit external URI | exact URI after scheme and profile validation              |
+| Local/general entity  | `urn:buzz-dkg:entity:<source-set-digest>:<local-id>`       |
 
 Code paths identify the evolving logical file or symbol. A `github:Commit`
 provides the immutable revision and links to affected entities through
@@ -195,4 +195,3 @@ by the integration and is not agent-controlled.
 Unsupported profiles or vocabulary terms reject the memory proposal without
 retracting the agent's already-published chat response. Schema v1 remains
 accepted and compiles through the legacy compatibility path.
-

@@ -212,7 +212,7 @@ describe('query gateway configuration', () => {
 });
 
 describe('query gateway request contract', () => {
-  it('accepts only the five typed operations and exact argument shapes', () => {
+  it('accepts only the seven typed operations and exact argument shapes', () => {
     expect(parseQueryGatewayRequest(body('channel_memory'))).toMatchObject({
       operation: 'channel_memory',
       requesterPubkey: REQUESTER,
@@ -220,6 +220,22 @@ describe('query gateway request contract', () => {
     expect(
       parseQueryGatewayRequest(body('contributor_trail', { pubkey: CONTRIBUTOR })),
     ).toMatchObject({ operation: 'contributor_trail', arguments: { pubkey: CONTRIBUTOR } });
+    expect(
+      parseQueryGatewayRequest(
+        body('software_contributors', { componentName: 'verifyToken', componentType: 'function' }),
+      ),
+    ).toMatchObject({
+      operation: 'software_contributors',
+      arguments: { componentName: 'verifyToken', componentType: 'function' },
+    });
+    expect(
+      parseQueryGatewayRequest(
+        body('decision_trace', { commitSha: 'A1B2C3D4', componentName: 'Auth gateway' }),
+      ),
+    ).toMatchObject({
+      operation: 'decision_trace',
+      arguments: { commitSha: 'a1b2c3d4', componentName: 'Auth gateway' },
+    });
     expect(parseQueryGatewayRequest(body('subgraph_graph', { name: 'core_1' }))).toMatchObject({
       operation: 'subgraph_graph',
     });
@@ -248,6 +264,14 @@ describe('query gateway request contract', () => {
       parseQueryGatewayRequest(body('subgraph_graph', { name: 'core', sparql: 'DELETE WHERE {}' })),
     ).toThrow(/unexpected field/);
     expect(() => parseQueryGatewayRequest(body('raw_query'))).toThrow(/operation is invalid/);
+    expect(() =>
+      parseQueryGatewayRequest(
+        body('software_contributors', {
+          componentName: 'verifyToken',
+          componentType: 'service',
+        }),
+      ),
+    ).toThrow(/componentType is invalid/);
   });
 });
 
@@ -361,6 +385,20 @@ describe('query gateway HTTP boundary', () => {
 
   it.each([
     ['contributor_trail', { pubkey: CONTRIBUTOR }, { pubkey: CONTRIBUTOR, trail: [] }],
+    [
+      'software_contributors',
+      { componentName: 'verifyToken', componentType: 'function' },
+      { componentName: 'verifyToken', componentType: 'function', contributors: [] },
+    ],
+    [
+      'decision_trace',
+      { commitSha: 'a1b2c3d4', componentName: 'Authentication gateway' },
+      {
+        commitSha: 'a1b2c3d4',
+        componentName: 'Authentication gateway',
+        decisions: [],
+      },
+    ],
     ['subgraph_graph', { name: 'core' }, { subgraph: 'core', nodes: [], edges: [] }],
     ['subgraph_triples', { name: 'core' }, { subgraph: 'core', triples: [] }],
     [
@@ -393,6 +431,93 @@ describe('query gateway HTTP boundary', () => {
       operation,
       result: expected,
     });
+  });
+
+  it('returns contributor and decision traces through fixed profile-aware queries', async () => {
+    const dkg = new GatewayDkg();
+    const contributor = 'urn:dkg:github:user:alice';
+    const commit = 'urn:dkg:github:commit:acme/api/a1b2c3d4';
+    const component = 'urn:dkg:code:package:%40acme%2Fauth';
+    const decision = 'urn:dkg:decision:short-lived-jwt';
+    const at = '2026-07-14T10:15:00Z';
+    dkg.bindingResolver = (options) => {
+      if (options.view !== 'verifiable-memory') return [];
+      if (options.sparql.includes('SELECT DISTINCT ?contributor')) {
+        return [
+          {
+            contributor: binding(contributor),
+            contributorName: binding('Alice Nguyen'),
+            commit: binding(commit),
+            sha: binding('a1b2c3d4'),
+            at: binding(at),
+          },
+        ];
+      }
+      if (options.sparql.includes('SELECT DISTINCT ?decision')) {
+        return [
+          {
+            decision: binding(decision),
+            decisionName: binding('Use short-lived JWT access tokens'),
+            context: binding('Reduce credential exposure after a token leak'),
+            outcome: binding('Use 15-minute access tokens'),
+            commit: binding(commit),
+            sha: binding('a1b2c3d4'),
+            component: binding(component),
+          },
+        ];
+      }
+      return null;
+    };
+    const { url } = await startGateway(dkg);
+    const contributorResponse = await request(
+      url,
+      body('software_contributors', { componentName: 'verifyToken', componentType: 'function' }),
+    );
+    expect(await contributorResponse.json()).toMatchObject({
+      result: {
+        contributors: [
+          {
+            contributor,
+            contributorName: 'Alice Nguyen',
+            commit,
+            sha: 'a1b2c3d4',
+            at: Date.parse(at) / 1_000,
+            layer: 'VM',
+          },
+        ],
+      },
+    });
+    const traceResponse = await request(
+      url,
+      body('decision_trace', {
+        commitSha: 'A1B2C3D4',
+        componentName: 'Authentication gateway',
+      }),
+    );
+    expect(await traceResponse.json()).toMatchObject({
+      result: {
+        commitSha: 'a1b2c3d4',
+        decisions: [
+          {
+            decision,
+            decisionName: 'Use short-lived JWT access tokens',
+            context: 'Reduce credential exposure after a token leak',
+            outcome: 'Use 15-minute access tokens',
+            layer: 'VM',
+          },
+        ],
+      },
+    });
+    const fixedQueries = dkg.calls
+      .filter(
+        (call) =>
+          call.kind === 'query' &&
+          (call.sparql?.includes('SELECT DISTINCT ?contributor') ||
+            call.sparql?.includes('SELECT DISTINCT ?decision')),
+      )
+      .map((call) => call.sparql ?? '');
+    expect(fixedQueries).toHaveLength(4);
+    expect(fixedQueries.every((sparql) => !sparql.includes('DELETE'))).toBe(true);
   });
 
   it('preserves raw N-Triples objects in topology triples', async () => {

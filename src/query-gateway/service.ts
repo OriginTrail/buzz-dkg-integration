@@ -6,6 +6,8 @@ import type {
   ContributorSummary,
   ContributorTrailEntry,
   ContributorTrailResult,
+  DecisionTraceEntry,
+  DecisionTraceResult,
   DecisionSummary,
   EvidenceRelation,
   EvidenceResult,
@@ -17,6 +19,8 @@ import type {
   QueryGatewayResult,
   QueryGatewaySuccess,
   QueryOperation,
+  SoftwareContributorEntry,
+  SoftwareContributorsResult,
   SubGraphSummary,
   SubgraphGraphResult,
   SubgraphTriplesResult,
@@ -37,6 +41,14 @@ const HEX_PUBKEY = /^[0-9a-f]{64}$/iu;
 const CHANNEL_ID = /^[A-Za-z0-9._:@/-]{1,256}$/u;
 const SUBGRAPH_NAME = /^[A-Za-z0-9_-]{1,128}$/u;
 const SAFE_IRI = /^[A-Za-z][A-Za-z0-9+.-]*:[^<>"{}|^`\\\s]{1,999}$/u;
+const COMMIT_SHA = /^[0-9a-f]{7,64}$/iu;
+const COMPONENT_TYPES = {
+  function: 'Function',
+  class: 'Class',
+  interface: 'Interface',
+  file: 'File',
+  package: 'Package',
+} as const;
 const MAX_DKG_ROWS = 2_500;
 const MAX_GRAPH_NODES = 1_200;
 const MAX_GRAPH_EDGES = 2_400;
@@ -46,6 +58,9 @@ const BUZZ = 'https://w3id.org/buzz-dkg/buzz#';
 const NOSTR = 'https://w3id.org/buzz-dkg/nostr#';
 const PROV = 'http://www.w3.org/ns/prov#';
 const SCHEMA = 'http://schema.org/';
+const CODE = 'http://dkg.io/ontology/code/';
+const GITHUB = 'http://dkg.io/ontology/github/';
+const DECISIONS = 'http://dkg.io/ontology/decisions/';
 
 function invalid(message: string): never {
   throw new IntegrationApiError(400, 'invalid_request', message);
@@ -70,6 +85,24 @@ function requiredString(value: unknown, name: string, pattern: RegExp, normalize
   return normalize ? value.toLowerCase() : value;
 }
 
+function requiredText(value: unknown, name: string, max: number): string {
+  if (
+    typeof value !== 'string' ||
+    !value.trim() ||
+    Buffer.byteLength(value, 'utf8') > max ||
+    /\p{Cc}/u.test(value)
+  ) {
+    invalid(`${name} is invalid`);
+  }
+  return value.trim();
+}
+
+function sparqlLiteral(value: string): string {
+  return JSON.stringify(value)
+    .replace(/\u2028/gu, '\\u2028')
+    .replace(/\u2029/gu, '\\u2029');
+}
+
 export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
   if (!plainObject(value)) invalid('request body must be a JSON object');
   exactKeys(value, ['channelId', 'operation', 'arguments', 'requesterPubkey'], 'request');
@@ -77,6 +110,8 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
   const operations = new Set<QueryOperation>([
     'channel_memory',
     'contributor_trail',
+    'software_contributors',
+    'decision_trace',
     'subgraph_graph',
     'subgraph_triples',
     'evidence',
@@ -105,6 +140,44 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
       operation,
       arguments: {
         pubkey: requiredString(value.arguments.pubkey, 'arguments.pubkey', HEX_PUBKEY, true),
+      },
+    };
+  }
+  if (operation === 'software_contributors') {
+    exactKeys(value.arguments, ['componentName', 'componentType'], 'arguments');
+    const componentType = value.arguments.componentType;
+    if (
+      componentType !== undefined &&
+      (typeof componentType !== 'string' || !(componentType in COMPONENT_TYPES))
+    ) {
+      invalid('arguments.componentType is invalid');
+    }
+    return {
+      ...base,
+      operation,
+      arguments: {
+        componentName: requiredText(value.arguments.componentName, 'arguments.componentName', 500),
+        ...(componentType
+          ? {
+              componentType: componentType as keyof typeof COMPONENT_TYPES,
+            }
+          : {}),
+      },
+    };
+  }
+  if (operation === 'decision_trace') {
+    exactKeys(value.arguments, ['commitSha', 'componentName'], 'arguments');
+    return {
+      ...base,
+      operation,
+      arguments: {
+        commitSha: requiredString(
+          value.arguments.commitSha,
+          'arguments.commitSha',
+          COMMIT_SHA,
+          true,
+        ),
+        componentName: requiredText(value.arguments.componentName, 'arguments.componentName', 500),
       },
     };
   }
@@ -238,6 +311,14 @@ export class QueryGatewayService {
         return this.channelMemory(cg);
       case 'contributor_trail':
         return this.contributorTrail(cg, request.arguments.pubkey);
+      case 'software_contributors':
+        return this.softwareContributors(
+          cg,
+          request.arguments.componentName,
+          request.arguments.componentType,
+        );
+      case 'decision_trace':
+        return this.decisionTrace(cg, request.arguments.commitSha, request.arguments.componentName);
       case 'subgraph_graph':
         return this.subgraphGraph(cg, request.arguments.name);
       case 'subgraph_triples':
@@ -414,6 +495,103 @@ export class QueryGatewayService {
       .sort((a, b) => (b.at ?? 0) - (a.at ?? 0) || a.event.localeCompare(b.event))
       .slice(0, 100);
     return { pubkey, trail };
+  }
+
+  private async softwareContributors(
+    cg: string,
+    componentName: string,
+    componentType?: keyof typeof COMPONENT_TYPES,
+  ): Promise<SoftwareContributorsResult> {
+    const componentPattern = componentType
+      ? `?component a <${CODE}${COMPONENT_TYPES[componentType]}> ;
+           <${SCHEMA}name> ${sparqlLiteral(componentName)} .`
+      : `?component a ?componentType ; <${SCHEMA}name> ${sparqlLiteral(componentName)} .
+         FILTER(STRSTARTS(STR(?componentType), "${CODE}"))`;
+    const rows = await this.layered(
+      cg,
+      `SELECT DISTINCT ?contributor ?contributorName ?commit ?sha ?at WHERE { GRAPH ?g {
+         ${componentPattern}
+         ?commit a <${GITHUB}Commit> ; <${GITHUB}affects> ?component ;
+           <${GITHUB}authoredBy> ?contributor ; <${GITHUB}sha> ?sha .
+         OPTIONAL { ?contributor <${SCHEMA}name> ?contributorName }
+         OPTIONAL { ?commit <${SCHEMA}dateCreated> ?at }
+       } } ORDER BY ?at ?contributorName LIMIT 200`,
+    );
+    const byKey = new Map<string, SoftwareContributorEntry>();
+    for (const { row, layer } of rows) {
+      const contributor = bounded(term(row, 'contributor'), 1_000);
+      const commit = bounded(term(row, 'commit'), 1_000);
+      const sha = bounded(term(row, 'sha').toLowerCase(), 64);
+      if (!contributor || !commit || !COMMIT_SHA.test(sha)) continue;
+      const key = `${contributor}\0${commit}`;
+      const candidate: SoftwareContributorEntry = {
+        contributor,
+        contributorName: optionalTerm(row, 'contributorName')
+          ? bounded(optionalTerm(row, 'contributorName')!, 500)
+          : null,
+        commit,
+        sha,
+        at: dateTimestamp(row.at),
+        layer,
+      };
+      const current = byKey.get(key);
+      if (!current || LAYER_RANK[layer] > LAYER_RANK[current.layer]) byKey.set(key, candidate);
+    }
+    return {
+      componentName,
+      componentType: componentType ?? null,
+      contributors: [...byKey.values()].sort(
+        (a, b) => (a.at ?? 0) - (b.at ?? 0) || a.sha.localeCompare(b.sha),
+      ),
+    };
+  }
+
+  private async decisionTrace(
+    cg: string,
+    commitSha: string,
+    componentName: string,
+  ): Promise<DecisionTraceResult> {
+    const rows = await this.layered(
+      cg,
+      `SELECT DISTINCT ?decision ?decisionName ?context ?outcome ?commit ?sha ?component WHERE { GRAPH ?g {
+         ?component <${SCHEMA}name> ${sparqlLiteral(componentName)} .
+         ?commit a <${GITHUB}Commit> ; <${GITHUB}sha> ?sha ; <${GITHUB}affects> ?component .
+         FILTER(LCASE(STR(?sha)) = ${sparqlLiteral(commitSha.toLowerCase())})
+         ?decision a <${DECISIONS}Decision> ; <${DECISIONS}affects> ?component ;
+           <${DECISIONS}implementedBy> ?commit .
+         OPTIONAL { ?decision <${SCHEMA}name> ?decisionName }
+         OPTIONAL { ?decision <${DECISIONS}context> ?context }
+         OPTIONAL { ?decision <${DECISIONS}outcome> ?outcome }
+       } } ORDER BY ?decision LIMIT 200`,
+    );
+    const byKey = new Map<string, DecisionTraceEntry>();
+    for (const { row, layer } of rows) {
+      const decision = bounded(term(row, 'decision'), 1_000);
+      const commit = bounded(term(row, 'commit'), 1_000);
+      const component = bounded(term(row, 'component'), 1_000);
+      const sha = bounded(term(row, 'sha').toLowerCase(), 64);
+      if (!decision || !commit || !component || !COMMIT_SHA.test(sha)) continue;
+      const key = `${decision}\0${commit}\0${component}`;
+      const candidate: DecisionTraceEntry = {
+        decision,
+        decisionName: optionalTerm(row, 'decisionName')
+          ? bounded(optionalTerm(row, 'decisionName')!, 500)
+          : null,
+        context: optionalTerm(row, 'context')
+          ? bounded(optionalTerm(row, 'context')!, 4_000)
+          : null,
+        outcome: optionalTerm(row, 'outcome')
+          ? bounded(optionalTerm(row, 'outcome')!, 4_000)
+          : null,
+        commit,
+        sha,
+        component,
+        layer,
+      };
+      const current = byKey.get(key);
+      if (!current || LAYER_RANK[layer] > LAYER_RANK[current.layer]) byKey.set(key, candidate);
+    }
+    return { commitSha, componentName, decisions: [...byKey.values()] };
   }
 
   private async subgraphGraph(cg: string, name: string): Promise<SubgraphGraphResult> {

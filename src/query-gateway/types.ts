@@ -1,5 +1,11 @@
 export type QueryOperation =
-  'channel_memory' | 'contributor_trail' | 'subgraph_graph' | 'subgraph_triples' | 'evidence';
+  | 'channel_memory'
+  | 'contributor_trail'
+  | 'software_contributors'
+  | 'decision_trace'
+  | 'subgraph_graph'
+  | 'subgraph_triples'
+  | 'evidence';
 
 interface RequestBase<T extends QueryOperation, A> {
   channelId: string;
@@ -11,6 +17,14 @@ interface RequestBase<T extends QueryOperation, A> {
 export type QueryGatewayRequest =
   | RequestBase<'channel_memory', Record<string, never>>
   | RequestBase<'contributor_trail', { pubkey: string }>
+  | RequestBase<
+      'software_contributors',
+      {
+        componentName: string;
+        componentType?: 'function' | 'class' | 'interface' | 'file' | 'package';
+      }
+    >
+  | RequestBase<'decision_trace', { commitSha: string; componentName: string }>
   | RequestBase<'subgraph_graph', { name: string }>
   | RequestBase<'subgraph_triples', { name: string }>
   | RequestBase<'evidence', { uri: string }>;
@@ -71,6 +85,38 @@ export interface ContributorTrailEntry {
 export interface ContributorTrailResult {
   pubkey: string;
   trail: ContributorTrailEntry[];
+}
+
+export interface SoftwareContributorEntry {
+  contributor: string;
+  contributorName: string | null;
+  commit: string;
+  sha: string;
+  at: number | null;
+  layer: VisibleMemoryLayer;
+}
+
+export interface SoftwareContributorsResult {
+  componentName: string;
+  componentType: string | null;
+  contributors: SoftwareContributorEntry[];
+}
+
+export interface DecisionTraceEntry {
+  decision: string;
+  decisionName: string | null;
+  context: string | null;
+  outcome: string | null;
+  commit: string;
+  sha: string;
+  component: string;
+  layer: VisibleMemoryLayer;
+}
+
+export interface DecisionTraceResult {
+  commitSha: string;
+  componentName: string;
+  decisions: DecisionTraceEntry[];
 }
 
 export interface GraphNode {
@@ -140,6 +186,8 @@ export interface EvidenceResult {
 export type QueryGatewayResult =
   | ChannelMemoryResult
   | ContributorTrailResult
+  | SoftwareContributorsResult
+  | DecisionTraceResult
   | SubgraphGraphResult
   | SubgraphTriplesResult
   | EvidenceResult;

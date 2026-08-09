@@ -13,21 +13,45 @@ import {
 } from '../distill/deterministic.ts';
 import { IntegrationApiError } from '../errors.ts';
 import type {
+  AgentMemoryAttribute,
+  AgentMemoryEntity,
   AgentMemoryEnvelope,
   AgentMemoryItem,
   AgentMemoryItemKind,
+  AgentMemoryLocator,
   AgentMemoryProposal,
+  AgentMemoryProposalV1,
+  AgentMemoryProposalV2,
+  AgentMemoryProfileId,
+  AgentMemoryRelation,
   DistillResult,
   NostrEvent,
   Quad,
 } from '../types.ts';
 import { DKG_MEMORY_PROPOSAL_KIND } from '../types.ts';
+import {
+  expandProfileTerm,
+  PREFIXES,
+  PROFILE_IRIS,
+  profileAllowsRelation,
+  profileAllowsType,
+  profileAttributeDatatype,
+} from './profiles.ts';
 
 const HEX_64 = /^[0-9a-f]{64}$/u;
 const CHANNEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const ITEM_KINDS = new Set(['decision', 'claim', 'question', 'task', 'relationship']);
+const PROFILE_IDS = new Set<AgentMemoryProfileId>(['dkg-memory@1', 'dkg-software@1']);
+const LOCAL_ID = /^[a-z][a-z0-9-]{0,63}$/u;
+const GITHUB_REPOSITORY = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/u;
+const GITHUB_RESOURCE = new Set(['repository', 'pull-request', 'issue', 'commit']);
+const CODE_SYMBOL_KIND = new Set(['function', 'class', 'interface', 'type-alias', 'enum']);
+const SAFE_EXTERNAL_IRI = /^(?:https:\/\/[^<>"{}|^`\\\s]{1,990}|urn:[^<>"{}|^`\\\s]{1,995})$/u;
 const MAX_SOURCES = 16;
 const MAX_ITEMS = 50;
+const MAX_ENTITIES = 100;
+const MAX_RELATIONS = 200;
+const MAX_ATTRIBUTES = 20;
 
 function invalid(message: string): never {
   throw new IntegrationApiError(400, 'invalid_memory_proposal', message);
@@ -106,21 +130,12 @@ function parseItem(raw: unknown, index: number): AgentMemoryItem {
   };
 }
 
-export function parseAgentMemoryProposal(content: string): AgentMemoryProposal {
-  if (Buffer.byteLength(content, 'utf8') > 64 * 1024) invalid('proposal content is too large');
-  let raw: unknown;
-  try {
-    raw = JSON.parse(content) as unknown;
-  } catch {
-    invalid('proposal content must be valid JSON');
-  }
-  const value = object(raw, 'proposal');
+function parseProposalV1(value: Record<string, unknown>): AgentMemoryProposalV1 {
   exactKeys(value, ['schemaVersion', 'summary', 'items', 'model', 'promptVersion'], 'proposal');
-  if (value.schemaVersion !== 1) invalid('proposal.schemaVersion must be 1');
   if (!Array.isArray(value.items) || value.items.length < 1 || value.items.length > MAX_ITEMS) {
     invalid(`proposal.items must contain 1 to ${MAX_ITEMS} entries`);
   }
-  const proposal: AgentMemoryProposal = {
+  const proposal: AgentMemoryProposalV1 = {
     schemaVersion: 1,
     summary: text(value.summary, 'proposal.summary', 1_000),
     items: value.items.map(parseItem),
@@ -130,6 +145,286 @@ export function parseAgentMemoryProposal(content: string): AgentMemoryProposal {
   if (model) proposal.model = model;
   if (promptVersion) proposal.promptVersion = promptVersion;
   return proposal;
+}
+
+function parseProfiles(raw: unknown): AgentMemoryProfileId[] {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 3) {
+    invalid('proposal.profiles must contain 1 to 3 profile identifiers');
+  }
+  const profiles = raw.map((profile, index) => {
+    if (typeof profile !== 'string' || !PROFILE_IDS.has(profile as AgentMemoryProfileId)) {
+      invalid(`proposal.profiles[${index}] is unsupported`);
+    }
+    return profile as AgentMemoryProfileId;
+  });
+  if (new Set(profiles).size !== profiles.length) invalid('proposal.profiles contains duplicates');
+  if (!profiles.includes('dkg-memory@1')) invalid("proposal.profiles must include 'dkg-memory@1'");
+  return profiles;
+}
+
+function parseLocator(raw: unknown, label: string): AgentMemoryLocator {
+  const value = object(raw, label);
+  const kind = value.kind;
+  if (kind === 'uri') {
+    exactKeys(value, ['kind', 'uri'], label);
+    const uri = text(value.uri, `${label}.uri`, 1_000);
+    if (!SAFE_EXTERNAL_IRI.test(uri)) invalid(`${label}.uri must be an HTTPS or URN identifier`);
+    return { kind, uri };
+  }
+  if (kind === 'github') {
+    exactKeys(value, ['kind', 'repository', 'resource', 'id'], label);
+    const repository = text(value.repository, `${label}.repository`, 201);
+    if (!GITHUB_REPOSITORY.test(repository)) invalid(`${label}.repository is invalid`);
+    if (typeof value.resource !== 'string' || !GITHUB_RESOURCE.has(value.resource)) {
+      invalid(`${label}.resource is invalid`);
+    }
+    const resource = value.resource as Extract<AgentMemoryLocator, { kind: 'github' }>['resource'];
+    const id = optionalText(value.id, `${label}.id`, 200);
+    if (resource === 'repository' && id) invalid(`${label}.id is not used for repositories`);
+    if (resource !== 'repository' && !id) invalid(`${label}.id is required for ${resource}`);
+    if ((resource === 'pull-request' || resource === 'issue') && !/^[1-9][0-9]{0,9}$/u.test(id!)) {
+      invalid(`${label}.id must be a positive integer for ${resource}`);
+    }
+    if (resource === 'commit' && !/^[0-9a-f]{7,64}$/iu.test(id!)) {
+      invalid(`${label}.id must be a hexadecimal commit id`);
+    }
+    return { kind, repository, resource, ...(id ? { id } : {}) };
+  }
+  if (kind === 'code') {
+    exactKeys(value, ['kind', 'package', 'path', 'symbol', 'symbolKind'], label);
+    const packageName = text(value.package, `${label}.package`, 214);
+    if (!/^(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+$/iu.test(packageName)) {
+      invalid(`${label}.package is invalid`);
+    }
+    const path = optionalText(value.path, `${label}.path`, 1_000);
+    if (path && (path.startsWith('/') || path.split('/').includes('..') || path.includes('\\'))) {
+      invalid(`${label}.path must be package-relative`);
+    }
+    const symbol = optionalText(value.symbol, `${label}.symbol`, 500);
+    const symbolKind = optionalText(value.symbolKind, `${label}.symbolKind`, 20);
+    if ((symbol || symbolKind) && (!path || !symbol || !symbolKind)) {
+      invalid(`${label} symbols require path, symbol and symbolKind`);
+    }
+    if (symbolKind && !CODE_SYMBOL_KIND.has(symbolKind)) invalid(`${label}.symbolKind is invalid`);
+    return {
+      kind,
+      package: packageName,
+      ...(path ? { path } : {}),
+      ...(symbol ? { symbol } : {}),
+      ...(symbolKind
+        ? {
+            symbolKind: symbolKind as Extract<AgentMemoryLocator, { kind: 'code' }>['symbolKind'],
+          }
+        : {}),
+    };
+  }
+  invalid(`${label}.kind is invalid`);
+}
+
+function parseAttribute(
+  raw: unknown,
+  label: string,
+  profiles: readonly AgentMemoryProfileId[],
+): AgentMemoryAttribute {
+  const value = object(raw, label);
+  exactKeys(value, ['predicate', 'value'], label);
+  const predicate = text(value.predicate, `${label}.predicate`, 100);
+  const datatype = profileAttributeDatatype(profiles, predicate);
+  if (!datatype || !expandProfileTerm(predicate)) invalid(`${label}.predicate is not allowed`);
+  if (!['string', 'number', 'boolean'].includes(typeof value.value)) {
+    invalid(`${label}.value must be a string, number or boolean`);
+  }
+  if (typeof value.value === 'string') text(value.value, `${label}.value`, 4_000);
+  if (datatype === 'integer' && !Number.isSafeInteger(value.value)) {
+    invalid(`${label}.value must be an integer`);
+  }
+  if (datatype === 'decimal' && typeof value.value !== 'number') {
+    invalid(`${label}.value must be a number`);
+  }
+  if (datatype === 'boolean' && typeof value.value !== 'boolean') {
+    invalid(`${label}.value must be a boolean`);
+  }
+  if (
+    datatype === 'dateTime' &&
+    (typeof value.value !== 'string' || !Number.isFinite(Date.parse(value.value)))
+  ) {
+    invalid(`${label}.value must be an ISO date-time`);
+  }
+  if (
+    datatype === 'anyURI' &&
+    (typeof value.value !== 'string' || !SAFE_EXTERNAL_IRI.test(value.value))
+  ) {
+    invalid(`${label}.value must be an HTTPS or URN identifier`);
+  }
+  if (
+    predicate === 'decisions:status' &&
+    !new Set(['proposed', 'accepted', 'rejected', 'superseded']).has(String(value.value))
+  ) {
+    invalid(`${label}.value is not a supported decision status`);
+  }
+  if (
+    predicate === 'tasks:status' &&
+    !new Set(['todo', 'in_progress', 'blocked', 'done', 'cancelled']).has(String(value.value))
+  ) {
+    invalid(`${label}.value is not a supported task status`);
+  }
+  return { predicate, value: value.value as string | number | boolean };
+}
+
+function parseEntity(
+  raw: unknown,
+  index: number,
+  profiles: readonly AgentMemoryProfileId[],
+): AgentMemoryEntity {
+  const label = `entities[${index}]`;
+  const value = object(raw, label);
+  exactKeys(value, ['id', 'type', 'name', 'description', 'locator', 'attributes'], label);
+  const id = text(value.id, `${label}.id`, 64);
+  if (!LOCAL_ID.test(id)) invalid(`${label}.id is invalid`);
+  const type = text(value.type, `${label}.type`, 100);
+  if (!profileAllowsType(profiles, type) || !expandProfileTerm(type)) {
+    invalid(`${label}.type is not allowed by the selected profiles`);
+  }
+  const description = optionalText(value.description, `${label}.description`, 4_000);
+  const locator =
+    value.locator === undefined ? undefined : parseLocator(value.locator, `${label}.locator`);
+  if (locator?.kind === 'github' && !type.startsWith('github:')) {
+    invalid(`${label}.locator kind github requires a github type`);
+  }
+  if (locator?.kind === 'github') {
+    const expectedType = {
+      repository: 'github:Repository',
+      'pull-request': 'github:PullRequest',
+      issue: 'github:Issue',
+      commit: 'github:Commit',
+    }[locator.resource];
+    if (type !== expectedType) invalid(`${label}.locator resource does not match its entity type`);
+  }
+  if (locator?.kind === 'code' && !type.startsWith('code:')) {
+    invalid(`${label}.locator kind code requires a code type`);
+  }
+  if (locator?.kind === 'code') {
+    const symbolType = locator.symbolKind
+      ? {
+          function: 'code:Function',
+          class: 'code:Class',
+          interface: 'code:Interface',
+          'type-alias': 'code:TypeAlias',
+          enum: 'code:Enum',
+        }[locator.symbolKind]
+      : null;
+    if (symbolType && type !== symbolType) {
+      invalid(`${label}.locator symbolKind does not match its entity type`);
+    }
+    if (!locator.symbol && locator.path && type !== 'code:File') {
+      invalid(`${label}.locator path without a symbol requires code:File`);
+    }
+    if (!locator.path && type !== 'code:Package') {
+      invalid(`${label}.locator without a path requires code:Package`);
+    }
+  }
+  let entityAttributes: AgentMemoryAttribute[] | undefined;
+  if (value.attributes !== undefined) {
+    if (!Array.isArray(value.attributes) || value.attributes.length > MAX_ATTRIBUTES) {
+      invalid(`${label}.attributes must contain at most ${MAX_ATTRIBUTES} entries`);
+    }
+    entityAttributes = value.attributes.map((item, attributeIndex) =>
+      parseAttribute(item, `${label}.attributes[${attributeIndex}]`, profiles),
+    );
+    const predicates = entityAttributes.map((item) => item.predicate);
+    if (new Set(predicates).size !== predicates.length)
+      invalid(`${label}.attributes contains duplicate predicates`);
+  }
+  return {
+    id,
+    type,
+    name: text(value.name, `${label}.name`, 500),
+    ...(description ? { description } : {}),
+    ...(locator ? { locator } : {}),
+    ...(entityAttributes ? { attributes: entityAttributes } : {}),
+  };
+}
+
+function parseRelation(
+  raw: unknown,
+  index: number,
+  profiles: readonly AgentMemoryProfileId[],
+  entityIds: ReadonlySet<string>,
+): AgentMemoryRelation {
+  const label = `relations[${index}]`;
+  const value = object(raw, label);
+  exactKeys(value, ['subject', 'predicate', 'object', 'confidence'], label);
+  const subject = text(value.subject, `${label}.subject`, 64);
+  const predicate = text(value.predicate, `${label}.predicate`, 100);
+  const relationObject = text(value.object, `${label}.object`, 64);
+  if (!entityIds.has(subject) || !entityIds.has(relationObject)) {
+    invalid(`${label} endpoints must reference proposal entities`);
+  }
+  if (!profileAllowsRelation(profiles, predicate) || !expandProfileTerm(predicate)) {
+    invalid(`${label}.predicate is not allowed by the selected profiles`);
+  }
+  if (
+    value.confidence !== undefined &&
+    (typeof value.confidence !== 'number' || value.confidence < 0 || value.confidence > 1)
+  ) {
+    invalid(`${label}.confidence must be between 0 and 1`);
+  }
+  return {
+    subject,
+    predicate,
+    object: relationObject,
+    ...(value.confidence === undefined ? {} : { confidence: value.confidence }),
+  };
+}
+
+function parseProposalV2(value: Record<string, unknown>): AgentMemoryProposalV2 {
+  exactKeys(
+    value,
+    ['schemaVersion', 'profiles', 'summary', 'entities', 'relations', 'model', 'promptVersion'],
+    'proposal',
+  );
+  const profiles = parseProfiles(value.profiles);
+  if (
+    !Array.isArray(value.entities) ||
+    value.entities.length < 1 ||
+    value.entities.length > MAX_ENTITIES
+  ) {
+    invalid(`proposal.entities must contain 1 to ${MAX_ENTITIES} entries`);
+  }
+  const entities = value.entities.map((entity, index) => parseEntity(entity, index, profiles));
+  const entityIds = new Set(entities.map((entity) => entity.id));
+  if (entityIds.size !== entities.length) invalid('proposal.entities contains duplicate ids');
+  if (!Array.isArray(value.relations) || value.relations.length > MAX_RELATIONS) {
+    invalid(`proposal.relations must contain 0 to ${MAX_RELATIONS} entries`);
+  }
+  const proposal: AgentMemoryProposalV2 = {
+    schemaVersion: 2,
+    profiles,
+    summary: text(value.summary, 'proposal.summary', 1_000),
+    entities,
+    relations: value.relations.map((relation, index) =>
+      parseRelation(relation, index, profiles, entityIds),
+    ),
+  };
+  const model = optionalText(value.model, 'proposal.model', 200);
+  const promptVersion = optionalText(value.promptVersion, 'proposal.promptVersion', 200);
+  if (model) proposal.model = model;
+  if (promptVersion) proposal.promptVersion = promptVersion;
+  return proposal;
+}
+
+export function parseAgentMemoryProposal(content: string): AgentMemoryProposal {
+  if (Buffer.byteLength(content, 'utf8') > 64 * 1024) invalid('proposal content is too large');
+  let raw: unknown;
+  try {
+    raw = JSON.parse(content) as unknown;
+  } catch {
+    invalid('proposal content must be valid JSON');
+  }
+  const value = object(raw, 'proposal');
+  if (value.schemaVersion === 1) return parseProposalV1(value);
+  if (value.schemaVersion === 2) return parseProposalV2(value);
+  invalid('proposal.schemaVersion must be 1 or 2');
 }
 
 function parseEvent(raw: unknown, label: string): NostrEvent {
@@ -249,10 +544,182 @@ function semanticType(kind: AgentMemoryItem['kind']): string {
   return `${BUZZ}${kind[0]!.toUpperCase()}${kind.slice(1)}`;
 }
 
-/** Compile agent semantics plus the exact signed evidence snapshot into deterministic RDF. */
-export function compileAgentMemory(
+function encodeId(value: string): string {
+  return encodeURIComponent(value).replace(/%[0-9a-f]{2}/giu, (escape) => escape.toUpperCase());
+}
+
+function entityUri(digest: string, entity: AgentMemoryEntity): string {
+  const locator = entity.locator;
+  if (!locator) return `urn:buzz-dkg:entity:${digest}:${entity.id}`;
+  if (locator.kind === 'uri') return locator.uri;
+  if (locator.kind === 'github') {
+    const repository = locator.repository.toLowerCase();
+    if (locator.resource === 'repository') return `urn:dkg:github:repo:${repository}`;
+    const kind = locator.resource === 'pull-request' ? 'pr' : locator.resource;
+    return `urn:dkg:github:${kind}:${repository}/${locator.id!.toLowerCase()}`;
+  }
+  const packageId = encodeId(locator.package);
+  if (!locator.path) return `urn:dkg:code:package:${packageId}`;
+  const fileUri = `urn:dkg:code:file:${packageId}/${encodeId(locator.path)}`;
+  return locator.symbol ? `${fileUri}#${locator.symbolKind}:${encodeId(locator.symbol)}` : fileUri;
+}
+
+function attributeLiteral(value: string | number | boolean, datatype: string): string {
+  const XSD = 'http://www.w3.org/2001/XMLSchema#';
+  if (datatype === 'integer') return `"${value}"^^<${XSD}integer>`;
+  if (datatype === 'decimal') return `"${value}"^^<${XSD}decimal>`;
+  if (datatype === 'boolean') return `"${value}"^^<${XSD}boolean>`;
+  if (datatype === 'dateTime') {
+    return `"${new Date(String(value)).toISOString()}"^^<${XSD}dateTime>`;
+  }
+  if (datatype === 'anyURI') return `"${String(value)}"^^<${XSD}anyURI>`;
+  return literal(value);
+}
+
+function compileAgentMemoryV2(
   envelope: AgentMemoryEnvelope,
-  proposal: AgentMemoryProposal,
+  proposal: AgentMemoryProposalV2,
+): DistillResult {
+  const signedSet = [envelope.proposalEvent, ...envelope.sourceEvents];
+  const digest = sourceSetDigest(signedSet);
+  const rootUri = `urn:buzz-dkg:memory:${digest}`;
+  const activityUri = `urn:buzz-dkg:agent-memory:${digest}`;
+  const quads: Quad[] = [];
+  const add = (subject: string, predicate: string, value: string) =>
+    quads.push({ subject, predicate, object: value });
+  const sorted = [...envelope.sourceEvents].sort(
+    (a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id),
+  );
+  const uris = new Map(proposal.entities.map((entity) => [entity.id, entityUri(digest, entity)]));
+  if (new Set(uris.values()).size !== uris.size)
+    invalid('proposal.entities resolve to duplicate identifiers');
+
+  add(rootUri, `${RDF}type`, `${PROV}Entity`);
+  add(rootUri, `${RDF}type`, `${PREFIXES.memory}Memory`);
+  // Retain the existing summary surface while the Buzz UI migrates to profile-aware views.
+  add(rootUri, `${RDF}type`, `${BUZZ}DecisionCluster`);
+  add(rootUri, `${RDF}type`, `${BUZZ}AgentMemory`);
+  add(rootUri, `${SCHEMA}name`, literal(proposal.summary));
+  add(rootUri, `${SCHEMA}description`, literal(proposal.summary));
+  add(rootUri, `${PREFIXES.memory}sourceSetDigest`, literal(digest));
+  add(rootUri, `${PREFIXES.memory}sourceEventCount`, integer(sorted.length));
+  add(rootUri, `${BUZZ}channel`, channelUri(envelope.channelId));
+  add(rootUri, `${BUZZ}proposalEvent`, eventUri(envelope.proposalEvent.id));
+  add(rootUri, `${PROV}wasGeneratedBy`, activityUri);
+  for (const profile of [...proposal.profiles, 'buzz-nostr@1'] as const) {
+    add(rootUri, `${PREFIXES.memory}profile`, PROFILE_IRIS[profile]);
+  }
+  for (const event of sorted) add(rootUri, `${PROV}wasDerivedFrom`, eventUri(event.id));
+
+  add(activityUri, `${RDF}type`, `${PROV}Activity`);
+  add(activityUri, `${RDF}type`, `${BUZZ}AgentMemoryProposal`);
+  add(activityUri, `${PROV}wasAssociatedWith`, pubkeyUri(envelope.requesterPubkey));
+  add(activityUri, `${PROV}endedAtTime`, instant(envelope.proposalEvent.created_at));
+  if (proposal.model) add(activityUri, `${BUZZ}model`, literal(proposal.model));
+  if (proposal.promptVersion)
+    add(activityUri, `${BUZZ}promptVersion`, literal(proposal.promptVersion));
+  for (const event of sorted) add(activityUri, `${PROV}used`, eventUri(event.id));
+
+  for (const entity of proposal.entities) {
+    const uri = uris.get(entity.id)!;
+    const typeIri = expandProfileTerm(entity.type)!;
+    add(rootUri, `${PREFIXES.memory}contains`, uri);
+    add(uri, `${RDF}type`, `${PROV}Entity`);
+    add(uri, `${RDF}type`, typeIri);
+    add(uri, `${SCHEMA}name`, literal(entity.name));
+    if (entity.description) add(uri, `${SCHEMA}description`, literal(entity.description));
+    for (const attribute of entity.attributes ?? []) {
+      const datatype = profileAttributeDatatype(proposal.profiles, attribute.predicate)!;
+      add(
+        uri,
+        expandProfileTerm(attribute.predicate)!,
+        attributeLiteral(attribute.value, datatype),
+      );
+    }
+    if (entity.locator?.kind === 'github') {
+      const locator = entity.locator;
+      const repository = locator.repository.toLowerCase();
+      const suffix =
+        locator.resource === 'repository'
+          ? ''
+          : locator.resource === 'pull-request'
+            ? `/pull/${locator.id}`
+            : locator.resource === 'commit'
+              ? `/commit/${locator.id}`
+              : `/issues/${locator.id}`;
+      add(
+        uri,
+        `${PREFIXES.github}url`,
+        attributeLiteral(`https://github.com/${repository}${suffix}`, 'anyURI'),
+      );
+      if (locator.resource === 'commit')
+        add(uri, `${PREFIXES.github}sha`, literal(locator.id!.toLowerCase()));
+      if (locator.resource === 'pull-request' || locator.resource === 'issue') {
+        add(uri, `${PREFIXES.github}number`, integer(Number(locator.id)));
+      }
+    }
+    if (entity.locator?.kind === 'code') {
+      if (entity.locator.path) add(uri, `${PREFIXES.code}path`, literal(entity.locator.path));
+      if (entity.locator.symbol) {
+        add(uri, `${PREFIXES.code}qualifiedName`, literal(entity.locator.symbol));
+      }
+    }
+    for (const event of sorted) add(uri, `${PROV}wasDerivedFrom`, eventUri(event.id));
+  }
+
+  proposal.relations.forEach((relation, index) => {
+    const subject = uris.get(relation.subject)!;
+    const predicate = expandProfileTerm(relation.predicate)!;
+    const relationObject = uris.get(relation.object)!;
+    const assertion = `urn:buzz-dkg:assertion:${digest}:${index + 1}`;
+    add(subject, predicate, relationObject);
+    add(rootUri, `${PREFIXES.memory}contains`, assertion);
+    add(assertion, `${RDF}type`, `${PREFIXES.memory}Assertion`);
+    add(assertion, `${RDF}type`, `${PREFIXES.memory}Relationship`);
+    add(assertion, `${PREFIXES.memory}subject`, subject);
+    add(assertion, `${PREFIXES.memory}predicate`, predicate);
+    add(assertion, `${PREFIXES.memory}object`, relationObject);
+    if (relation.confidence !== undefined) {
+      add(assertion, `${PREFIXES.memory}confidence`, decimal(relation.confidence));
+    }
+    for (const event of sorted) add(assertion, `${PROV}wasDerivedFrom`, eventUri(event.id));
+  });
+
+  sorted.forEach((event, index) => {
+    const uri = eventUri(event.id);
+    add(uri, `${RDF}type`, `${NOSTR}Event`);
+    add(uri, `${NOSTR}kind`, integer(event.kind));
+    add(uri, `${NOSTR}createdAt`, instant(event.created_at));
+    add(uri, `${NOSTR}content`, literal(event.content));
+    add(uri, `${NOSTR}sig`, literal(event.sig ?? ''));
+    add(uri, `${NOSTR}tags`, literal(JSON.stringify(event.tags)));
+    add(uri, `${NOSTR}threadIndex`, integer(index));
+    add(uri, `${PROV}wasAttributedTo`, pubkeyUri(event.pubkey));
+  });
+  for (const pubkey of new Set([
+    ...sorted.map((event) => event.pubkey),
+    envelope.requesterPubkey,
+  ])) {
+    add(pubkeyUri(pubkey), `${RDF}type`, `${PROV}Agent`);
+    add(pubkeyUri(pubkey), `${NOSTR}pubkeyHex`, literal(pubkey));
+  }
+  add(pubkeyUri(envelope.requesterPubkey), `${RDF}type`, `${PROV}SoftwareAgent`);
+  const proposalEvent = eventUri(envelope.proposalEvent.id);
+  add(proposalEvent, `${RDF}type`, `${NOSTR}Event`);
+  add(proposalEvent, `${NOSTR}kind`, integer(envelope.proposalEvent.kind));
+  add(proposalEvent, `${NOSTR}createdAt`, instant(envelope.proposalEvent.created_at));
+  add(proposalEvent, `${NOSTR}content`, literal(envelope.proposalEvent.content));
+  add(proposalEvent, `${NOSTR}sig`, literal(envelope.proposalEvent.sig));
+  add(proposalEvent, `${NOSTR}tags`, literal(JSON.stringify(envelope.proposalEvent.tags)));
+  add(proposalEvent, `${PROV}wasAttributedTo`, pubkeyUri(envelope.requesterPubkey));
+
+  return { rootUri, activityUri, digest, title: proposal.summary, quads };
+}
+
+/** Compile agent semantics plus the exact signed evidence snapshot into deterministic RDF. */
+function compileAgentMemoryV1(
+  envelope: AgentMemoryEnvelope,
+  proposal: AgentMemoryProposalV1,
 ): DistillResult {
   const signedSet = [envelope.proposalEvent, ...envelope.sourceEvents];
   const digest = sourceSetDigest(signedSet);
@@ -345,6 +812,16 @@ export function compileAgentMemory(
   );
 
   return { rootUri, activityUri, digest, title: proposal.summary, quads };
+}
+
+/** Compile either proposal version without changing the established v1 graph shape. */
+export function compileAgentMemory(
+  envelope: AgentMemoryEnvelope,
+  proposal: AgentMemoryProposal,
+): DistillResult {
+  return proposal.schemaVersion === 2
+    ? compileAgentMemoryV2(envelope, proposal)
+    : compileAgentMemoryV1(envelope, proposal);
 }
 
 export function contextGraphIdForChannel(relayUrl: string, channelId: string): string {

@@ -50,13 +50,65 @@ export type AgentMemoryItem =
     });
 
 /** Semantic memory emitted by a Buzz agent after a normal chat turn. */
-export interface AgentMemoryProposal {
+export interface AgentMemoryProposalV1 {
   schemaVersion: 1;
   summary: string;
   items: AgentMemoryItem[];
   model?: string;
   promptVersion?: string;
 }
+
+export type AgentMemoryProfileId = 'dkg-memory@1' | 'dkg-software@1';
+
+export type AgentMemoryLocator =
+  | { kind: 'uri'; uri: string }
+  | {
+      kind: 'github';
+      repository: string;
+      resource: 'repository' | 'pull-request' | 'issue' | 'commit';
+      id?: string;
+    }
+  | {
+      kind: 'code';
+      package: string;
+      path?: string;
+      symbol?: string;
+      symbolKind?: 'function' | 'class' | 'interface' | 'type-alias' | 'enum';
+    };
+
+export interface AgentMemoryAttribute {
+  predicate: string;
+  value: string | number | boolean;
+}
+
+export interface AgentMemoryEntity {
+  id: string;
+  type: string;
+  name: string;
+  description?: string;
+  locator?: AgentMemoryLocator;
+  attributes?: AgentMemoryAttribute[];
+}
+
+export interface AgentMemoryRelation {
+  subject: string;
+  predicate: string;
+  object: string;
+  confidence?: number;
+}
+
+/** Query-oriented semantic memory emitted under registered ontology profiles. */
+export interface AgentMemoryProposalV2 {
+  schemaVersion: 2;
+  profiles: AgentMemoryProfileId[];
+  summary: string;
+  entities: AgentMemoryEntity[];
+  relations: AgentMemoryRelation[];
+  model?: string;
+  promptVersion?: string;
+}
+
+export type AgentMemoryProposal = AgentMemoryProposalV1 | AgentMemoryProposalV2;
 
 /** Relay-authenticated envelope accepted only by the loopback gateway. */
 export interface AgentMemoryEnvelope {

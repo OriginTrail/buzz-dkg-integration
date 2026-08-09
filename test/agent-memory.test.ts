@@ -1,4 +1,5 @@
 import { finalizeEvent, getPublicKey, type EventTemplate } from 'nostr-tools';
+import oxigraph from 'oxigraph';
 import { describe, expect, it } from 'vitest';
 import { Daemon } from '../src/daemon.ts';
 import {
@@ -90,6 +91,109 @@ function setup() {
   const daemon = new Daemon(config, { relay: relay.asRelay(), dkg: dkg.asDkg() });
   return { daemon, relay, dkg };
 }
+
+function generatedStore(quads: ReturnType<typeof compileAgentMemory>['quads']) {
+  const graph = '<urn:test:generated:swm>';
+  const serialized = quads
+    .map(({ subject, predicate, object }) => {
+      const rdfObject = object.startsWith('"') ? object : `<${object}>`;
+      return `<${subject}> <${predicate}> ${rdfObject} ${graph} .`;
+    })
+    .join('\n');
+  const store = new oxigraph.Store();
+  store.load(serialized, { format: 'application/n-quads' });
+  return store;
+}
+
+function queryRows(store: InstanceType<typeof oxigraph.Store>, sparql: string) {
+  const result = store.query(sparql);
+  if (!Array.isArray(result)) throw new Error('expected SELECT results');
+  return result as Array<Map<string, oxigraph.Term>>;
+}
+
+const v2Content = () =>
+  JSON.stringify({
+    schemaVersion: 2,
+    profiles: ['dkg-memory@1', 'dkg-software@1'],
+    summary: 'JWT verification decisions and implementation history',
+    entities: [
+      {
+        id: 'auth-gateway',
+        type: 'code:Package',
+        name: 'Authentication gateway',
+        locator: { kind: 'code', package: '@acme/auth' },
+      },
+      {
+        id: 'verify-token',
+        type: 'code:Function',
+        name: 'verifyToken',
+        locator: {
+          kind: 'code',
+          package: '@acme/auth',
+          path: 'src/token.ts',
+          symbol: 'verifyToken',
+          symbolKind: 'function',
+        },
+      },
+      { id: 'alice', type: 'github:User', name: 'Alice Nguyen' },
+      { id: 'bob', type: 'github:User', name: 'Bob Ortiz' },
+      {
+        id: 'first-commit',
+        type: 'github:Commit',
+        name: 'Implement token rotation',
+        locator: {
+          kind: 'github',
+          repository: 'acme/api',
+          resource: 'commit',
+          id: 'a1b2c3d4',
+        },
+        attributes: [{ predicate: 'schema:dateCreated', value: '2026-07-14T10:15:00Z' }],
+      },
+      {
+        id: 'second-commit',
+        type: 'github:Commit',
+        name: 'Add typed verification failures',
+        locator: {
+          kind: 'github',
+          repository: 'acme/api',
+          resource: 'commit',
+          id: 'e5f6a7b8',
+        },
+        attributes: [{ predicate: 'schema:dateCreated', value: '2026-07-21T16:40:00Z' }],
+      },
+      {
+        id: 'jwt-decision',
+        type: 'decisions:Decision',
+        name: 'Use short-lived JWT access tokens',
+        attributes: [
+          {
+            predicate: 'decisions:context',
+            value: 'Reduce credential exposure after a token leak',
+          },
+          {
+            predicate: 'decisions:outcome',
+            value: 'Use 15-minute access tokens and rotate refresh tokens',
+          },
+        ],
+      },
+    ],
+    relations: [
+      { subject: 'first-commit', predicate: 'github:affects', object: 'verify-token' },
+      { subject: 'first-commit', predicate: 'github:affects', object: 'auth-gateway' },
+      { subject: 'first-commit', predicate: 'github:authoredBy', object: 'alice' },
+      { subject: 'second-commit', predicate: 'github:affects', object: 'verify-token' },
+      { subject: 'second-commit', predicate: 'github:authoredBy', object: 'bob' },
+      { subject: 'jwt-decision', predicate: 'decisions:affects', object: 'auth-gateway' },
+      {
+        subject: 'jwt-decision',
+        predicate: 'decisions:implementedBy',
+        object: 'first-commit',
+        confidence: 0.98,
+      },
+    ],
+    model: 'test/model',
+    promptVersion: 'agent-memory-v2',
+  });
 
 describe('agent memory proposal contract', () => {
   it('verifies signed evidence and compiles semantic items with provenance', () => {
@@ -201,6 +305,108 @@ describe('agent memory proposal contract', () => {
       content: noRequesterSource.proposalEvent.content,
     });
     expect(() => parseAgentMemoryEnvelope(noRequesterSource)).toThrow(/authored by the proposing/);
+  });
+
+  it('compiles v2 profile entities into the direct edges required by real SPARQL questions', () => {
+    const parsed = parseAgentMemoryEnvelope(envelope({ proposalContent: v2Content() }));
+    const compiled = compileAgentMemory(parsed.envelope, parsed.proposal);
+    const store = generatedStore(compiled.quads);
+    const contributors = queryRows(
+      store,
+      `PREFIX schema: <http://schema.org/>
+       PREFIX code: <http://dkg.io/ontology/code/>
+       PREFIX github: <http://dkg.io/ontology/github/>
+       SELECT DISTINCT ?name ?sha WHERE { GRAPH ?g {
+         ?function a code:Function ; schema:name "verifyToken" .
+         ?commit a github:Commit ; github:affects ?function ;
+           github:authoredBy ?editor ; github:sha ?sha .
+         ?editor schema:name ?name .
+       } } ORDER BY ?sha`,
+    );
+    expect(
+      contributors.map((row) => ({
+        name: row.get('name')?.value,
+        sha: row.get('sha')?.value,
+      })),
+    ).toEqual([
+      { name: 'Alice Nguyen', sha: 'a1b2c3d4' },
+      { name: 'Bob Ortiz', sha: 'e5f6a7b8' },
+    ]);
+
+    const decisions = queryRows(
+      store,
+      `PREFIX schema: <http://schema.org/>
+       PREFIX code: <http://dkg.io/ontology/code/>
+       PREFIX github: <http://dkg.io/ontology/github/>
+       PREFIX decisions: <http://dkg.io/ontology/decisions/>
+       SELECT ?decision ?context ?outcome WHERE { GRAPH ?g {
+         ?component a code:Package ; schema:name "Authentication gateway" .
+         ?commit a github:Commit ; github:sha "a1b2c3d4" ; github:affects ?component .
+         ?decision a decisions:Decision ; decisions:affects ?component ;
+           decisions:implementedBy ?commit ; decisions:context ?context ;
+           decisions:outcome ?outcome .
+       } }`,
+    );
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0]!.get('context')?.value).toContain('credential exposure');
+    expect(decisions[0]!.get('outcome')?.value).toContain('15-minute');
+    expect(compiled.quads).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          predicate: 'http://dkg.io/ontology/memory/profile',
+          object: 'http://dkg.io/ontology/profile/dkg-software/1',
+        }),
+        expect.objectContaining({
+          predicate: 'http://dkg.io/ontology/memory/confidence',
+          object: '"0.98"^^<http://www.w3.org/2001/XMLSchema#decimal>',
+        }),
+      ]),
+    );
+  });
+
+  it('rejects v2 namespace injection, dangling relations, and unsafe locators', () => {
+    const valid = JSON.parse(v2Content()) as Record<string, unknown>;
+    expect(() =>
+      parseAgentMemoryEnvelope(
+        envelope({
+          proposalContent: JSON.stringify({
+            ...valid,
+            entities: [{ id: 'attack', type: 'evil:Root', name: 'Attack' }],
+            relations: [],
+          }),
+        }),
+      ),
+    ).toThrow(/type is not allowed/);
+    expect(() =>
+      parseAgentMemoryEnvelope(
+        envelope({
+          proposalContent: JSON.stringify({
+            ...valid,
+            relations: [
+              { subject: 'jwt-decision', predicate: 'decisions:affects', object: 'missing' },
+            ],
+          }),
+        }),
+      ),
+    ).toThrow(/endpoints must reference/);
+    expect(() =>
+      parseAgentMemoryEnvelope(
+        envelope({
+          proposalContent: JSON.stringify({
+            ...valid,
+            entities: [
+              {
+                id: 'attack',
+                type: 'memory:Entity',
+                name: 'Attack',
+                locator: { kind: 'uri', uri: 'javascript:alert(1)' },
+              },
+            ],
+            relations: [],
+          }),
+        }),
+      ),
+    ).toThrow(/HTTPS or URN/);
   });
 });
 
