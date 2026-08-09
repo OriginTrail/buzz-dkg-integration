@@ -360,7 +360,31 @@ describe('agent memory proposal contract', () => {
           predicate: 'http://dkg.io/ontology/memory/confidence',
           object: '"0.98"^^<http://www.w3.org/2001/XMLSchema#decimal>',
         }),
+        expect.objectContaining({
+          predicate: 'https://w3id.org/buzz-dkg/buzz#sourceSetDigest',
+          object: `"${compiled.digest}"`,
+        }),
       ]),
+    );
+    const proposingAgent = `urn:nostr:pubkey:${parsed.envelope.requesterPubkey}`;
+    const decisionUri = decisions[0]!.get('decision')!.value;
+    const attributedEntities = queryRows(
+      store,
+      `PREFIX prov: <http://www.w3.org/ns/prov#>
+       SELECT ?agent WHERE { GRAPH ?g { <${decisionUri}> prov:wasAttributedTo ?agent } }`,
+    );
+    expect(attributedEntities.map((row) => row.get('agent')?.value)).toEqual([proposingAgent]);
+    const attributedAssertions = queryRows(
+      store,
+      `PREFIX memory: <http://dkg.io/ontology/memory/>
+       PREFIX prov: <http://www.w3.org/ns/prov#>
+       SELECT ?assertion ?agent WHERE { GRAPH ?g {
+         ?assertion a memory:Assertion ; prov:wasAttributedTo ?agent .
+       } }`,
+    );
+    expect(attributedAssertions).toHaveLength(7);
+    expect(new Set(attributedAssertions.map((row) => row.get('agent')?.value))).toEqual(
+      new Set([proposingAgent]),
     );
   });
 

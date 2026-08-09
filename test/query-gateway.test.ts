@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import oxigraph from 'oxigraph';
 import { loadQueryGatewayConfig } from '../src/config.ts';
 import type { DkgClient } from '../src/dkg/client.ts';
 import { QueryGateway } from '../src/query-gateway/server.ts';
@@ -159,6 +161,18 @@ function body(operation: string, args: Record<string, unknown> = {}) {
 
 function binding(value: string): { value: string } {
   return { value };
+}
+
+function fixtureQuery(sparql: string): Array<Record<string, { value: string }>> {
+  const store = new oxigraph.Store();
+  store.load(readFileSync(new URL('./fixtures/ontology/lifelike-project.trig', import.meta.url)), {
+    format: 'application/trig',
+  });
+  const result = store.query(sparql);
+  if (!Array.isArray(result)) throw new Error('expected SELECT results from fixture query');
+  return (result as Array<Map<string, oxigraph.Term>>).map((row) =>
+    Object.fromEntries([...row.entries()].map(([name, term]) => [name, { value: term.value }])),
+  );
 }
 
 describe('query gateway configuration', () => {
@@ -437,37 +451,12 @@ describe('query gateway HTTP boundary', () => {
     const dkg = new GatewayDkg();
     const contributor = 'urn:dkg:github:user:alice';
     const commit = 'urn:dkg:github:commit:acme/api/a1b2c3d4';
-    const component = 'urn:dkg:code:package:%40acme%2Fauth';
     const decision = 'urn:dkg:decision:short-lived-jwt';
     const at = '2026-07-14T10:15:00Z';
-    dkg.bindingResolver = (options) => {
-      if (options.view !== 'verifiable-memory') return [];
-      if (options.sparql.includes('SELECT DISTINCT ?contributor')) {
-        return [
-          {
-            contributor: binding(contributor),
-            contributorName: binding('Alice Nguyen'),
-            commit: binding(commit),
-            sha: binding('a1b2c3d4'),
-            at: binding(at),
-          },
-        ];
-      }
-      if (options.sparql.includes('SELECT DISTINCT ?decision')) {
-        return [
-          {
-            decision: binding(decision),
-            decisionName: binding('Use short-lived JWT access tokens'),
-            context: binding('Reduce credential exposure after a token leak'),
-            outcome: binding('Use 15-minute access tokens'),
-            commit: binding(commit),
-            sha: binding('a1b2c3d4'),
-            component: binding(component),
-          },
-        ];
-      }
-      return null;
-    };
+    // Execute the production SPARQL against the lifelike ontology fixture.
+    // SWM is empty here so the result layer remains deterministic for this test.
+    dkg.bindingResolver = (options) =>
+      options.view === 'verifiable-memory' ? fixtureQuery(options.sparql) : [];
     const { url } = await startGateway(dkg);
     const contributorResponse = await request(
       url,
@@ -482,6 +471,14 @@ describe('query gateway HTTP boundary', () => {
             commit,
             sha: 'a1b2c3d4',
             at: Date.parse(at) / 1_000,
+            layer: 'VM',
+          },
+          {
+            contributor: 'urn:dkg:github:user:bob',
+            contributorName: 'Bob Ortiz',
+            commit: 'urn:dkg:github:commit:acme/api/e5f6a7b8',
+            sha: 'e5f6a7b8',
+            at: Date.parse('2026-07-21T16:40:00Z') / 1_000,
             layer: 'VM',
           },
         ],
@@ -501,8 +498,8 @@ describe('query gateway HTTP boundary', () => {
           {
             decision,
             decisionName: 'Use short-lived JWT access tokens',
-            context: 'Reduce credential exposure after a token leak',
-            outcome: 'Use 15-minute access tokens',
+            context: 'Long-lived bearer tokens made credential exposure too costly.',
+            outcome: 'Use 15-minute access tokens with rotating refresh tokens.',
             layer: 'VM',
           },
         ],
@@ -518,6 +515,21 @@ describe('query gateway HTTP boundary', () => {
       .map((call) => call.sparql ?? '');
     expect(fixedQueries).toHaveLength(4);
     expect(fixedQueries.every((sparql) => !sparql.includes('DELETE'))).toBe(true);
+
+    for (const [operation, arguments_] of [
+      [
+        'software_contributors',
+        { componentName: 'functionThatDoesNotExist', componentType: 'function' },
+      ],
+      ['decision_trace', { commitSha: 'deadbeef', componentName: 'Authentication gateway' }],
+      ['decision_trace', { commitSha: 'a1b2c3d4', componentName: 'Unrelated component' }],
+    ] as const) {
+      const negative = await request(url, body(operation, arguments_));
+      const payload = (await negative.json()) as {
+        result: { contributors?: unknown[]; decisions?: unknown[] };
+      };
+      expect(payload.result.contributors ?? payload.result.decisions).toEqual([]);
+    }
   });
 
   it('preserves raw N-Triples objects in topology triples', async () => {

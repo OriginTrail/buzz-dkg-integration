@@ -602,6 +602,9 @@ function compileAgentMemoryV2(
   add(rootUri, `${SCHEMA}name`, literal(proposal.summary));
   add(rootUri, `${SCHEMA}description`, literal(proposal.summary));
   add(rootUri, `${PREFIXES.memory}sourceSetDigest`, literal(digest));
+  // Preserve the digest surface used by existing channel-memory, evidence,
+  // and grounded-answer readers while they learn the DKG-native profile term.
+  add(rootUri, `${BUZZ}sourceSetDigest`, literal(digest));
   add(rootUri, `${PREFIXES.memory}sourceEventCount`, integer(sorted.length));
   add(rootUri, `${BUZZ}channel`, channelUri(envelope.channelId));
   add(rootUri, `${BUZZ}proposalEvent`, eventUri(envelope.proposalEvent.id));
@@ -627,6 +630,7 @@ function compileAgentMemoryV2(
     add(uri, `${RDF}type`, `${PROV}Entity`);
     add(uri, `${RDF}type`, typeIri);
     add(uri, `${SCHEMA}name`, literal(entity.name));
+    add(uri, `${PROV}wasAttributedTo`, pubkeyUri(envelope.requesterPubkey));
     if (entity.description) add(uri, `${SCHEMA}description`, literal(entity.description));
     for (const attribute of entity.attributes ?? []) {
       const datatype = profileAttributeDatatype(proposal.profiles, attribute.predicate)!;
@@ -679,6 +683,7 @@ function compileAgentMemoryV2(
     add(assertion, `${PREFIXES.memory}subject`, subject);
     add(assertion, `${PREFIXES.memory}predicate`, predicate);
     add(assertion, `${PREFIXES.memory}object`, relationObject);
+    add(assertion, `${PROV}wasAttributedTo`, pubkeyUri(envelope.requesterPubkey));
     if (relation.confidence !== undefined) {
       add(assertion, `${PREFIXES.memory}confidence`, decimal(relation.confidence));
     }
