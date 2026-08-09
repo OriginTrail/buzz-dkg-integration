@@ -1,0 +1,231 @@
+@prefix owl:       <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:       <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:      <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:       <http://www.w3.org/2001/XMLSchema#> .
+@prefix dcterms:   <http://purl.org/dc/terms/> .
+@prefix schema:    <http://schema.org/> .
+@prefix prov:      <http://www.w3.org/ns/prov#> .
+@prefix doap:      <http://usefulinc.com/ns/doap#> .
+@prefix spdx-core: <https://spdx.org/rdf/3.0.1/terms/Core/> .
+@prefix code:      <http://dkg.io/ontology/code/> .
+@prefix github:    <http://dkg.io/ontology/github/> .
+@prefix decisions: <http://dkg.io/ontology/decisions/> .
+@prefix software:  <http://dkg.io/ontology/software/> .
+
+<http://dkg.io/ontology/profile/dkg-software/1>
+  a owl:Ontology ;
+  dcterms:title "DKG software project memory profile" ;
+  dcterms:description "Query-oriented software project entities and relations aligned with the native DKG coding-project ontology." ;
+  owl:versionInfo "1.0.0-beta" ;
+  dcterms:created "2026-08-09"^^xsd:date ;
+  owl:imports
+    <http://dkg.io/ontology/profile/dkg-memory/1> ,
+    <http://schema.org/> ,
+    <http://www.w3.org/ns/prov#> ,
+    <http://usefulinc.com/ns/doap#> .
+
+code:Component
+  a owl:Class ;
+  rdfs:label "Software component" ;
+  rdfs:subClassOf prov:Entity, schema:SoftwareSourceCode .
+
+code:Package
+  a owl:Class ;
+  rdfs:label "Software package" ;
+  rdfs:subClassOf code:Component, doap:Project, schema:SoftwareApplication .
+
+code:File
+  a owl:Class ;
+  rdfs:label "Source file" ;
+  rdfs:subClassOf code:Component, schema:SoftwareSourceCode .
+
+code:Function
+  a owl:Class ;
+  rdfs:label "Function" ;
+  rdfs:subClassOf code:Component .
+
+code:Class
+  a owl:Class ;
+  rdfs:label "Class" ;
+  rdfs:subClassOf code:Component .
+
+code:Interface
+  a owl:Class ;
+  rdfs:label "Interface" ;
+  rdfs:subClassOf code:Component .
+
+code:TypeAlias
+  a owl:Class ;
+  rdfs:label "Type alias" ;
+  rdfs:subClassOf code:Component .
+
+code:Enum
+  a owl:Class ;
+  rdfs:label "Enumeration" ;
+  rdfs:subClassOf code:Component .
+
+software:Build
+  a owl:Class ;
+  rdfs:label "Software build" ;
+  rdfs:subClassOf prov:Activity .
+
+software:TestCase
+  a owl:Class ;
+  rdfs:label "Test case" ;
+  rdfs:subClassOf prov:Entity .
+
+software:TestRun
+  a owl:Class ;
+  rdfs:label "Test run" ;
+  rdfs:subClassOf prov:Activity .
+
+software:Deployment
+  a owl:Class ;
+  rdfs:label "Deployment" ;
+  rdfs:subClassOf prov:Activity .
+
+software:Finding
+  a owl:Class ;
+  rdfs:label "Software finding" ;
+  rdfs:subClassOf prov:Entity .
+
+github:Repository
+  a owl:Class ;
+  rdfs:subClassOf code:Component, schema:SoftwareSourceCode, doap:Project .
+
+github:PullRequest
+  a owl:Class ;
+  rdfs:subClassOf schema:CreativeWork, prov:Entity .
+
+github:Issue
+  a owl:Class ;
+  rdfs:subClassOf schema:Question, schema:CreativeWork, prov:Entity .
+
+github:Commit
+  a owl:Class ;
+  rdfs:subClassOf prov:Entity .
+
+github:Review
+  a owl:Class ;
+  rdfs:subClassOf schema:Review, prov:Entity .
+
+github:User
+  a owl:Class ;
+  rdfs:subClassOf prov:Agent, schema:Person .
+
+code:path a owl:DatatypeProperty ; rdfs:range xsd:string .
+code:language a owl:DatatypeProperty ; rdfs:range xsd:string .
+code:qualifiedName a owl:DatatypeProperty ; rdfs:range xsd:string .
+code:startLine a owl:DatatypeProperty ; rdfs:range xsd:integer .
+code:endLine a owl:DatatypeProperty ; rdfs:range xsd:integer .
+
+code:package
+  a owl:ObjectProperty ;
+  rdfs:range code:Package .
+
+code:contains
+  a owl:ObjectProperty ;
+  rdfs:range code:Component .
+
+code:definedIn
+  a owl:ObjectProperty ;
+  rdfs:domain code:Component ;
+  rdfs:range code:File .
+
+code:imports a owl:ObjectProperty ; rdfs:range owl:Thing .
+code:exports a owl:ObjectProperty ; rdfs:range code:Component .
+code:extends a owl:ObjectProperty ; rdfs:range code:Component .
+code:implements a owl:ObjectProperty ; rdfs:range code:Component .
+code:calls a owl:ObjectProperty ; rdfs:domain code:Function ; rdfs:range code:Function .
+code:dependsOn a owl:ObjectProperty ; rdfs:range owl:Thing .
+
+github:number a owl:DatatypeProperty ; rdfs:range xsd:integer .
+github:state a owl:DatatypeProperty ; rdfs:range xsd:string .
+github:sha a owl:DatatypeProperty ; rdfs:range xsd:string .
+github:url a owl:DatatypeProperty ; rdfs:range xsd:anyURI .
+github:mergedAt a owl:DatatypeProperty ; rdfs:range xsd:dateTime .
+
+github:authoredBy
+  a owl:ObjectProperty ;
+  rdfs:label "authored by" ;
+  rdfs:range prov:Agent ;
+  rdfs:subPropertyOf prov:wasAttributedTo .
+
+github:reviewedBy
+  a owl:ObjectProperty ;
+  rdfs:range prov:Agent .
+
+github:affects
+  a owl:ObjectProperty ;
+  rdfs:label "changes or affects" ;
+  rdfs:comment "Connects a pull request or commit to any affected package, file, symbol, test, or deployment entity." ;
+  rdfs:range owl:Thing .
+
+github:inRepo
+  a owl:ObjectProperty ;
+  rdfs:range github:Repository .
+
+github:containsCommit
+  a owl:ObjectProperty ;
+  rdfs:label "contains commit" ;
+  rdfs:domain github:PullRequest ;
+  rdfs:range github:Commit ;
+  rdfs:subPropertyOf schema:hasPart .
+
+github:parentCommit
+  a owl:ObjectProperty ;
+  rdfs:domain github:Commit ;
+  rdfs:range github:Commit .
+
+github:closes
+  a owl:ObjectProperty ;
+  rdfs:domain github:PullRequest ;
+  rdfs:range github:Issue .
+
+software:repository
+  a owl:ObjectProperty ;
+  rdfs:range github:Repository .
+
+software:atRevision
+  a owl:ObjectProperty ;
+  rdfs:range github:Commit .
+
+software:tests
+  a owl:ObjectProperty ;
+  rdfs:domain software:TestCase ;
+  rdfs:range owl:Thing .
+
+software:executedTest
+  a owl:ObjectProperty ;
+  rdfs:domain software:TestRun ;
+  rdfs:range software:TestCase .
+
+software:result
+  a owl:DatatypeProperty ;
+  rdfs:domain software:TestRun ;
+  rdfs:range xsd:string .
+
+software:supports
+  a owl:ObjectProperty ;
+  rdfs:domain software:TestRun ;
+  rdfs:range prov:Entity .
+
+software:deployedCommit
+  a owl:ObjectProperty ;
+  rdfs:domain software:Deployment ;
+  rdfs:range github:Commit .
+
+software:environment
+  a owl:DatatypeProperty ;
+  rdfs:domain software:Deployment ;
+  rdfs:range xsd:string .
+
+software:spdxElement
+  a owl:ObjectProperty ;
+  rdfs:comment "Links a DKG software entity to its SPDX 3 software artifact, package, file, snippet, or vulnerability element." ;
+  rdfs:range spdx-core:Element .
+
+# These general decision properties are specialized here only by their range.
+decisions:implementedBy rdfs:range github:Commit .
+decisions:recordedIn rdfs:range github:PullRequest .
+decisions:affects rdfs:range owl:Thing .

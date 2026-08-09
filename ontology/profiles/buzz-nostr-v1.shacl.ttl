@@ -1,0 +1,21 @@
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix prov:  <http://www.w3.org/ns/prov#> .
+@prefix buzz:  <https://w3id.org/buzz-dkg/buzz#> .
+@prefix nostr: <https://w3id.org/buzz-dkg/nostr#> .
+
+buzz:AgentMemoryShape
+  a sh:NodeShape ;
+  sh:targetClass buzz:AgentMemory ;
+  sh:property [ sh:path buzz:channel ; sh:minCount 1 ; sh:maxCount 1 ; sh:class buzz:Channel ] ;
+  sh:property [ sh:path buzz:proposalEvent ; sh:minCount 1 ; sh:maxCount 1 ; sh:class nostr:Event ] .
+
+nostr:EventShape
+  a sh:NodeShape ;
+  sh:targetClass nostr:Event ;
+  sh:property [ sh:path nostr:kind ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:integer ] ;
+  sh:property [ sh:path nostr:createdAt ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:dateTime ] ;
+  sh:property [ sh:path nostr:content ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path nostr:sig ; sh:minCount 1 ; sh:maxCount 1 ; sh:pattern "^[0-9a-f]{128}$" ] ;
+  sh:property [ sh:path prov:wasAttributedTo ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] .
+

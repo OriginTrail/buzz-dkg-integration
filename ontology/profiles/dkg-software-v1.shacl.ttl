@@ -1,0 +1,32 @@
+@prefix sh:       <http://www.w3.org/ns/shacl#> .
+@prefix xsd:      <http://www.w3.org/2001/XMLSchema#> .
+@prefix schema:   <http://schema.org/> .
+@prefix code:     <http://dkg.io/ontology/code/> .
+@prefix github:   <http://dkg.io/ontology/github/> .
+@prefix software: <http://dkg.io/ontology/software/> .
+
+code:FileShape
+  a sh:NodeShape ;
+  sh:targetClass code:File ;
+  sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path code:path ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] .
+
+code:SymbolShape
+  a sh:NodeShape ;
+  sh:targetClass code:Function, code:Class, code:Interface ;
+  sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path code:definedIn ; sh:minCount 1 ; sh:maxCount 1 ; sh:class code:File ] .
+
+github:CommitShape
+  a sh:NodeShape ;
+  sh:targetClass github:Commit ;
+  sh:property [ sh:path github:sha ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path github:inRepo ; sh:minCount 1 ; sh:maxCount 1 ; sh:class github:Repository ] ;
+  sh:property [ sh:path github:authoredBy ; sh:minCount 1 ; sh:nodeKind sh:IRI ] .
+
+software:TestRunShape
+  a sh:NodeShape ;
+  sh:targetClass software:TestRun ;
+  sh:property [ sh:path software:executedTest ; sh:minCount 1 ; sh:class software:TestCase ] ;
+  sh:property [ sh:path software:result ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "passed" "failed" "skipped" ) ] .
+

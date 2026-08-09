@@ -1,0 +1,21 @@
+PREFIX schema: <http://schema.org/>
+PREFIX code: <http://dkg.io/ontology/code/>
+PREFIX github: <http://dkg.io/ontology/github/>
+PREFIX decisions: <http://dkg.io/ontology/decisions/>
+
+SELECT DISTINCT ?decision ?decisionName ?context ?outcome ?commit ?sha ?component WHERE {
+  GRAPH ?g {
+    ?component a code:Package ;
+      schema:name "Authentication gateway" .
+    ?commit a github:Commit ;
+      github:sha ?sha ;
+      github:affects ?component .
+    FILTER(?sha = "a1b2c3d4")
+    ?decision a decisions:Decision ;
+      schema:name ?decisionName ;
+      decisions:affects ?component ;
+      decisions:implementedBy ?commit .
+    OPTIONAL { ?decision decisions:context ?context }
+    OPTIONAL { ?decision decisions:outcome ?outcome }
+  }
+}
