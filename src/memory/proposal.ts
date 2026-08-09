@@ -46,6 +46,21 @@ const LOCAL_ID = /^[a-z][a-z0-9-]{0,63}$/u;
 const GITHUB_REPOSITORY = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/u;
 const GITHUB_RESOURCE = new Set(['repository', 'pull-request', 'issue', 'commit']);
 const CODE_SYMBOL_KIND = new Set(['function', 'class', 'interface', 'type-alias', 'enum']);
+const GITHUB_LOCATOR_TYPES = new Set([
+  'github:Repository',
+  'github:PullRequest',
+  'github:Issue',
+  'github:Commit',
+]);
+const CODE_LOCATOR_TYPES = new Set([
+  'code:Package',
+  'code:File',
+  'code:Function',
+  'code:Class',
+  'code:Interface',
+  'code:TypeAlias',
+  'code:Enum',
+]);
 const SAFE_EXTERNAL_IRI = /^(?:https:\/\/[^<>"{}|^`\\\s]{1,990}|urn:[^<>"{}|^`\\\s]{1,995})$/u;
 const MAX_SOURCES = 16;
 const MAX_ITEMS = 50;
@@ -288,6 +303,12 @@ function parseEntity(
   const description = optionalText(value.description, `${label}.description`, 4_000);
   const locator =
     value.locator === undefined ? undefined : parseLocator(value.locator, `${label}.locator`);
+  if (GITHUB_LOCATOR_TYPES.has(type) && locator?.kind !== 'github') {
+    invalid(`${label}.locator must provide a stable github identifier for ${type}`);
+  }
+  if (CODE_LOCATOR_TYPES.has(type) && locator?.kind !== 'code') {
+    invalid(`${label}.locator must provide a stable code identifier for ${type}`);
+  }
   if (locator?.kind === 'github' && !type.startsWith('github:')) {
     invalid(`${label}.locator kind github requires a github type`);
   }

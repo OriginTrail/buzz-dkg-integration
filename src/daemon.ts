@@ -123,16 +123,6 @@ export class Daemon {
     );
   }
 
-  /** Reserve the deterministic private graph without doing network I/O. */
-  private reserveContextGraph(channelId: string): string | null {
-    const existing = this.registry.contextGraphFor(channelId);
-    if (existing) return existing;
-    if (this.config.autoProvisionChannels !== true) return null;
-    const contextGraphId = contextGraphIdForChannel(this.config.relayHttpUrl, channelId);
-    this.registry.bindChannel(channelId, contextGraphId);
-    return contextGraphId;
-  }
-
   /** Create and read back a reserved graph on the crash-recoverable queue. */
   private async ensureContextGraphReady(channelId: string, contextGraphId: string): Promise<void> {
     const pending = this.#graphProvisioning.get(channelId);
@@ -393,8 +383,15 @@ export class Daemon {
   } {
     const parsed = parseAgentMemoryEnvelope(raw);
     const { envelope, proposal } = parsed;
-    this.registry.saveAgentMemoryEnvelope(envelope.proposalEvent.id, envelope);
-    const contextGraphId = this.reserveContextGraph(envelope.channelId);
+    // Compile before reserving durable channel state. Canonical identifier
+    // collisions and every other semantic rejection must leave an unknown
+    // channel unknown rather than creating an empty/dead binding.
+    const compiled = compileAgentMemory(envelope, proposal);
+    const contextGraphId =
+      this.registry.contextGraphFor(envelope.channelId) ??
+      (this.config.autoProvisionChannels === true
+        ? contextGraphIdForChannel(this.config.relayHttpUrl, envelope.channelId)
+        : null);
     if (!contextGraphId) {
       throw new IntegrationApiError(
         404,
@@ -402,7 +399,8 @@ export class Daemon {
         'channel is not configured and automatic Context Graph provisioning is disabled',
       );
     }
-    const compiled = compileAgentMemory(envelope, proposal);
+    this.registry.saveAgentMemoryEnvelope(envelope.proposalEvent.id, envelope);
+    this.registry.bindChannel(envelope.channelId, contextGraphId);
     let op = this.registry.opByTrigger(envelope.proposalEvent.id);
     const duplicate = !!op;
     if (!op) {

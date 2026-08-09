@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:http';
@@ -479,6 +480,7 @@ describe('Buzz-first installer CLI', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('Agent memory: enabled');
     const override = readFileSync(join(f.config, 'relay.dkg.override.yml'), 'utf8');
+    expect(statSync(join(f.config, 'relay.dkg.override.yml')).mode & 0o777).toBe(0o600);
     expect(override).toContain('BUZZ_DKG_QUERY_URL: http://127.0.0.1:9297/v1/query');
     expect(override).toMatch(/BUZZ_DKG_QUERY_TOKEN: "[0-9a-f]{64}"/);
     expect(override).toContain('BUZZ_DKG_QUERY_TIMEOUT_MS: "120000"');
@@ -541,6 +543,46 @@ describe('Buzz-first installer CLI', () => {
     expect(restore).toBeGreaterThan(-1);
     expect(stop).toBeGreaterThan(restore);
     expect(existsSync(join(f.config, 'relay.dkg.override.yml'))).toBe(false);
+  });
+
+  it('refuses to stop the bridge while an operator-managed relay advertises it', async () => {
+    const f = fixture();
+    const api = await apiServer('edge', {
+      supportedExtensions: ['buzz-dkg-memory-v1'],
+    });
+    configureBuzzRelay(f, api, { membershipRequired: false });
+    const installed = await runInstaller(f, [
+      'install',
+      '--relay',
+      api,
+      '--dkg-api',
+      api,
+      '--dkg-token-path',
+      f.token,
+      '--yes',
+    ]);
+    expect(installed.status, installed.stderr).toBe(0);
+
+    const inspected = JSON.parse(readFileSync(f.relayInspect, 'utf8'));
+    inspected[0].Config.Env.push(
+      'BUZZ_DKG_MEMORY_ENABLED=true',
+      'BUZZ_DKG_QUERY_URL=http://127.0.0.1:9297/v1/query',
+      'BUZZ_DKG_QUERY_TOKEN=secret',
+    );
+    writeFileSync(f.relayInspect, JSON.stringify(inspected));
+
+    const blocked = await runInstaller(f, ['remove']);
+    expect(blocked.status).not.toBe(0);
+    expect(blocked.stderr).toContain('operator-managed and still advertises the DKG proxy');
+    expect(readFileSync(f.dockerLog, 'utf8')).not.toContain('--profile bridge-relay down');
+
+    inspected[0].Config.Env = inspected[0].Config.Env.filter(
+      (entry) => !entry.startsWith('BUZZ_DKG_'),
+    );
+    writeFileSync(f.relayInspect, JSON.stringify(inspected));
+    const removed = await runInstaller(f, ['remove']);
+    expect(removed.status, removed.stderr).toBe(0);
+    expect(readFileSync(f.dockerLog, 'utf8')).toContain('--profile bridge-relay down');
   });
 
   it('enrolls stable managed identities through the native Buzz admin CLI on a closed relay', async () => {

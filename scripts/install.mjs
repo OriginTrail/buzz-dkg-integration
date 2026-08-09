@@ -734,6 +734,24 @@ function remove(context) {
     const management = relayManagementFromContainer(container, values.BUZZ_DKG_RELAY_CONTAINER);
     if (management?.compose && existsSync(join(context.configDir, 'relay.dkg.override.yml'))) {
       disableManagedRelayDkgProxy(context, management);
+    } else if (!management?.compose) {
+      const relayEnvironment = new Map(
+        (container?.Config?.Env ?? []).map((entry) => {
+          const separator = entry.indexOf('=');
+          return separator < 0
+            ? [entry, '']
+            : [entry.slice(0, separator), entry.slice(separator + 1)];
+        }),
+      );
+      const stillAdvertisesProxy =
+        relayEnvironment.get('BUZZ_DKG_MEMORY_ENABLED')?.toLowerCase() === 'true' ||
+        Boolean(relayEnvironment.get('BUZZ_DKG_QUERY_URL')) ||
+        Boolean(relayEnvironment.get('BUZZ_DKG_QUERY_TOKEN'));
+      if (stillAdvertisesProxy) {
+        fail(
+          `Buzz Relay '${values.BUZZ_DKG_RELAY_CONTAINER}' is operator-managed and still advertises the DKG proxy; remove BUZZ_DKG_MEMORY_ENABLED, BUZZ_DKG_QUERY_URL and BUZZ_DKG_QUERY_TOKEN from the relay, restart it, then rerun buzz-dkg remove`,
+        );
+      }
     }
   }
   run(

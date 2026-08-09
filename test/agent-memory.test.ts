@@ -388,6 +388,61 @@ describe('agent memory proposal contract', () => {
     );
   });
 
+  it('compiles a general-only profile into queryable event and task memory', () => {
+    const parsed = parseAgentMemoryEnvelope(
+      envelope({
+        proposalContent: JSON.stringify({
+          schemaVersion: 2,
+          profiles: ['dkg-memory@1'],
+          summary: 'Prepare the community workshop',
+          entities: [
+            {
+              id: 'workshop',
+              type: 'schema:Event',
+              name: 'Community memory workshop',
+              attributes: [{ predicate: 'schema:startDate', value: '2026-08-14T16:00:00Z' }],
+            },
+            { id: 'room', type: 'schema:Place', name: 'Belgrade workshop room' },
+            { id: 'mira', type: 'schema:Person', name: 'Mira' },
+            {
+              id: 'slides',
+              type: 'tasks:Task',
+              name: 'Prepare the ontology slides',
+              attributes: [
+                { predicate: 'tasks:status', value: 'todo' },
+                { predicate: 'tasks:dueDate', value: '2026-08-13T12:00:00Z' },
+              ],
+            },
+          ],
+          relations: [
+            { subject: 'slides', predicate: 'schema:about', object: 'workshop' },
+            { subject: 'slides', predicate: 'tasks:assignee', object: 'mira' },
+            { subject: 'workshop', predicate: 'schema:location', object: 'room' },
+          ],
+        }),
+      }),
+    );
+    const store = generatedStore(compileAgentMemory(parsed.envelope, parsed.proposal).quads);
+    const tasks = queryRows(
+      store,
+      `PREFIX schema: <http://schema.org/>
+       PREFIX tasks: <http://dkg.io/ontology/tasks/>
+       SELECT ?taskName ?assigneeName ?eventName ?placeName ?due WHERE { GRAPH ?g {
+         ?task a tasks:Task ; schema:name ?taskName ; schema:about ?event ;
+           tasks:status "todo" ; tasks:assignee ?assignee ; tasks:dueDate ?due .
+         ?assignee schema:name ?assigneeName .
+         ?event a schema:Event ; schema:name ?eventName ; schema:location ?place .
+         ?place schema:name ?placeName .
+       } }`,
+    );
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.get('taskName')?.value).toBe('Prepare the ontology slides');
+    expect(tasks[0]!.get('assigneeName')?.value).toBe('Mira');
+    expect(tasks[0]!.get('eventName')?.value).toBe('Community memory workshop');
+    expect(tasks[0]!.get('placeName')?.value).toBe('Belgrade workshop room');
+    expect(tasks[0]!.get('due')?.value).toBe('2026-08-13T12:00:00Z');
+  });
+
   it('rejects v2 namespace injection, dangling relations, and unsafe locators', () => {
     const valid = JSON.parse(v2Content()) as Record<string, unknown>;
     expect(() =>
@@ -431,6 +486,18 @@ describe('agent memory proposal contract', () => {
         }),
       ),
     ).toThrow(/HTTPS or URN/);
+
+    expect(() =>
+      parseAgentMemoryEnvelope(
+        envelope({
+          proposalContent: JSON.stringify({
+            ...valid,
+            entities: [{ id: 'commit', type: 'github:Commit', name: 'Unlocatable commit' }],
+            relations: [],
+          }),
+        }),
+      ),
+    ).toThrow(/stable github identifier/);
   });
 });
 
@@ -463,6 +530,29 @@ describe('automatic channel memory lifecycle', () => {
     ).rejects.toMatchObject({ code: 'unknown_channel' });
     expect(dkg.createdContextGraphs).toHaveLength(0);
     expect(daemon.registry.contextGraphFor(CHANNEL)).toBeNull();
+  });
+
+  it('does not reserve a channel when canonical v2 compilation rejects the proposal', () => {
+    const { daemon, dkg } = setup();
+    const valid = JSON.parse(v2Content()) as { entities: Array<Record<string, unknown>> } & Record<
+      string,
+      unknown
+    >;
+    const duplicateCommit = {
+      ...valid.entities.find((entity) => entity.id === 'first-commit')!,
+      id: 'duplicate-commit',
+    };
+    valid.entities.push(duplicateCommit);
+
+    expect(() =>
+      daemon.submitAgentMemory(
+        envelope({
+          proposalContent: JSON.stringify(valid),
+        }),
+      ),
+    ).toThrow(/duplicate identifiers/);
+    expect(daemon.registry.contextGraphFor(CHANNEL)).toBeNull();
+    expect(dkg.createdContextGraphs).toHaveLength(0);
   });
 
   it('provisions one private Context Graph and stores a proposal in SWM without a chat receipt', async () => {
