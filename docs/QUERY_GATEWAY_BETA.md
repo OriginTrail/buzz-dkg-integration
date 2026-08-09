@@ -38,8 +38,11 @@ BUZZ_DKG_MEMORY_ENABLED=true
 The relay derives the companion memory endpoint from that URL and forwards to
 `/v1/memory` with the same token. `BUZZ_DKG_MEMORY_ENABLED` is deliberately
 separate from query configuration: set it only when the integration supports
-`/v1/memory`. A compatible relay then advertises `buzz-dkg-memory-v1` through
-NIP-11.
+`/v1/memory`. A compatible relay advertises both `buzz-dkg-memory-v1` and
+`buzz-dkg-memory-v2` through NIP-11, plus a `dkg_memory` descriptor containing
+the supported schema versions, ontology profiles, adapter profiles, proposal
+kind, and fixed query operations. Agents use v2 only when both the extension
+and descriptor agree; v1 remains a compatibility path.
 
 If an adopted relay remains on a Docker bridge, its `127.0.0.1` is not the
 host-networked daemon's loopback. The query bridge supports two bounded
@@ -100,13 +103,15 @@ Send `POST /v1/query`, `Content-Type: application/json`, and
 
 The operation and its exact arguments are:
 
-| operation           | arguments    | result                                                                                                                        |
-| ------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| `channel_memory`    | `{}`         | `{ layers: { WM: null, SWM, VM }, decisions, contributors, subgraphs }`                                                       |
-| `contributor_trail` | `{ pubkey }` | `{ pubkey, trail }`                                                                                                           |
-| `subgraph_graph`    | `{ name }`   | `{ subgraph, nodes, edges }`                                                                                                  |
-| `subgraph_triples`  | `{ name }`   | `{ subgraph, triples }`                                                                                                       |
-| `evidence`          | `{ uri }`    | `{ found, claimId, name, status, trustState, memoryLayer, attribution, digest, asOf, sources, relations, receiptUal, graph }` |
+| operation               | arguments                           | result                                                                                                                        |
+| ----------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `channel_memory`        | `{}`                                | `{ layers: { WM: null, SWM, VM }, decisions, contributors, subgraphs }`                                                       |
+| `contributor_trail`     | `{ pubkey }`                        | `{ pubkey, trail }`                                                                                                           |
+| `software_contributors` | `{ componentName, componentType? }` | `{ componentName, componentType, contributors }`                                                                              |
+| `decision_trace`        | `{ commitSha, componentName }`      | `{ commitSha, componentName, decisions }`                                                                                     |
+| `subgraph_graph`        | `{ name }`                          | `{ subgraph, nodes, edges }`                                                                                                  |
+| `subgraph_triples`      | `{ name }`                          | `{ subgraph, triples }`                                                                                                       |
+| `evidence`              | `{ uri }`                           | `{ found, claimId, name, status, trustState, memoryLayer, attribution, digest, asOf, sources, relations, receiptUal, graph }` |
 
 A successful response is:
 
@@ -140,9 +145,22 @@ markers, requester/author equality, source-set equality, semantic bounds, and
 that the agent authored at least one source. It does not trust the relay to
 construct RDF.
 
+Schema v2 always selects `dkg-memory@1` and may add `dkg-software@1`. The Buzz
+adapter attaches `buzz-nostr@1`; agents cannot select it. The sidecar validates
+all profile types, relation predicates, literal attributes, locators, and
+bounds before minting RDF identifiers. Direct edges support ordinary SPARQL
+joins, while reified assertion nodes carry confidence and signed evidence.
+Schema v1 still compiles through its unchanged legacy graph path.
+
 For a valid proposal the sidecar deterministically creates or reuses that
 channel's private Context Graph, compiles provenance-bearing RDF, writes Working
 Memory, promotes it to Shared Working Memory, and records a terminal local
 operation. The proposal event ID is the idempotency key, so retries do not
 duplicate graph state. This beta performs no Verifiable Memory publication and
 emits no relay chat event for the background write.
+
+The normative beta profiles, SHACL shapes, lifelike fixture, and executable
+competency queries ship in the installer under `ontology/`. The acceptance
+suite proves queries including “who edited this function?” and “what decisions
+behind this commit affected this component?” as well as non-software tasks and
+cross-profile evidence traces.

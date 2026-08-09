@@ -13,6 +13,7 @@ describe('deployment artifacts', () => {
     );
     const sources = [...dockerfile.matchAll(/^COPY\s+(\S+)\s+\S+$/gm)].map((match) => match[1]);
     expect(sources).toContain('scripts/bootstrap');
+    expect(sources).toContain('ontology');
     for (const source of sources) expect(existsSync(resolve(repo, source))).toBe(true);
   });
 

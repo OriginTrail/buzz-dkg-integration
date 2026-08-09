@@ -7,6 +7,7 @@ RUN npm ci --omit=dev \
     && npm cache clean --force
 
 COPY src ./src
+COPY ontology ./ontology
 COPY scripts/mvp-smoke.mjs ./scripts/mvp-smoke.mjs
 COPY scripts/smoke-command.mjs ./scripts/smoke-command.mjs
 COPY scripts/bootstrap ./scripts/bootstrap

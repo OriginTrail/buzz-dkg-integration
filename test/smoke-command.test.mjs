@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentMemoryCapability, askCommand } from '../scripts/smoke-command.mjs';
+import { agentMemoryCapability, agentMemorySchema, askCommand } from '../scripts/smoke-command.mjs';
 
 describe('smoke mention commands', () => {
   it('uses the configured mention handle and preserves the default', () => {
@@ -19,5 +19,17 @@ describe('targeted agent-memory smoke capability', () => {
       true,
     );
     expect(agentMemoryCapability({ supported_extensions: [] }, false)).toBe(false);
+    expect(
+      agentMemorySchema({
+        supported_extensions: ['buzz-dkg-memory-v1', 'buzz-dkg-memory-v2'],
+        dkg_memory: {
+          schema_versions: [1, 2],
+          profiles: ['dkg-memory@1', 'dkg-software@1'],
+        },
+      }),
+    ).toBe(2);
+    expect(
+      agentMemorySchema({ supported_extensions: ['buzz-dkg-memory-v1', 'buzz-dkg-memory-v2'] }),
+    ).toBe(1);
   });
 });

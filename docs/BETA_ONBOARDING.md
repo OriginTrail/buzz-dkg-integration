@@ -33,11 +33,13 @@ and signed attestation bundle, verifies its SHA-256 checksum and GitHub build
 provenance locally without signing in, installs `buzz-dkg`, and opens the guided
 setup. Review the displayed plan before accepting it.
 
-Use a Buzz Relay build that advertises `buzz-dkg-memory-v1` in its NIP-11
-`supported_extensions`. On a discovered local Docker Compose deployment, the
-installer writes a mode-`0600` relay override containing the private proxy URL
-and generated bearer token plus the explicit memory-capability flag, performs one controlled restart of only the relay,
-and starts two credential-free loopback/Unix-socket bridge processes. It
+Use a Buzz Relay build that advertises `buzz-dkg-memory-v1` and
+`buzz-dkg-memory-v2` plus the `dkg_memory` profile descriptor in NIP-11. The v1
+extension remains present for older agents. On a discovered local Docker
+Compose deployment, the installer writes a mode-`0600` relay override containing
+the private proxy URL and generated bearer token plus the explicit
+memory-capability flag, performs one controlled restart of only the relay, and
+starts two credential-free loopback/Unix-socket bridge processes. It
 preserves the relay identity, database, public URL, and TLS configuration. For
 an operator-managed relay on the same host, it prints the two values that its
 operator must apply and leaves that relay untouched. A remote relay cannot use
@@ -169,6 +171,19 @@ tasks, and relationships. It contains no hidden reasoning, secrets, or raw tool
 traces. Multiple agents may contribute to the same channel graph; the signed
 proposal and source events preserve who asserted what.
 
+Profile-aware agents always use the general `dkg-memory@1` vocabulary and add
+`dkg-software@1` only for software evidence. The trusted integration mints
+stable DKG-native repository, commit, package, file, and symbol identifiers;
+the LLM emits only compact local IDs and allowlisted terms. In the Buzz Memory
+panel, **Software knowledge** exposes two beta questions through the
+authenticated relay:
+
+- “Who changed it?” for a named function; and
+- “Why this commit?” for a commit SHA and affected component.
+
+These are fixed query operations. The app cannot submit SPARQL, a Context Graph
+ID, a DKG endpoint, or credentials.
+
 ## Operate or stop it
 
 ```bash
@@ -197,6 +212,8 @@ host's protected backup policy.
 - `buzz-dkg status` reports the agent memory proxy and automatic private channel
   graphs as enabled.
 - `buzz-dkg smoke` passes.
+- On a v2 relay, smoke proves both the contributor and commit-decision queries
+  against RDF created by its signed canary proposal.
 - A Buzz agent can answer normally in any channel and its signed proposal
   appears only in that channel's Context Graph without a second chat message.
 - A Buzz user can query grounded channel memory through the authenticated relay

@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { agentMemoryCapability, askCommand } from './smoke-command.mjs';
+import { agentMemoryCapability, agentMemorySchema, askCommand } from './smoke-command.mjs';
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const stateDir = process.env.BDI_MVP_STATE_DIR || join(repo, '.mvp');
@@ -160,22 +160,85 @@ const relayInfo = await fetch(`${buzzHttp}/info`, {
   headers: { accept: 'application/nostr+json' },
 }).then((response) => (response.ok ? response.json() : null));
 if (agentMemoryCapability(relayInfo, agentMemoryOnly)) {
+  const schemaVersion = agentMemorySchema(relayInfo);
+  const canarySuffix = Math.random().toString(16).slice(2, 10).padEnd(8, '0');
+  const functionName = `verifyCanary${canarySuffix}`;
+  const componentName = `Canary auth ${canarySuffix}`;
+  const commitSha = canarySuffix;
   const source = await owner.sendMessage(
     channelId,
-    `Agent-memory canary ${runId}: use signed semantic proposals after every agent turn.`,
+    `Agent-memory canary ${runId}: Alice implemented ${functionName} in commit ${commitSha} after deciding to use signed semantic proposals for ${componentName}.`,
   );
-  const proposal = await owner.proposeDkgMemory(channelId, [source.event.id], {
-    schemaVersion: 1,
-    summary: `Agent-native memory canary ${runId}`,
-    items: [
-      {
-        kind: 'decision',
-        text: 'Buzz agents submit signed semantic memory proposals after normal chat turns.',
-      },
-    ],
-    model: 'installer-smoke',
-    promptVersion: 'agent-memory-v1',
-  });
+  const content =
+    schemaVersion === 2
+      ? {
+          schemaVersion: 2,
+          profiles: ['dkg-memory@1', 'dkg-software@1'],
+          summary: `Agent-native memory canary ${runId}`,
+          entities: [
+            {
+              id: 'component',
+              type: 'code:Package',
+              name: componentName,
+              locator: { kind: 'code', package: `canary-${canarySuffix}` },
+            },
+            {
+              id: 'function',
+              type: 'code:Function',
+              name: functionName,
+              locator: {
+                kind: 'code',
+                package: `canary-${canarySuffix}`,
+                path: 'src/canary.ts',
+                symbol: functionName,
+                symbolKind: 'function',
+              },
+            },
+            { id: 'alice', type: 'github:User', name: 'Alice Canary' },
+            {
+              id: 'commit',
+              type: 'github:Commit',
+              name: `Implement ${functionName}`,
+              locator: {
+                kind: 'github',
+                repository: 'buzz-dkg/canary',
+                resource: 'commit',
+                id: commitSha,
+              },
+            },
+            {
+              id: 'decision',
+              type: 'decisions:Decision',
+              name: 'Use signed semantic proposals',
+              attributes: [
+                { predicate: 'decisions:context', value: 'Preserve queryable agent memory' },
+                { predicate: 'decisions:outcome', value: 'Submit one proposal after every turn' },
+              ],
+            },
+          ],
+          relations: [
+            { subject: 'commit', predicate: 'github:authoredBy', object: 'alice' },
+            { subject: 'commit', predicate: 'github:affects', object: 'function' },
+            { subject: 'commit', predicate: 'github:affects', object: 'component' },
+            { subject: 'decision', predicate: 'decisions:affects', object: 'component' },
+            { subject: 'decision', predicate: 'decisions:implementedBy', object: 'commit' },
+          ],
+          model: 'installer-smoke',
+          promptVersion: 'agent-memory-v2',
+        }
+      : {
+          schemaVersion: 1,
+          summary: `Agent-native memory canary ${runId}`,
+          items: [
+            {
+              kind: 'decision',
+              text: 'Buzz agents submit signed semantic memory proposals after normal chat turns.',
+            },
+          ],
+          model: 'installer-smoke',
+          promptVersion: 'agent-memory-v1',
+        };
+  const proposal = await owner.proposeDkgMemory(channelId, [source.event.id], content);
   if (proposal.res?.ok !== true || !['accepted', 'duplicate'].includes(proposal.res?.outcome)) {
     throw new Error('agent memory proposal was not durably accepted');
   }
@@ -193,6 +256,29 @@ if (agentMemoryCapability(relayInfo, agentMemoryOnly)) {
     },
     6 * 60_000,
   );
+  if (schemaVersion === 2) {
+    const contributors = await owner.postAuthed('/api/dkg/query', {
+      channelId,
+      operation: 'software_contributors',
+      arguments: { componentName: functionName, componentType: 'function' },
+    });
+    if (!contributors?.result?.contributors?.some((entry) => entry.sha === commitSha)) {
+      throw new Error('v2 contributor competency query did not find the canary commit');
+    }
+    const trace = await owner.postAuthed('/api/dkg/query', {
+      channelId,
+      operation: 'decision_trace',
+      arguments: { commitSha, componentName },
+    });
+    if (
+      !trace?.result?.decisions?.some(
+        (entry) => entry.decisionName === 'Use signed semantic proposals',
+      )
+    ) {
+      throw new Error('v2 decision competency query did not find the canary decision');
+    }
+    console.log('✓ v2 contributor and decision competency queries returned the canary graph');
+  }
   agentMemory = {
     proposalEventId: proposal.event.id,
     kaName: proposal.res.kaName,
