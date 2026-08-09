@@ -1,0 +1,23 @@
+PREFIX schema: <http://schema.org/>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX memory: <http://dkg.io/ontology/memory/>
+PREFIX github: <http://dkg.io/ontology/github/>
+PREFIX decisions: <http://dkg.io/ontology/decisions/>
+PREFIX buzz: <https://w3id.org/buzz-dkg/buzz#>
+
+SELECT DISTINCT ?memory ?decision ?commit ?channel ?source WHERE {
+  GRAPH ?memoryGraph {
+    ?memory a memory:Memory ;
+      memory:profile <http://dkg.io/ontology/profile/dkg-memory/1> ;
+      memory:profile <http://dkg.io/ontology/profile/dkg-software/1> ;
+      buzz:channel ?channel ;
+      memory:contains ?decision ;
+      prov:wasDerivedFrom ?source .
+  }
+  GRAPH ?projectGraph {
+    ?decision a decisions:Decision ;
+      decisions:implementedBy ?commit .
+    ?commit a github:Commit .
+  }
+}
+

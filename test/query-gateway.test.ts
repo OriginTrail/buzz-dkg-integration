@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import oxigraph from 'oxigraph';
 import { loadQueryGatewayConfig } from '../src/config.ts';
 import type { DkgClient } from '../src/dkg/client.ts';
 import { QueryGateway } from '../src/query-gateway/server.ts';
-import { parseQueryGatewayRequest } from '../src/query-gateway/service.ts';
+import { parseQueryGatewayRequest, QueryGatewayService } from '../src/query-gateway/service.ts';
 import type { QueryGatewayConfig } from '../src/types.ts';
 
 const TOKEN = 'gateway-token-'.padEnd(32, 'x');
@@ -12,6 +14,7 @@ const REQUESTER = 'ab'.repeat(32);
 const CONTRIBUTOR = 'cd'.repeat(32);
 const CHANNEL = 'channel-one';
 const CONTEXT_GRAPH = 'did:dkg:otp/0xabc/42';
+const REPOSITORY = 'https://github.com/acme/api';
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 
 type EnabledConfig = Extract<QueryGatewayConfig, { enabled: true }>;
@@ -121,12 +124,15 @@ async function startGateway(
     info(message: string, fields?: Record<string, unknown>): void;
     warn(message: string, fields?: Record<string, unknown>): void;
   },
+  submitAgentMemory?: NonNullable<
+    ConstructorParameters<typeof QueryGateway>[3]
+  >['submitAgentMemory'],
 ) {
   const gateway = new QueryGateway(
     config,
     [{ channelId: CHANNEL, contextGraphId: CONTEXT_GRAPH, promoters: [] }],
     dkg.asDkg(),
-    { log },
+    { log, submitAgentMemory },
   );
   running.push(gateway);
   await gateway.start();
@@ -156,6 +162,18 @@ function body(operation: string, args: Record<string, unknown> = {}) {
 
 function binding(value: string): { value: string } {
   return { value };
+}
+
+function fixtureQuery(sparql: string): Array<Record<string, { value: string }>> {
+  const store = new oxigraph.Store();
+  store.load(readFileSync(new URL('./fixtures/ontology/lifelike-project.trig', import.meta.url)), {
+    format: 'application/trig',
+  });
+  const result = store.query(sparql);
+  if (!Array.isArray(result)) throw new Error('expected SELECT results from fixture query');
+  return (result as Array<Map<string, oxigraph.Term>>).map((row) =>
+    Object.fromEntries([...row.entries()].map(([name, term]) => [name, { value: term.value }])),
+  );
 }
 
 describe('query gateway configuration', () => {
@@ -209,7 +227,7 @@ describe('query gateway configuration', () => {
 });
 
 describe('query gateway request contract', () => {
-  it('accepts only the five typed operations and exact argument shapes', () => {
+  it('accepts only the seven typed operations and exact argument shapes', () => {
     expect(parseQueryGatewayRequest(body('channel_memory'))).toMatchObject({
       operation: 'channel_memory',
       requesterPubkey: REQUESTER,
@@ -217,6 +235,34 @@ describe('query gateway request contract', () => {
     expect(
       parseQueryGatewayRequest(body('contributor_trail', { pubkey: CONTRIBUTOR })),
     ).toMatchObject({ operation: 'contributor_trail', arguments: { pubkey: CONTRIBUTOR } });
+    expect(
+      parseQueryGatewayRequest(
+        body('software_contributors', {
+          repository: REPOSITORY,
+          componentName: 'verifyToken',
+          componentType: 'function',
+        }),
+      ),
+    ).toMatchObject({
+      operation: 'software_contributors',
+      arguments: {
+        repository: REPOSITORY,
+        componentName: 'verifyToken',
+        componentType: 'function',
+      },
+    });
+    expect(
+      parseQueryGatewayRequest(
+        body('decision_trace', {
+          repository: REPOSITORY,
+          commitSha: 'A1B2C3D4',
+          componentName: 'Auth gateway',
+        }),
+      ),
+    ).toMatchObject({
+      operation: 'decision_trace',
+      arguments: { repository: REPOSITORY, commitSha: 'a1b2c3d4', componentName: 'Auth gateway' },
+    });
     expect(parseQueryGatewayRequest(body('subgraph_graph', { name: 'core_1' }))).toMatchObject({
       operation: 'subgraph_graph',
     });
@@ -245,10 +291,75 @@ describe('query gateway request contract', () => {
       parseQueryGatewayRequest(body('subgraph_graph', { name: 'core', sparql: 'DELETE WHERE {}' })),
     ).toThrow(/unexpected field/);
     expect(() => parseQueryGatewayRequest(body('raw_query'))).toThrow(/operation is invalid/);
+    expect(() =>
+      parseQueryGatewayRequest(
+        body('software_contributors', {
+          repository: REPOSITORY,
+          componentName: 'verifyToken',
+          componentType: 'service',
+        }),
+      ),
+    ).toThrow(/componentType is invalid/);
+    expect(() =>
+      parseQueryGatewayRequest(
+        body('software_contributors', {
+          repository: 'github.com/acme/api',
+          componentName: 'verifyToken',
+        }),
+      ),
+    ).toThrow(/canonical HTTPS repository URL/);
   });
 });
 
 describe('query gateway HTTP boundary', () => {
+  it('accepts agent memory only through the authenticated loopback JSON boundary', async () => {
+    const submitted: unknown[] = [];
+    const { url } = await startGateway(new GatewayDkg(), gatewayConfig(), undefined, (raw) => {
+      submitted.push(raw);
+      return {
+        ok: true,
+        outcome: 'accepted',
+        proposalEventId: '11'.repeat(32),
+        channelId: 'c69311ba-a5a2-4b2a-a27f-99f7669af643',
+        requesterPubkey: REQUESTER,
+        contextGraphId: 'buzz-memory-graph',
+        kaName: 'buzz-dkg-memory',
+        digest: '22'.repeat(32),
+        state: 'distilled',
+      };
+    });
+    const payload = { signed: 'envelope' };
+    const response = await request(url.replace('/v1/query', '/v1/memory'), payload);
+    expect(response.status).toBe(202);
+    expect(submitted).toEqual([payload]);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      outcome: 'accepted',
+      requesterPubkey: REQUESTER,
+    });
+
+    const unauthorized = await request(url.replace('/v1/query', '/v1/memory'), payload, {
+      token: 'wrong-token-that-is-still-long-enough',
+    });
+    expect(unauthorized.status).toBe(401);
+    expect(submitted).toHaveLength(1);
+  });
+
+  it('resolves newly provisioned channel bindings at request time', async () => {
+    const dkg = new GatewayDkg();
+    const service = new QueryGatewayService(
+      async (channelId) => (channelId === 'new-channel' ? 'buzz-new-graph' : null),
+      dkg.asDkg(),
+      gatewayConfig(),
+    );
+    const response = await service.execute({
+      ...body('channel_memory'),
+      channelId: 'new-channel',
+    });
+    expect(response.cg).toBe('buzz-new-graph');
+    expect(dkg.calls.every((call) => call.contextGraphId === 'buzz-new-graph')).toBe(true);
+  });
+
   it('resolves the Context Graph server-side and queries only SWM and VM', async () => {
     const { dkg, url } = await startGateway();
     const response = await request(url, body('channel_memory'));
@@ -310,6 +421,26 @@ describe('query gateway HTTP boundary', () => {
 
   it.each([
     ['contributor_trail', { pubkey: CONTRIBUTOR }, { pubkey: CONTRIBUTOR, trail: [] }],
+    [
+      'software_contributors',
+      { repository: REPOSITORY, componentName: 'verifyToken', componentType: 'function' },
+      {
+        repository: REPOSITORY,
+        componentName: 'verifyToken',
+        componentType: 'function',
+        contributors: [],
+      },
+    ],
+    [
+      'decision_trace',
+      { repository: REPOSITORY, commitSha: 'a1b2c3d4', componentName: 'Authentication gateway' },
+      {
+        repository: REPOSITORY,
+        commitSha: 'a1b2c3d4',
+        componentName: 'Authentication gateway',
+        decisions: [],
+      },
+    ],
     ['subgraph_graph', { name: 'core' }, { subgraph: 'core', nodes: [], edges: [] }],
     ['subgraph_triples', { name: 'core' }, { subgraph: 'core', triples: [] }],
     [
@@ -342,6 +473,115 @@ describe('query gateway HTTP boundary', () => {
       operation,
       result: expected,
     });
+  });
+
+  it('returns contributor and decision traces through fixed profile-aware queries', async () => {
+    const dkg = new GatewayDkg();
+    const contributor = 'urn:dkg:github:user:alice';
+    const commit = 'urn:dkg:github:commit:acme/api/a1b2c3d4';
+    const decision = 'urn:dkg:decision:short-lived-jwt';
+    const at = '2026-07-14T10:15:00Z';
+    // Execute the production SPARQL against the lifelike ontology fixture.
+    // SWM is empty here so the result layer remains deterministic for this test.
+    dkg.bindingResolver = (options) =>
+      options.view === 'verifiable-memory' ? fixtureQuery(options.sparql) : [];
+    const { url } = await startGateway(dkg);
+    const contributorResponse = await request(
+      url,
+      body('software_contributors', {
+        repository: REPOSITORY,
+        componentName: 'verifyToken',
+        componentType: 'function',
+      }),
+    );
+    expect(await contributorResponse.json()).toMatchObject({
+      result: {
+        contributors: [
+          {
+            contributor,
+            contributorName: 'Alice Nguyen',
+            commit,
+            sha: 'a1b2c3d4',
+            at: Date.parse(at) / 1_000,
+            layer: 'VM',
+          },
+          {
+            contributor: 'urn:dkg:github:user:bob',
+            contributorName: 'Bob Ortiz',
+            commit: 'urn:dkg:github:commit:acme/api/e5f6a7b8',
+            sha: 'e5f6a7b8',
+            at: Date.parse('2026-07-21T16:40:00Z') / 1_000,
+            layer: 'VM',
+          },
+          {
+            contributor: 'urn:dkg:github:user:diana',
+            contributorName: 'Diana Okafor',
+            commit: 'urn:dkg:github:commit:acme/api/f00baa12',
+            sha: 'f00baa12',
+            at: Date.parse('2026-07-29T11:05:00Z') / 1_000,
+            layer: 'VM',
+          },
+        ],
+      },
+    });
+    const traceResponse = await request(
+      url,
+      body('decision_trace', {
+        repository: REPOSITORY,
+        commitSha: 'A1B2C3D4',
+        componentName: 'Authentication gateway',
+      }),
+    );
+    expect(await traceResponse.json()).toMatchObject({
+      result: {
+        repository: REPOSITORY,
+        commitSha: 'a1b2c3d4',
+        decisions: [
+          {
+            decision,
+            decisionName: 'Use short-lived JWT access tokens',
+            context: 'Long-lived bearer tokens made credential exposure too costly.',
+            outcome: 'Use 15-minute access tokens with rotating refresh tokens.',
+            layer: 'VM',
+          },
+        ],
+      },
+    });
+    const fixedQueries = dkg.calls
+      .filter(
+        (call) =>
+          call.kind === 'query' &&
+          (call.sparql?.includes('SELECT DISTINCT ?contributor') ||
+            call.sparql?.includes('SELECT DISTINCT ?decision')),
+      )
+      .map((call) => call.sparql ?? '');
+    expect(fixedQueries).toHaveLength(4);
+    expect(fixedQueries.every((sparql) => !sparql.includes('DELETE'))).toBe(true);
+
+    for (const [operation, arguments_] of [
+      [
+        'software_contributors',
+        {
+          repository: REPOSITORY,
+          componentName: 'functionThatDoesNotExist',
+          componentType: 'function',
+        },
+      ],
+      [
+        'decision_trace',
+        { repository: REPOSITORY, commitSha: 'deadbeef', componentName: 'Authentication gateway' },
+      ],
+      [
+        'decision_trace',
+        { repository: REPOSITORY, commitSha: 'a1b2c3d4', componentName: 'Unrelated component' },
+      ],
+    ] as const) {
+      const negative = await request(url, body(operation, arguments_));
+      const payload = (await negative.json()) as {
+        result: { contributors?: unknown[]; decisions?: unknown[] };
+      };
+      expect(payload.result.contributors ?? payload.result.decisions).toEqual([]);
+    }
   });
 
   it('preserves raw N-Triples objects in topology triples', async () => {

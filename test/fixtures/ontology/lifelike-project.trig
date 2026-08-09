@@ -1,0 +1,304 @@
+@prefix rdf:       <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xsd:       <http://www.w3.org/2001/XMLSchema#> .
+@prefix schema:    <http://schema.org/> .
+@prefix prov:      <http://www.w3.org/ns/prov#> .
+@prefix memory:    <http://dkg.io/ontology/memory/> .
+@prefix code:      <http://dkg.io/ontology/code/> .
+@prefix github:    <http://dkg.io/ontology/github/> .
+@prefix decisions: <http://dkg.io/ontology/decisions/> .
+@prefix tasks:     <http://dkg.io/ontology/tasks/> .
+@prefix software:  <http://dkg.io/ontology/software/> .
+@prefix buzz:      <https://w3id.org/buzz-dkg/buzz#> .
+@prefix nostr:     <https://w3id.org/buzz-dkg/nostr#> .
+
+<urn:test:acme-api:swm:project> {
+  <urn:dkg:github:repo:acme/api>
+    a github:Repository, software:Repository ;
+    schema:name "acme/api" ;
+    github:url "https://github.com/acme/api"^^xsd:anyURI .
+
+  <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth>
+    a code:Package ;
+    schema:name "Authentication gateway" ;
+    software:repository <urn:dkg:github:repo:acme/api> .
+
+  <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts>
+    a code:File ;
+    schema:name "token.ts" ;
+    code:path "src/token.ts" ;
+    code:package <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> ;
+    software:repository <urn:dkg:github:repo:acme/api> .
+
+  <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken>
+    a code:Function ;
+    schema:name "verifyToken" ;
+    code:qualifiedName "auth/token.verifyToken" ;
+    code:definedIn <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts> ;
+    software:repository <urn:dkg:github:repo:acme/api> .
+
+  <urn:dkg:github:user:alice>
+    a github:User ;
+    schema:name "Alice Nguyen" .
+
+  <urn:dkg:github:user:bob>
+    a github:User ;
+    schema:name "Bob Ortiz" .
+
+  <urn:dkg:github:user:carol>
+    a github:User ;
+    schema:name "Carol Singh" .
+
+  <urn:dkg:github:commit:acme/api/a1b2c3d4>
+    a github:Commit ;
+    schema:name "Implement short-lived access tokens" ;
+    schema:dateCreated "2026-07-14T10:15:00Z"^^xsd:dateTime ;
+    github:sha "a1b2c3d4" ;
+    github:inRepo <urn:dkg:github:repo:acme/api> ;
+    github:authoredBy <urn:dkg:github:user:alice> ;
+    github:affects
+      <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> ,
+      <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts> ,
+      <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken> .
+
+  <urn:dkg:github:commit:acme/api/e5f6a7b8>
+    a github:Commit ;
+    schema:name "Return typed token verification errors" ;
+    schema:dateCreated "2026-07-21T16:40:00Z"^^xsd:dateTime ;
+    github:sha "e5f6a7b8" ;
+    github:inRepo <urn:dkg:github:repo:acme/api> ;
+    github:authoredBy <urn:dkg:github:user:bob> ;
+    github:affects
+      <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> ,
+      <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken> .
+
+  <urn:dkg:github:pr:acme/api/42>
+    a github:PullRequest ;
+    schema:name "Rotate refresh tokens and shorten access-token lifetime" ;
+    github:number 42 ;
+    github:state "merged" ;
+    github:containsCommit <urn:dkg:github:commit:acme/api/a1b2c3d4> ;
+    github:affects <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> .
+
+  <urn:dkg:github:pr:acme/api/45>
+    a github:PullRequest ;
+    schema:name "Make token verification failures typed" ;
+    github:number 45 ;
+    github:state "merged" ;
+    github:containsCommit <urn:dkg:github:commit:acme/api/e5f6a7b8> ;
+    github:affects <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> .
+
+  <urn:dkg:decision:short-lived-jwt>
+    a decisions:Decision ;
+    schema:name "Use short-lived JWT access tokens" ;
+    decisions:status "accepted" ;
+    decisions:context "Long-lived bearer tokens made credential exposure too costly." ;
+    decisions:outcome "Use 15-minute access tokens with rotating refresh tokens." ;
+    decisions:consequences "Clients must handle refresh rotation and replay detection." ;
+    decisions:affects <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> ;
+    decisions:recordedIn <urn:dkg:github:pr:acme/api/42> ;
+    decisions:implementedBy <urn:dkg:github:commit:acme/api/a1b2c3d4> ;
+    prov:wasAttributedTo <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> ;
+    prov:wasDerivedFrom
+      <urn:nostr:event:1111111111111111111111111111111111111111111111111111111111111111> ,
+      <urn:nostr:event:2222222222222222222222222222222222222222222222222222222222222222> .
+
+  <urn:dkg:decision:typed-auth-errors>
+    a decisions:Decision ;
+    schema:name "Represent verification failures as typed errors" ;
+    decisions:status "accepted" ;
+    decisions:context "Callers could not distinguish expiry from malformed tokens." ;
+    decisions:outcome "Return ExpiredToken, InvalidSignature, and MalformedToken variants." ;
+    decisions:affects <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> ;
+    decisions:recordedIn <urn:dkg:github:pr:acme/api/45> ;
+    decisions:implementedBy <urn:dkg:github:commit:acme/api/e5f6a7b8> ;
+    prov:wasAttributedTo <urn:nostr:pubkey:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> ;
+    prov:wasDerivedFrom <urn:nostr:event:3333333333333333333333333333333333333333333333333333333333333333> .
+
+  <urn:dkg:task:update-client-refresh-docs>
+    a tasks:Task ;
+    schema:name "Document refresh-token rotation for SDK maintainers" ;
+    tasks:status "todo" ;
+    tasks:priority "p1" ;
+    tasks:assignee <urn:dkg:github:user:carol> ;
+    tasks:relatedDecision <urn:dkg:decision:short-lived-jwt> ;
+    tasks:touches <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> ;
+    prov:wasDerivedFrom <urn:nostr:event:2222222222222222222222222222222222222222222222222222222222222222> .
+
+  <urn:dkg:software:test:refresh-token-replay>
+    a software:TestCase ;
+    schema:name "rejects refresh-token replay" ;
+    software:tests <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken> .
+
+  <urn:dkg:software:test-run:ci-8812>
+    a software:TestRun ;
+    schema:name "CI run 8812" ;
+    schema:dateCreated "2026-07-14T10:22:00Z"^^xsd:dateTime ;
+    software:executedTest <urn:dkg:software:test:refresh-token-replay> ;
+    software:result "passed" ;
+    software:supports <urn:dkg:github:commit:acme/api/a1b2c3d4> ;
+    prov:wasDerivedFrom <urn:nostr:event:2222222222222222222222222222222222222222222222222222222222222222> .
+}
+
+# A second Buzz community independently discusses the same repository and
+# function. Canonical locator identity intentionally converges on the same
+# repository and function IRIs even though the named graph and evidence differ.
+<urn:test:partner-community:swm:project> {
+  <urn:dkg:github:repo:acme/api>
+    a github:Repository, software:Repository ;
+    schema:name "acme/api" ;
+    github:url "https://github.com/acme/api"^^xsd:anyURI .
+
+  <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken>
+    a code:Function ;
+    schema:name "verifyToken" ;
+    code:qualifiedName "auth/token.verifyToken" ;
+    software:repository <urn:dkg:github:repo:acme/api> .
+
+  <urn:dkg:github:user:diana>
+    a github:User ;
+    schema:name "Diana Okafor" .
+
+  <urn:dkg:github:commit:acme/api/f00baa12>
+    a github:Commit ;
+    schema:name "Reject keys with invalid audience" ;
+    schema:dateCreated "2026-07-29T11:05:00Z"^^xsd:dateTime ;
+    github:sha "f00baa12" ;
+    github:inRepo <urn:dkg:github:repo:acme/api> ;
+    github:authoredBy <urn:dkg:github:user:diana> ;
+    github:affects <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken> .
+}
+
+# An identically named function at the same package/path in another repository
+# must remain a different entity and therefore must not join with acme/api.
+<urn:test:other-repository:swm:project> {
+  <urn:dkg:github:repo:other/api>
+    a github:Repository, software:Repository ;
+    schema:name "other/api" ;
+    github:url "https://github.com/other/api"^^xsd:anyURI .
+
+  <urn:dkg:code:file:github.com%2Fother%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken>
+    a code:Function ;
+    schema:name "verifyToken" ;
+    code:qualifiedName "auth/token.verifyToken" ;
+    software:repository <urn:dkg:github:repo:other/api> .
+
+  <urn:dkg:github:user:erin>
+    a github:User ;
+    schema:name "Erin Chen" .
+
+  <urn:dkg:github:commit:other/api/deadbee1>
+    a github:Commit ;
+    schema:name "Unrelated verifier implementation" ;
+    github:sha "deadbee1" ;
+    github:inRepo <urn:dkg:github:repo:other/api> ;
+    github:authoredBy <urn:dkg:github:user:erin> ;
+    github:affects <urn:dkg:code:file:github.com%2Fother%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken> .
+}
+
+<urn:test:acme-api:swm:memory> {
+  <urn:buzz-dkg:memory:jwt>
+    a memory:Memory, buzz:AgentMemory ;
+    schema:name "Authentication token decisions and implementation" ;
+    memory:profile
+      <http://dkg.io/ontology/profile/dkg-memory/1> ,
+      <http://dkg.io/ontology/profile/dkg-software/1> ,
+      <https://w3id.org/buzz-dkg/profile/buzz-nostr/1> ;
+    memory:contains
+      <urn:dkg:decision:short-lived-jwt> ,
+      <urn:dkg:github:commit:acme/api/a1b2c3d4> ,
+      <urn:dkg:task:update-client-refresh-docs> ;
+    memory:sourceSetDigest "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ;
+    memory:sourceEventCount 2 ;
+    buzz:channel <urn:buzz:channel:8e8cd542-e5d0-4f81-a060-e9980b20599d> ;
+    buzz:proposalEvent <urn:nostr:event:9999999999999999999999999999999999999999999999999999999999999999> ;
+    prov:wasGeneratedBy <urn:buzz-dkg:agent-memory:jwt> ;
+    prov:wasDerivedFrom
+      <urn:nostr:event:1111111111111111111111111111111111111111111111111111111111111111> ,
+      <urn:nostr:event:2222222222222222222222222222222222222222222222222222222222222222> .
+
+  <urn:buzz-dkg:assertion:jwt:1>
+    a memory:Assertion, memory:Relationship ;
+    memory:subject <urn:dkg:decision:short-lived-jwt> ;
+    memory:predicate decisions:implementedBy ;
+    memory:object <urn:dkg:github:commit:acme/api/a1b2c3d4> ;
+    memory:confidence 0.98 ;
+    prov:wasDerivedFrom <urn:nostr:event:2222222222222222222222222222222222222222222222222222222222222222> .
+
+  <urn:buzz-dkg:agent-memory:jwt>
+    a prov:Activity, buzz:AgentMemoryProposal ;
+    prov:wasAssociatedWith <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> ;
+    prov:used
+      <urn:nostr:event:1111111111111111111111111111111111111111111111111111111111111111> ,
+      <urn:nostr:event:2222222222222222222222222222222222222222222222222222222222222222> .
+}
+
+<urn:test:acme-api:swm:evidence> {
+  <urn:nostr:event:1111111111111111111111111111111111111111111111111111111111111111>
+    a nostr:Event ;
+    nostr:kind 9 ;
+    nostr:createdAt "2026-07-14T09:55:00Z"^^xsd:dateTime ;
+    nostr:content "We need to reduce the blast radius of leaked access tokens without forcing a login every few minutes." ;
+    nostr:sig "11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111" ;
+    prov:wasAttributedTo <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> .
+
+  <urn:nostr:event:2222222222222222222222222222222222222222222222222222222222222222>
+    a nostr:Event ;
+    nostr:kind 9 ;
+    nostr:createdAt "2026-07-14T10:02:00Z"^^xsd:dateTime ;
+    nostr:content "Decision: use 15-minute access tokens, rotate refresh tokens, and add replay detection. I will implement this in PR 42." ;
+    nostr:sig "22222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222" ;
+    prov:wasAttributedTo <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> .
+
+  <urn:nostr:event:3333333333333333333333333333333333333333333333333333333333333333>
+    a nostr:Event ;
+    nostr:kind 9 ;
+    nostr:createdAt "2026-07-21T16:20:00Z"^^xsd:dateTime ;
+    nostr:content "Decision: verification failures need typed variants so callers can respond correctly." ;
+    nostr:sig "33333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333" ;
+    prov:wasAttributedTo <urn:nostr:pubkey:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> .
+
+  <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa>
+    a prov:SoftwareAgent ;
+    schema:name "Alice's coding agent" ;
+    nostr:pubkeyHex "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" .
+
+  <urn:nostr:pubkey:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb>
+    a prov:SoftwareAgent ;
+    schema:name "Bob's coding agent" ;
+    nostr:pubkeyHex "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" .
+}
+
+<urn:test:community:swm:general> {
+  <urn:buzz-dkg:memory:meetup>
+    a memory:Memory, buzz:AgentMemory ;
+    schema:name "Belgrade community meetup" ;
+    memory:profile
+      <http://dkg.io/ontology/profile/dkg-memory/1> ,
+      <https://w3id.org/buzz-dkg/profile/buzz-nostr/1> ;
+    memory:contains <urn:dkg:task:book-belgrade-meetup> ;
+    memory:sourceSetDigest "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789" ;
+    memory:sourceEventCount 1 ;
+    buzz:channel <urn:buzz:channel:general-community> ;
+    buzz:proposalEvent <urn:nostr:event:8888888888888888888888888888888888888888888888888888888888888888> ;
+    prov:wasGeneratedBy <urn:buzz-dkg:agent-memory:meetup> ;
+    prov:wasDerivedFrom <urn:nostr:event:7777777777777777777777777777777777777777777777777777777777777777> .
+
+  <urn:dkg:event:belgrade-meetup>
+    a schema:Event ;
+    schema:name "Belgrade community meetup" ;
+    schema:startDate "2026-09-15T18:00:00+02:00"^^xsd:dateTime ;
+    schema:location "Dorćol, Belgrade" .
+
+  <urn:dkg:person:maya>
+    a schema:Person, prov:Agent ;
+    schema:name "Maya Petrović" .
+
+  <urn:dkg:task:book-belgrade-meetup>
+    a tasks:Task ;
+    schema:name "Book the venue for the Belgrade community meetup" ;
+    schema:about <urn:dkg:event:belgrade-meetup> ;
+    tasks:status "todo" ;
+    tasks:assignee <urn:dkg:person:maya> ;
+    tasks:dueDate "2026-08-20T17:00:00+02:00"^^xsd:dateTime ;
+    prov:wasDerivedFrom <urn:nostr:event:7777777777777777777777777777777777777777777777777777777777777777> .
+}

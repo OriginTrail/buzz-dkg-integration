@@ -1,10 +1,14 @@
 import type { DkgClient } from '../dkg/client.ts';
-import type { ChannelBinding, QueryGatewayConfig } from '../types.ts';
+import { IntegrationApiError } from '../errors.ts';
+import { canonicalRepositoryIdentityUrl } from '../memory/identity.ts';
+import type { QueryGatewayConfig } from '../types.ts';
 import type {
   ChannelMemoryResult,
   ContributorSummary,
   ContributorTrailEntry,
   ContributorTrailResult,
+  DecisionTraceEntry,
+  DecisionTraceResult,
   DecisionSummary,
   EvidenceRelation,
   EvidenceResult,
@@ -16,6 +20,8 @@ import type {
   QueryGatewayResult,
   QueryGatewaySuccess,
   QueryOperation,
+  SoftwareContributorEntry,
+  SoftwareContributorsResult,
   SubGraphSummary,
   SubgraphGraphResult,
   SubgraphTriplesResult,
@@ -36,6 +42,14 @@ const HEX_PUBKEY = /^[0-9a-f]{64}$/iu;
 const CHANNEL_ID = /^[A-Za-z0-9._:@/-]{1,256}$/u;
 const SUBGRAPH_NAME = /^[A-Za-z0-9_-]{1,128}$/u;
 const SAFE_IRI = /^[A-Za-z][A-Za-z0-9+.-]*:[^<>"{}|^`\\\s]{1,999}$/u;
+const COMMIT_SHA = /^[0-9a-f]{7,64}$/iu;
+const COMPONENT_TYPES = {
+  function: 'Function',
+  class: 'Class',
+  interface: 'Interface',
+  file: 'File',
+  package: 'Package',
+} as const;
 const MAX_DKG_ROWS = 2_500;
 const MAX_GRAPH_NODES = 1_200;
 const MAX_GRAPH_EDGES = 2_400;
@@ -45,21 +59,13 @@ const BUZZ = 'https://w3id.org/buzz-dkg/buzz#';
 const NOSTR = 'https://w3id.org/buzz-dkg/nostr#';
 const PROV = 'http://www.w3.org/ns/prov#';
 const SCHEMA = 'http://schema.org/';
-
-export class QueryGatewayError extends Error {
-  readonly status: number;
-  readonly code: string;
-
-  constructor(status: number, code: string, message: string) {
-    super(message);
-    this.name = 'QueryGatewayError';
-    this.status = status;
-    this.code = code;
-  }
-}
+const CODE = 'http://dkg.io/ontology/code/';
+const GITHUB = 'http://dkg.io/ontology/github/';
+const DECISIONS = 'http://dkg.io/ontology/decisions/';
+const SOFTWARE = 'http://dkg.io/ontology/software/';
 
 function invalid(message: string): never {
-  throw new QueryGatewayError(400, 'invalid_request', message);
+  throw new IntegrationApiError(400, 'invalid_request', message);
 }
 
 function plainObject(value: unknown): value is Record<string, unknown> {
@@ -81,6 +87,33 @@ function requiredString(value: unknown, name: string, pattern: RegExp, normalize
   return normalize ? value.toLowerCase() : value;
 }
 
+function requiredText(value: unknown, name: string, max: number): string {
+  if (
+    typeof value !== 'string' ||
+    !value.trim() ||
+    Buffer.byteLength(value, 'utf8') > max ||
+    /\p{Cc}/u.test(value)
+  ) {
+    invalid(`${name} is invalid`);
+  }
+  return value.trim();
+}
+
+function requiredRepository(value: unknown): string {
+  const repository = requiredText(value, 'arguments.repository', 1_000);
+  try {
+    return canonicalRepositoryIdentityUrl(repository);
+  } catch {
+    invalid('arguments.repository is not a canonical HTTPS repository URL');
+  }
+}
+
+function sparqlLiteral(value: string): string {
+  return JSON.stringify(value)
+    .replace(/\u2028/gu, '\\u2028')
+    .replace(/\u2029/gu, '\\u2029');
+}
+
 export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
   if (!plainObject(value)) invalid('request body must be a JSON object');
   exactKeys(value, ['channelId', 'operation', 'arguments', 'requesterPubkey'], 'request');
@@ -88,6 +121,8 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
   const operations = new Set<QueryOperation>([
     'channel_memory',
     'contributor_trail',
+    'software_contributors',
+    'decision_trace',
     'subgraph_graph',
     'subgraph_triples',
     'evidence',
@@ -116,6 +151,46 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
       operation,
       arguments: {
         pubkey: requiredString(value.arguments.pubkey, 'arguments.pubkey', HEX_PUBKEY, true),
+      },
+    };
+  }
+  if (operation === 'software_contributors') {
+    exactKeys(value.arguments, ['repository', 'componentName', 'componentType'], 'arguments');
+    const componentType = value.arguments.componentType;
+    if (
+      componentType !== undefined &&
+      (typeof componentType !== 'string' || !(componentType in COMPONENT_TYPES))
+    ) {
+      invalid('arguments.componentType is invalid');
+    }
+    return {
+      ...base,
+      operation,
+      arguments: {
+        repository: requiredRepository(value.arguments.repository),
+        componentName: requiredText(value.arguments.componentName, 'arguments.componentName', 500),
+        ...(componentType
+          ? {
+              componentType: componentType as keyof typeof COMPONENT_TYPES,
+            }
+          : {}),
+      },
+    };
+  }
+  if (operation === 'decision_trace') {
+    exactKeys(value.arguments, ['repository', 'commitSha', 'componentName'], 'arguments');
+    return {
+      ...base,
+      operation,
+      arguments: {
+        repository: requiredRepository(value.arguments.repository),
+        commitSha: requiredString(
+          value.arguments.commitSha,
+          'arguments.commitSha',
+          COMMIT_SHA,
+          true,
+        ),
+        componentName: requiredText(value.arguments.componentName, 'arguments.componentName', 500),
       },
     };
   }
@@ -192,11 +267,11 @@ function safeDerivedIri(value: string): boolean {
   return SAFE_IRI.test(value);
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+export function withGatewayTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new QueryGatewayError(504, 'gateway_timeout', 'query operation timed out')),
+      () => reject(new IntegrationApiError(504, 'gateway_timeout', 'operation timed out')),
       timeoutMs,
     );
   });
@@ -206,33 +281,34 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 }
 
 export class QueryGatewayService {
-  readonly #bindings: Map<string, string>;
+  readonly #resolveContextGraph: (channelId: string) => string | null | Promise<string | null>;
   readonly dkg: DkgClient;
   readonly config: EnabledGatewayConfig;
 
-  constructor(bindings: readonly ChannelBinding[], dkg: DkgClient, config: EnabledGatewayConfig) {
+  constructor(
+    resolveContextGraph: (channelId: string) => string | null | Promise<string | null>,
+    dkg: DkgClient,
+    config: EnabledGatewayConfig,
+  ) {
     this.dkg = dkg;
     this.config = config;
-    this.#bindings = new Map();
-    for (const binding of bindings) {
-      if (this.#bindings.has(binding.channelId)) {
-        throw new Error(`duplicate query-gateway channel binding '${binding.channelId}'`);
-      }
-      this.#bindings.set(binding.channelId, binding.contextGraphId);
-    }
+    this.#resolveContextGraph = resolveContextGraph;
   }
 
   async execute(input: unknown): Promise<QueryGatewaySuccess> {
     const request = parseQueryGatewayRequest(input);
-    const cg = this.#bindings.get(request.channelId);
+    const cg = await this.#resolveContextGraph(request.channelId);
     if (!cg) {
-      throw new QueryGatewayError(
+      throw new IntegrationApiError(
         404,
         'unknown_channel',
         'channel is not configured for DKG queries',
       );
     }
-    const result = await withTimeout(this.dispatch(cg, request), this.config.operationTimeoutMs);
+    const result = await withGatewayTimeout(
+      this.dispatch(cg, request),
+      this.config.operationTimeoutMs,
+    );
     return {
       ok: true,
       channelId: request.channelId,
@@ -248,6 +324,20 @@ export class QueryGatewayService {
         return this.channelMemory(cg);
       case 'contributor_trail':
         return this.contributorTrail(cg, request.arguments.pubkey);
+      case 'software_contributors':
+        return this.softwareContributors(
+          cg,
+          request.arguments.repository,
+          request.arguments.componentName,
+          request.arguments.componentType,
+        );
+      case 'decision_trace':
+        return this.decisionTrace(
+          cg,
+          request.arguments.repository,
+          request.arguments.commitSha,
+          request.arguments.componentName,
+        );
       case 'subgraph_graph':
         return this.subgraphGraph(cg, request.arguments.name);
       case 'subgraph_triples':
@@ -264,7 +354,11 @@ export class QueryGatewayService {
     subGraphName?: string,
   ): Promise<BindingRow[]> {
     if (Buffer.byteLength(sparql, 'utf8') > this.config.maxQueryBytes) {
-      throw new QueryGatewayError(500, 'query_bound_exceeded', 'internal query exceeded its bound');
+      throw new IntegrationApiError(
+        500,
+        'query_bound_exceeded',
+        'internal query exceeded its bound',
+      );
     }
     const response = await this.dkg.query(
       { contextGraphId: cg, view, sparql, ...(subGraphName ? { subGraphName } : {}) },
@@ -420,6 +514,113 @@ export class QueryGatewayService {
       .sort((a, b) => (b.at ?? 0) - (a.at ?? 0) || a.event.localeCompare(b.event))
       .slice(0, 100);
     return { pubkey, trail };
+  }
+
+  private async softwareContributors(
+    cg: string,
+    repository: string,
+    componentName: string,
+    componentType?: keyof typeof COMPONENT_TYPES,
+  ): Promise<SoftwareContributorsResult> {
+    const componentPattern = componentType
+      ? `?component a <${CODE}${COMPONENT_TYPES[componentType]}> ;
+           <${SCHEMA}name> ${sparqlLiteral(componentName)} .`
+      : `?component a ?componentType ; <${SCHEMA}name> ${sparqlLiteral(componentName)} .
+         FILTER(STRSTARTS(STR(?componentType), "${CODE}"))`;
+    const rows = await this.layered(
+      cg,
+      `SELECT DISTINCT ?contributor ?contributorName ?commit ?sha ?at WHERE { GRAPH ?g {
+         ${componentPattern}
+         ?component <${SOFTWARE}repository> ?repository .
+         ?repository (<${GITHUB}url>|<${SCHEMA}url>) ?repositoryUrl .
+         FILTER(STR(?repositoryUrl) = ${sparqlLiteral(repository)})
+         ?commit a <${GITHUB}Commit> ; <${GITHUB}affects> ?component ;
+           <${GITHUB}authoredBy> ?contributor ; <${GITHUB}sha> ?sha .
+         OPTIONAL { ?contributor <${SCHEMA}name> ?contributorName }
+         OPTIONAL { ?commit <${SCHEMA}dateCreated> ?at }
+       } } ORDER BY ?at ?contributorName LIMIT 200`,
+    );
+    const byKey = new Map<string, SoftwareContributorEntry>();
+    for (const { row, layer } of rows) {
+      const contributor = bounded(term(row, 'contributor'), 1_000);
+      const commit = bounded(term(row, 'commit'), 1_000);
+      const sha = bounded(term(row, 'sha').toLowerCase(), 64);
+      if (!contributor || !commit || !COMMIT_SHA.test(sha)) continue;
+      const key = `${contributor}\0${commit}`;
+      const candidate: SoftwareContributorEntry = {
+        contributor,
+        contributorName: optionalTerm(row, 'contributorName')
+          ? bounded(optionalTerm(row, 'contributorName')!, 500)
+          : null,
+        commit,
+        sha,
+        at: dateTimestamp(row.at),
+        layer,
+      };
+      const current = byKey.get(key);
+      if (!current || LAYER_RANK[layer] > LAYER_RANK[current.layer]) byKey.set(key, candidate);
+    }
+    return {
+      repository,
+      componentName,
+      componentType: componentType ?? null,
+      contributors: [...byKey.values()].sort(
+        (a, b) => (a.at ?? 0) - (b.at ?? 0) || a.sha.localeCompare(b.sha),
+      ),
+    };
+  }
+
+  private async decisionTrace(
+    cg: string,
+    repository: string,
+    commitSha: string,
+    componentName: string,
+  ): Promise<DecisionTraceResult> {
+    const rows = await this.layered(
+      cg,
+      `SELECT DISTINCT ?decision ?decisionName ?context ?outcome ?commit ?sha ?component WHERE { GRAPH ?g {
+         ?component <${SCHEMA}name> ${sparqlLiteral(componentName)} ;
+           <${SOFTWARE}repository> ?repositoryEntity .
+         ?repositoryEntity (<${GITHUB}url>|<${SCHEMA}url>) ?repositoryUrl .
+         FILTER(STR(?repositoryUrl) = ${sparqlLiteral(repository)})
+         ?commit a <${GITHUB}Commit> ; <${GITHUB}sha> ?sha ;
+           <${GITHUB}inRepo> ?repositoryEntity ; <${GITHUB}affects> ?component .
+         FILTER(LCASE(STR(?sha)) = ${sparqlLiteral(commitSha.toLowerCase())})
+         ?decision a <${DECISIONS}Decision> ; <${DECISIONS}affects> ?component ;
+           <${DECISIONS}implementedBy> ?commit .
+         OPTIONAL { ?decision <${SCHEMA}name> ?decisionName }
+         OPTIONAL { ?decision <${DECISIONS}context> ?context }
+         OPTIONAL { ?decision <${DECISIONS}outcome> ?outcome }
+       } } ORDER BY ?decision LIMIT 200`,
+    );
+    const byKey = new Map<string, DecisionTraceEntry>();
+    for (const { row, layer } of rows) {
+      const decision = bounded(term(row, 'decision'), 1_000);
+      const commit = bounded(term(row, 'commit'), 1_000);
+      const component = bounded(term(row, 'component'), 1_000);
+      const sha = bounded(term(row, 'sha').toLowerCase(), 64);
+      if (!decision || !commit || !component || !COMMIT_SHA.test(sha)) continue;
+      const key = `${decision}\0${commit}\0${component}`;
+      const candidate: DecisionTraceEntry = {
+        decision,
+        decisionName: optionalTerm(row, 'decisionName')
+          ? bounded(optionalTerm(row, 'decisionName')!, 500)
+          : null,
+        context: optionalTerm(row, 'context')
+          ? bounded(optionalTerm(row, 'context')!, 4_000)
+          : null,
+        outcome: optionalTerm(row, 'outcome')
+          ? bounded(optionalTerm(row, 'outcome')!, 4_000)
+          : null,
+        commit,
+        sha,
+        component,
+        layer,
+      };
+      const current = byKey.get(key);
+      if (!current || LAYER_RANK[layer] > LAYER_RANK[current.layer]) byKey.set(key, candidate);
+    }
+    return { repository, commitSha, componentName, decisions: [...byKey.values()] };
   }
 
   private async subgraphGraph(cg: string, name: string): Promise<SubgraphGraphResult> {

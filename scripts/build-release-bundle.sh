@@ -33,7 +33,7 @@ trap 'rm -rf "$temp_dir"' EXIT HUP INT TERM
 bundle="$temp_dir/bundle"
 mkdir -p "$bundle" "$output_dir"
 
-for path in buzz-dkg package.json package-lock.json LICENSE NOTICE src scripts phase0 deploy; do
+for path in buzz-dkg package.json package-lock.json LICENSE NOTICE src ontology scripts phase0 deploy; do
   cp -R "$repo_dir/$path" "$bundle/$path"
 done
 

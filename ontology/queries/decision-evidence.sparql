@@ -1,0 +1,17 @@
+PREFIX schema: <http://schema.org/>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX nostr: <https://w3id.org/buzz-dkg/nostr#>
+
+SELECT DISTINCT ?decision ?source ?content ?agent ?agentName WHERE {
+  GRAPH ?decisionGraph {
+    ?decision schema:name "Use short-lived JWT access tokens" ;
+      prov:wasDerivedFrom ?source ;
+      prov:wasAttributedTo ?agent .
+  }
+  GRAPH ?evidenceGraph {
+    ?source nostr:content ?content .
+    ?agent schema:name ?agentName .
+  }
+}
+ORDER BY ?source
+

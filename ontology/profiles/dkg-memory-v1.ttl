@@ -1,0 +1,218 @@
+@prefix owl:       <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:       <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:      <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:       <http://www.w3.org/2001/XMLSchema#> .
+@prefix dcterms:   <http://purl.org/dc/terms/> .
+@prefix schema:    <http://schema.org/> .
+@prefix prov:      <http://www.w3.org/ns/prov#> .
+@prefix skos:      <http://www.w3.org/2004/02/skos/core#> .
+@prefix memory:    <http://dkg.io/ontology/memory/> .
+@prefix decisions: <http://dkg.io/ontology/decisions/> .
+@prefix tasks:     <http://dkg.io/ontology/tasks/> .
+
+<http://dkg.io/ontology/profile/dkg-memory/1>
+  a owl:Ontology ;
+  dcterms:title "DKG semantic memory profile" ;
+  dcterms:description "Application-neutral decisions, claims, questions, tasks, relationships, evidence, and provenance for DKG agent memory." ;
+  owl:versionInfo "1.0.0-beta" ;
+  dcterms:created "2026-08-09"^^xsd:date ;
+  owl:imports
+    <http://schema.org/> ,
+    <http://www.w3.org/ns/prov#> ,
+    <http://www.w3.org/2004/02/skos/core#> .
+
+memory:Memory
+  a owl:Class ;
+  rdfs:label "Semantic memory" ;
+  rdfs:comment "One evidence-backed semantic memory generated from a bounded source set." ;
+  rdfs:subClassOf prov:Entity, schema:CreativeWork .
+
+memory:Entity
+  a owl:Class ;
+  rdfs:label "General memory entity" ;
+  rdfs:comment "Fallback for a recognized entity that has no more specific allowed profile type." ;
+  rdfs:subClassOf prov:Entity, schema:Thing .
+
+memory:Assertion
+  a owl:Class ;
+  rdfs:label "Memory assertion" ;
+  rdfs:comment "Evidence-bearing representation of one direct RDF edge emitted by an agent proposal." ;
+  rdfs:subClassOf prov:Entity .
+
+memory:Claim
+  a owl:Class ;
+  rdfs:label "Claim" ;
+  rdfs:subClassOf memory:Assertion, schema:Claim .
+
+memory:Question
+  a owl:Class ;
+  rdfs:label "Open question" ;
+  rdfs:subClassOf prov:Entity, schema:Question .
+
+memory:Relationship
+  a owl:Class ;
+  rdfs:label "Relationship assertion" ;
+  rdfs:subClassOf memory:Assertion .
+
+decisions:Decision
+  a owl:Class ;
+  rdfs:label "Decision" ;
+  rdfs:comment "A deliberate choice with context, outcome, consequences, provenance, and implementation links." ;
+  rdfs:subClassOf prov:Activity, schema:Action .
+
+tasks:Task
+  a owl:Class ;
+  rdfs:label "Task" ;
+  rdfs:subClassOf schema:Action, prov:Entity .
+
+memory:profile
+  a owl:ObjectProperty ;
+  rdfs:label "uses ontology profile" ;
+  rdfs:domain memory:Memory ;
+  rdfs:range owl:Ontology .
+
+memory:contains
+  a owl:ObjectProperty ;
+  rdfs:label "contains semantic entity" ;
+  rdfs:domain memory:Memory ;
+  rdfs:range prov:Entity ;
+  rdfs:subPropertyOf schema:hasPart .
+
+memory:about
+  a owl:ObjectProperty ;
+  rdfs:label "about" ;
+  rdfs:range owl:Thing ;
+  rdfs:subPropertyOf schema:about .
+
+memory:subject
+  a owl:ObjectProperty ;
+  rdfs:label "assertion subject" ;
+  rdfs:domain memory:Assertion ;
+  rdfs:range owl:Thing .
+
+memory:predicate
+  a owl:ObjectProperty ;
+  rdfs:label "assertion predicate" ;
+  rdfs:domain memory:Assertion ;
+  rdfs:range rdf:Property .
+
+memory:object
+  a rdf:Property ;
+  rdfs:label "assertion object" ;
+  rdfs:domain memory:Assertion .
+
+memory:confidence
+  a owl:DatatypeProperty ;
+  rdfs:label "confidence" ;
+  rdfs:domain memory:Assertion ;
+  rdfs:range xsd:decimal .
+
+memory:sourceSetDigest
+  a owl:DatatypeProperty ;
+  rdfs:label "source-set digest" ;
+  rdfs:domain memory:Memory ;
+  rdfs:range xsd:string .
+
+memory:sourceEventCount
+  a owl:DatatypeProperty ;
+  rdfs:label "source event count" ;
+  rdfs:domain memory:Memory ;
+  rdfs:range xsd:integer .
+
+memory:supports
+  a owl:ObjectProperty ;
+  rdfs:label "supports" ;
+  rdfs:domain prov:Entity ;
+  rdfs:range prov:Entity .
+
+memory:contradicts
+  a owl:ObjectProperty ;
+  rdfs:label "contradicts" ;
+  rdfs:domain prov:Entity ;
+  rdfs:range prov:Entity .
+
+memory:resolves
+  a owl:ObjectProperty ;
+  rdfs:label "resolves" ;
+  rdfs:range memory:Question .
+
+decisions:context
+  a owl:DatatypeProperty ;
+  rdfs:domain decisions:Decision ;
+  rdfs:range xsd:string .
+
+decisions:outcome
+  a owl:DatatypeProperty ;
+  rdfs:domain decisions:Decision ;
+  rdfs:range xsd:string .
+
+decisions:consequences
+  a owl:DatatypeProperty ;
+  rdfs:domain decisions:Decision ;
+  rdfs:range xsd:string .
+
+decisions:status
+  a owl:DatatypeProperty ;
+  rdfs:domain decisions:Decision ;
+  rdfs:range xsd:string .
+
+decisions:affects
+  a owl:ObjectProperty ;
+  rdfs:label "decision affects" ;
+  rdfs:domain decisions:Decision ;
+  rdfs:range owl:Thing .
+
+decisions:recordedIn
+  a owl:ObjectProperty ;
+  rdfs:label "decision recorded in" ;
+  rdfs:domain decisions:Decision ;
+  rdfs:range prov:Entity .
+
+decisions:implementedBy
+  a owl:ObjectProperty ;
+  rdfs:label "decision implemented by" ;
+  rdfs:domain decisions:Decision ;
+  rdfs:range prov:Entity .
+
+decisions:supersedes
+  a owl:ObjectProperty ;
+  rdfs:domain decisions:Decision ;
+  rdfs:range decisions:Decision ;
+  owl:inverseOf prov:wasRevisionOf .
+
+tasks:status
+  a owl:DatatypeProperty ;
+  rdfs:domain tasks:Task ;
+  rdfs:range xsd:string .
+
+tasks:priority
+  a owl:DatatypeProperty ;
+  rdfs:domain tasks:Task ;
+  rdfs:range xsd:string .
+
+tasks:assignee
+  a owl:ObjectProperty ;
+  rdfs:label "task assignee" ;
+  rdfs:domain tasks:Task ;
+  rdfs:range prov:Agent .
+
+tasks:relatedDecision
+  a owl:ObjectProperty ;
+  rdfs:domain tasks:Task ;
+  rdfs:range decisions:Decision .
+
+tasks:dependsOn
+  a owl:ObjectProperty ;
+  rdfs:domain tasks:Task ;
+  rdfs:range tasks:Task .
+
+tasks:touches
+  a owl:ObjectProperty ;
+  rdfs:domain tasks:Task ;
+  rdfs:range owl:Thing .
+
+tasks:dueDate
+  a owl:DatatypeProperty ;
+  rdfs:domain tasks:Task ;
+  rdfs:range xsd:dateTime .
+

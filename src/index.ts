@@ -6,7 +6,12 @@ import { QueryGateway } from './query-gateway/server.ts';
 const config = loadConfig();
 const daemon = new Daemon(config);
 const queryGateway = config.queryGateway?.enabled
-  ? new QueryGateway(config.queryGateway, config.bindings, daemon.dkg)
+  ? new QueryGateway(config.queryGateway, config.bindings, daemon.dkg, {
+      // Queries are read-only: only a verified /v1/memory proposal may create
+      // and persist a channel Context Graph.
+      resolveContextGraph: (channelId) => daemon.contextGraphForQuery(channelId),
+      submitAgentMemory: (raw) => daemon.submitAgentMemory(raw),
+    })
   : null;
 let daemonStarted = false;
 let shuttingDown = false;

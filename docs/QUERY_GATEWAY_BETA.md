@@ -1,8 +1,10 @@
-# Beta query gateway
+# Beta query and agent-memory gateway
 
-The daemon can expose a loopback-only, read-only HTTP API for a trusted Buzz
-authorization front. It is disabled by default. The V1a installer enables it
-on `127.0.0.1:9296` and creates a separate 64-hex bearer token.
+The daemon can expose loopback-only query and agent-memory HTTP endpoints for a
+trusted Buzz authorization front. They are disabled by default. The V1a
+installer enables them on `127.0.0.1:9296` and creates a separate 64-hex bearer
+token. The relay remains the public authorization boundary; clients never
+receive this token or DKG credentials.
 
 ## Environment
 
@@ -19,12 +21,28 @@ settings are `BDI_QUERY_GATEWAY_MAX_BODY_BYTES`,
 `BDI_QUERY_GATEWAY_TIMEOUT_MS`, `BDI_QUERY_GATEWAY_DKG_TIMEOUT_MS`, and
 `BDI_QUERY_GATEWAY_MAX_CONCURRENT`.
 
+The installer uses a 120-second end-to-end gateway deadline. Individual DKG
+lifecycle calls use a 180-second deadline. Memory submission returns HTTP `202`
+after the signed envelope and operation intent are durably recorded; slow
+finalize/share work continues on the crash-recoverable daemon queue rather than
+holding the agent's HTTP request open.
+
 A same-host Buzz authorization front should use:
 
 ```dotenv
 BUZZ_DKG_QUERY_URL=http://127.0.0.1:9296/v1/query
 BUZZ_DKG_QUERY_TOKEN=<same secret as BDI_QUERY_GATEWAY_TOKEN>
+BUZZ_DKG_MEMORY_ENABLED=true
 ```
+
+The relay derives the companion memory endpoint from that URL and forwards to
+`/v1/memory` with the same token. `BUZZ_DKG_MEMORY_ENABLED` is deliberately
+separate from query configuration: set it only when the integration supports
+`/v1/memory`. A compatible relay advertises both `buzz-dkg-memory-v1` and
+`buzz-dkg-memory-v2` through NIP-11, plus a `dkg_memory` descriptor containing
+the supported schema versions, ontology profiles, adapter profiles, proposal
+kind, and fixed query operations. Agents use v2 only when both the extension
+and descriptor agree; v1 remains a compatibility path.
 
 If an adopted relay remains on a Docker bridge, its `127.0.0.1` is not the
 host-networked daemon's loopback. The query bridge supports two bounded
@@ -62,6 +80,7 @@ BDI_QUERY_BRIDGE_TARGET_SOCKET=/runtime/query-gateway.sock
 
 # relay
 BUZZ_DKG_QUERY_URL=http://127.0.0.1:9297/v1/query
+BUZZ_DKG_MEMORY_ENABLED=true
 ```
 
 Mount the same private runtime directory into both bridge processes and run
@@ -84,13 +103,15 @@ Send `POST /v1/query`, `Content-Type: application/json`, and
 
 The operation and its exact arguments are:
 
-| operation           | arguments    | result                                                                                                                        |
-| ------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| `channel_memory`    | `{}`         | `{ layers: { WM: null, SWM, VM }, decisions, contributors, subgraphs }`                                                       |
-| `contributor_trail` | `{ pubkey }` | `{ pubkey, trail }`                                                                                                           |
-| `subgraph_graph`    | `{ name }`   | `{ subgraph, nodes, edges }`                                                                                                  |
-| `subgraph_triples`  | `{ name }`   | `{ subgraph, triples }`                                                                                                       |
-| `evidence`          | `{ uri }`    | `{ found, claimId, name, status, trustState, memoryLayer, attribution, digest, asOf, sources, relations, receiptUal, graph }` |
+| operation               | arguments                                       | result                                                                                                                        |
+| ----------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `channel_memory`        | `{}`                                            | `{ layers: { WM: null, SWM, VM }, decisions, contributors, subgraphs }`                                                       |
+| `contributor_trail`     | `{ pubkey }`                                    | `{ pubkey, trail }`                                                                                                           |
+| `software_contributors` | `{ repository, componentName, componentType? }` | `{ repository, componentName, componentType, contributors }`                                                                  |
+| `decision_trace`        | `{ repository, commitSha, componentName }`      | `{ repository, commitSha, componentName, decisions }`                                                                         |
+| `subgraph_graph`        | `{ name }`                                      | `{ subgraph, nodes, edges }`                                                                                                  |
+| `subgraph_triples`      | `{ name }`                                      | `{ subgraph, triples }`                                                                                                       |
+| `evidence`              | `{ uri }`                                       | `{ found, claimId, name, status, trustState, memoryLayer, attribution, digest, asOf, sources, relations, receiptUal, graph }` |
 
 A successful response is:
 
@@ -113,3 +134,39 @@ queried and is represented as `null`.
 Errors use `{ "ok": false, "error": { "code": "...", "message": "..." } }`.
 Responses and structured audit logs never include gateway or DKG credentials or
 raw upstream failures.
+
+`repository` is a canonical HTTPS clone-page URL such as
+`https://github.com/acme/api`. The relay and sidecar normalize GitHub casing,
+an optional `.git` suffix, and trailing slashes. Requiring repository scope
+prevents two unrelated projects' identically named functions from being
+combined by a competency query.
+
+## Agent-memory write contract
+
+Only the relay calls `POST /v1/memory`. Its exact envelope contains a channel
+UUID, authenticated requester pubkey, one fully signed kind-`40009` proposal,
+and the fully signed source events referenced by that proposal. The sidecar
+independently verifies every signature and ID, exact `h` channel tags, source
+markers, requester/author equality, source-set equality, semantic bounds, and
+that the agent authored at least one source. It does not trust the relay to
+construct RDF.
+
+Schema v2 always selects `dkg-memory@1` and may add `dkg-software@1`. The Buzz
+adapter attaches `buzz-nostr@1`; agents cannot select it. The sidecar validates
+all profile types, relation predicates, literal attributes, locators, and
+bounds before minting RDF identifiers. Direct edges support ordinary SPARQL
+joins, while reified assertion nodes carry confidence and signed evidence.
+Schema v1 still compiles through its unchanged legacy graph path.
+
+For a valid proposal the sidecar deterministically creates or reuses that
+channel's private Context Graph, compiles provenance-bearing RDF, writes Working
+Memory, promotes it to Shared Working Memory, and records a terminal local
+operation. The proposal event ID is the idempotency key, so retries do not
+duplicate graph state. This beta performs no Verifiable Memory publication and
+emits no relay chat event for the background write.
+
+The normative beta profiles, SHACL shapes, lifelike fixture, and executable
+competency queries ship in the installer under `ontology/`. The acceptance
+suite proves queries including “who edited this function?” and “what decisions
+behind this commit affected this component?” as well as non-software tasks and
+cross-profile evidence traces.

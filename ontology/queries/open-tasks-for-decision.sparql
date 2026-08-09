@@ -1,0 +1,16 @@
+PREFIX schema: <http://schema.org/>
+PREFIX tasks: <http://dkg.io/ontology/tasks/>
+
+SELECT DISTINCT ?task ?taskName ?assignee ?assigneeName ?priority WHERE {
+  GRAPH ?g {
+    ?decision schema:name "Use short-lived JWT access tokens" .
+    ?task a tasks:Task ;
+      schema:name ?taskName ;
+      tasks:status "todo" ;
+      tasks:relatedDecision ?decision ;
+      tasks:assignee ?assignee .
+    ?assignee schema:name ?assigneeName .
+    OPTIONAL { ?task tasks:priority ?priority }
+  }
+}
+

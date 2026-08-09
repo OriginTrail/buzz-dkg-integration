@@ -149,16 +149,24 @@ Buzz container enforces relay membership, the reviewed plan enrolls two
 generated integration identities as ordinary members through Buzz's own
 `buzz-admin` CLI. The operation is idempotent, does not require the human
 owner's Nostr private key, and never writes directly to the Buzz database. The
-installer validates and adopts that endpoint without replacing the relay
-process, database, identity, domain, or TLS configuration. It then reuses a
+installer validates and adopts that endpoint without replacing its database,
+identity, domain, or TLS configuration. For a discovered local Compose relay,
+it adds a protected DKG proxy override and performs one controlled restart of
+that service. An operator-managed relay on the same host receives the exact two
+configuration values to apply; a remote relay must run its own co-located
+integration rather than exposing this host's private gateway. It then reuses a
 compatible DKG node on `127.0.0.1:9200`,
 currently v10.0.11 or v10.0.12, or invokes the supported DKG npm installer and
 setup wizard for a managed v10.0.12 Edge
 (default) or Core node. A fresh guided install defaults to DKG testnet; a fresh
 unattended install must explicitly pass `--dkg-network testnet`,
 `mainnet-gnosis`, or `mainnet-base`. Finally it creates the managed Web of Trust
-channel and Context Graph, starts the integration sidecar with Verifiable Memory
-disabled, and runs an end-to-end smoke check.
+seed channel and Context Graph, enables lazy private Context Graph creation for
+every other channel, starts the integration sidecar with Verifiable Memory
+disabled, and runs an end-to-end smoke check. Compatible Buzz agents submit a
+signed semantic memory proposal after each normal channel turn; the relay
+authorizes and binds it to the exact source events before the sidecar writes it
+to that channel's Shared Working Memory.
 
 For automation or a relay that cannot be inferred from its container metadata:
 
@@ -169,9 +177,12 @@ sudo buzz-dkg install \
   --dkg-network testnet
 ```
 
-`remove` stops only the integration sidecar. It does not delete Buzz history,
-integration state, retained relay memberships, DKG state, or an
-operator-managed node. Release bundles pin their own Node runtime; the host
+`remove` first restarts a Compose-managed Buzz relay without the generated DKG
+proxy override, then stops the integration sidecar. It does not delete Buzz
+history, integration state, retained relay memberships, DKG state, or an
+operator-managed node. If the installer cannot safely inspect and restore a
+managed relay, removal fails closed instead of leaving a dead proxy advertised.
+Release bundles pin their own Node runtime; the host
 does not need Node.js preinstalled. The
 sidecar adds no public port, but it deliberately joins the Linux host network
 to reach loopback-only Buzz and DKG APIs. It runs with the uid/gid that owns the

@@ -37,8 +37,8 @@ export function parseTokenFile(raw: string): string {
 /**
  * Channel bindings come from a JSON file (BDI_BINDINGS_PATH):
  *   [{ "channelId": "<uuid>", "contextGraphId": "<cg>", "promoters": ["<hex-pubkey>", ...] }]
- * One Buzz channel ↔ one Context Graph (SPEC §4.3). The daemon never invents
- * mappings; an unmapped channel is rejected everywhere.
+ * One Buzz channel ↔ one Context Graph (SPEC §4.3). These are explicit seed
+ * mappings; the beta can also provision deterministic mappings on first use.
  */
 export function parseBindings(raw: string): ChannelBinding[] {
   return parseSharedBindings(raw);
@@ -93,7 +93,7 @@ export function loadQueryGatewayConfig(env: NodeJS.ProcessEnv): QueryGatewayConf
     env.BDI_QUERY_GATEWAY_TIMEOUT_MS,
     15_000,
     1_000,
-    60_000,
+    120_000,
   );
   const dkgTimeoutMs = envInteger(
     'BDI_QUERY_GATEWAY_DKG_TIMEOUT_MS',
@@ -113,9 +113,9 @@ export function loadQueryGatewayConfig(env: NodeJS.ProcessEnv): QueryGatewayConf
     maxBodyBytes: envInteger(
       'BDI_QUERY_GATEWAY_MAX_BODY_BYTES',
       env.BDI_QUERY_GATEWAY_MAX_BODY_BYTES,
-      16 * 1024,
+      256 * 1024,
       1_024,
-      64 * 1024,
+      1024 * 1024,
     ),
     maxResultBytes: envInteger(
       'BDI_QUERY_GATEWAY_MAX_RESULT_BYTES',
@@ -177,6 +177,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
     maxPublishesPerDay,
     dbPath: env.BDI_DB_PATH ?? './data/daemon.db',
     bindings: parseBindings(readFileSync(required('BDI_BINDINGS_PATH', env), 'utf8')),
+    autoProvisionChannels: envBoolean(
+      'BDI_AUTO_PROVISION_CHANNELS',
+      env.BDI_AUTO_PROVISION_CHANNELS,
+      false,
+    ),
+    contextGraphAccessPolicy: envInteger(
+      'BDI_CONTEXT_GRAPH_ACCESS_POLICY',
+      env.BDI_CONTEXT_GRAPH_ACCESS_POLICY,
+      1,
+      0,
+      2,
+    ),
     queryGateway: loadQueryGatewayConfig(env),
   };
 }

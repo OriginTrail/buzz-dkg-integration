@@ -1,0 +1,16 @@
+PREFIX schema: <http://schema.org/>
+PREFIX github: <http://dkg.io/ontology/github/>
+PREFIX software: <http://dkg.io/ontology/software/>
+
+SELECT DISTINCT ?run ?runName ?result ?test ?testName ?commit WHERE {
+  GRAPH ?g {
+    ?commit a github:Commit ; github:sha "a1b2c3d4" .
+    ?run a software:TestRun ;
+      schema:name ?runName ;
+      software:result ?result ;
+      software:executedTest ?test ;
+      software:supports ?commit .
+    ?test a software:TestCase ; schema:name ?testName .
+  }
+}
+

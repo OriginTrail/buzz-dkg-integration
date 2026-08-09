@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { askCommand } from './smoke-command.mjs';
+import { agentMemoryCapability, agentMemorySchema, askCommand } from './smoke-command.mjs';
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
 const stateDir = process.env.BDI_MVP_STATE_DIR || join(repo, '.mvp');
@@ -79,19 +79,11 @@ await owner.query([{ kinds: [39000], '#d': [channelId], limit: 1 }]);
 
 const runId = `${new Date().toISOString()}-${Math.random().toString(16).slice(2, 10)}`;
 console.log(`M0 smoke: channel=${channelId} run=${runId}`);
-
-const root = await owner.sendMessage(
-  channelId,
-  `M0 canary ${runId}: which authentication methods should the Buzz-DKG service support?`,
-);
-const rootId = root.res.event_id;
-await owner.sendMessage(
-  channelId,
-  'DECISION: the Buzz-DKG service supports NIP-42 for WebSockets and NIP-98 for HTTP.',
-  { root: rootId, replyTo: rootId },
-);
-const pin = await owner.pinMessage(channelId, rootId);
-if (!pin.res.accepted) throw new Error('relay rejected the canary pin');
+const agentMemoryOnly = env.BDI_SMOKE_AGENT_MEMORY_ONLY === 'true';
+let rootId = null;
+let receipt = null;
+let answer = null;
+let refusal = null;
 
 const serviceReplies = async (targetId) =>
   (
@@ -100,53 +92,213 @@ const serviceReplies = async (targetId) =>
     ])
   ).sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
 
-const receipt = await waitFor('one SWM receipt', async () => {
-  const replies = await serviceReplies(rootId);
-  return replies.find((event) => event.content.includes('Distilled to Shared Working Memory.'));
-});
-await sleep(1_500);
-const captureReplies = await serviceReplies(rootId);
-const duplicateReceipts = captureReplies.filter((event) =>
-  event.content.includes('Distilled to Shared Working Memory.'),
-);
-if (duplicateReceipts.length !== 1) {
-  throw new Error(`expected one SWM receipt, found ${duplicateReceipts.length}`);
-}
-if (captureReplies.some((event) => event.content.includes('Published to Verifiable Memory.'))) {
-  throw new Error('unexpected VM publication receipt while M0 publication is disabled');
-}
-console.log(`✓ capture receipt ${receipt.id.slice(0, 12)}… (no duplicate, no VM receipt)`);
+if (!agentMemoryOnly) {
+  const root = await owner.sendMessage(
+    channelId,
+    `M0 canary ${runId}: which authentication methods should the Buzz-DKG service support?`,
+  );
+  rootId = root.res.event_id;
+  await owner.sendMessage(
+    channelId,
+    'DECISION: the Buzz-DKG service supports NIP-42 for WebSockets and NIP-98 for HTTP.',
+    { root: rootId, replyTo: rootId },
+  );
+  const pin = await owner.pinMessage(channelId, rootId);
+  if (!pin.res.accepted) throw new Error('relay rejected the canary pin');
 
-const ask = await owner.sendMessage(
-  channelId,
-  askCommand('what authentication methods did we decide the service should support?', env),
-  { mentions: [service.pubkey] },
-);
-const answer = await waitFor('grounded answer', async () => {
-  const replies = await serviceReplies(ask.res.event_id);
-  return replies[0];
-});
-if (
-  !answer.content.includes('Cited (context-graph-scoped):') ||
-  !/^\[1\] urn:buzz-dkg:decision:[0-9a-f]{64}\b/m.test(answer.content)
-) {
-  throw new Error('grounded answer did not include a context-graph-scoped citation');
-}
-console.log(`✓ grounded answer ${answer.id.slice(0, 12)}… includes a scoped citation`);
+  receipt = await waitFor('one SWM receipt', async () => {
+    const replies = await serviceReplies(rootId);
+    return replies.find((event) => event.content.includes('Distilled to Shared Working Memory.'));
+  });
+  await sleep(1_500);
+  const captureReplies = await serviceReplies(rootId);
+  const duplicateReceipts = captureReplies.filter((event) =>
+    event.content.includes('Distilled to Shared Working Memory.'),
+  );
+  if (duplicateReceipts.length !== 1) {
+    throw new Error(`expected one SWM receipt, found ${duplicateReceipts.length}`);
+  }
+  if (captureReplies.some((event) => event.content.includes('Published to Verifiable Memory.'))) {
+    throw new Error('unexpected VM publication receipt while M0 publication is disabled');
+  }
+  console.log(`✓ capture receipt ${receipt.id.slice(0, 12)}… (no duplicate, no VM receipt)`);
 
-const unsupportedAsk = await owner.sendMessage(
-  channelId,
-  askCommand('what is the office Wi-Fi password?', env),
-  { mentions: [service.pubkey] },
-);
-const refusal = await waitFor('unsupported-question refusal', async () => {
-  const replies = await serviceReplies(unsupportedAsk.res.event_id);
-  return replies[0];
-});
-if (!/can't answer/i.test(refusal.content)) {
-  throw new Error('unsupported question was not explicitly refused');
+  const ask = await owner.sendMessage(
+    channelId,
+    askCommand('what authentication methods did we decide the service should support?', env),
+    { mentions: [service.pubkey] },
+  );
+  answer = await waitFor('grounded answer', async () => {
+    const replies = await serviceReplies(ask.res.event_id);
+    return replies[0];
+  });
+  if (
+    !answer.content.includes('Cited (context-graph-scoped):') ||
+    !/^\[1\] urn:buzz-dkg:decision:[0-9a-f]{64}\b/m.test(answer.content)
+  ) {
+    throw new Error('grounded answer did not include a context-graph-scoped citation');
+  }
+  console.log(`✓ grounded answer ${answer.id.slice(0, 12)}… includes a scoped citation`);
+
+  const unsupportedAsk = await owner.sendMessage(
+    channelId,
+    askCommand('what is the office Wi-Fi password?', env),
+    { mentions: [service.pubkey] },
+  );
+  refusal = await waitFor('unsupported-question refusal', async () => {
+    const replies = await serviceReplies(unsupportedAsk.res.event_id);
+    return replies[0];
+  });
+  if (!/can't answer/i.test(refusal.content)) {
+    throw new Error('unsupported question was not explicitly refused');
+  }
+  console.log(`✓ unsupported question refused ${refusal.id.slice(0, 12)}…`);
 }
-console.log(`✓ unsupported question refused ${refusal.id.slice(0, 12)}…`);
+
+let agentMemory = null;
+const relayInfo = await fetch(`${buzzHttp}/info`, {
+  headers: { accept: 'application/nostr+json' },
+}).then((response) => (response.ok ? response.json() : null));
+if (agentMemoryCapability(relayInfo, agentMemoryOnly)) {
+  const schemaVersion = agentMemorySchema(relayInfo);
+  const canarySuffix = Math.random().toString(16).slice(2, 10).padEnd(8, '0');
+  const functionName = `verifyCanary${canarySuffix}`;
+  const componentName = `Canary auth ${canarySuffix}`;
+  const commitSha = canarySuffix;
+  const source = await owner.sendMessage(
+    channelId,
+    `Agent-memory canary ${runId}: Alice implemented ${functionName} in commit ${commitSha} after deciding to use signed semantic proposals for ${componentName}.`,
+  );
+  const content =
+    schemaVersion === 2
+      ? {
+          schemaVersion: 2,
+          profiles: ['dkg-memory@1', 'dkg-software@1'],
+          summary: `Agent-native memory canary ${runId}`,
+          entities: [
+            {
+              id: 'component',
+              type: 'code:Package',
+              name: componentName,
+              locator: {
+                kind: 'code',
+                repository: 'https://github.com/buzz-dkg/canary',
+                package: `canary-${canarySuffix}`,
+              },
+            },
+            {
+              id: 'function',
+              type: 'code:Function',
+              name: functionName,
+              locator: {
+                kind: 'code',
+                repository: 'https://github.com/buzz-dkg/canary',
+                package: `canary-${canarySuffix}`,
+                path: 'src/canary.ts',
+                symbol: functionName,
+                symbolKind: 'function',
+              },
+            },
+            { id: 'alice', type: 'github:User', name: 'Alice Canary' },
+            {
+              id: 'commit',
+              type: 'github:Commit',
+              name: `Implement ${functionName}`,
+              locator: {
+                kind: 'github',
+                repository: 'buzz-dkg/canary',
+                resource: 'commit',
+                id: commitSha,
+              },
+            },
+            {
+              id: 'decision',
+              type: 'decisions:Decision',
+              name: 'Use signed semantic proposals',
+              attributes: [
+                { predicate: 'decisions:context', value: 'Preserve queryable agent memory' },
+                { predicate: 'decisions:outcome', value: 'Submit one proposal after every turn' },
+              ],
+            },
+          ],
+          relations: [
+            { subject: 'commit', predicate: 'github:authoredBy', object: 'alice' },
+            { subject: 'commit', predicate: 'github:affects', object: 'function' },
+            { subject: 'commit', predicate: 'github:affects', object: 'component' },
+            { subject: 'decision', predicate: 'decisions:affects', object: 'component' },
+            { subject: 'decision', predicate: 'decisions:implementedBy', object: 'commit' },
+          ],
+          model: 'installer-smoke',
+          promptVersion: 'agent-memory-v2',
+        }
+      : {
+          schemaVersion: 1,
+          summary: `Agent-native memory canary ${runId}`,
+          items: [
+            {
+              kind: 'decision',
+              text: 'Buzz agents submit signed semantic memory proposals after normal chat turns.',
+            },
+          ],
+          model: 'installer-smoke',
+          promptVersion: 'agent-memory-v1',
+        };
+  const proposal = await owner.proposeDkgMemory(channelId, [source.event.id], content);
+  if (proposal.res?.ok !== true || !['accepted', 'duplicate'].includes(proposal.res?.outcome)) {
+    throw new Error('agent memory proposal was not durably accepted');
+  }
+  await waitFor(
+    'agent memory in the scoped Buzz query proxy',
+    async () => {
+      const memory = await owner.postAuthed('/api/dkg/query', {
+        channelId,
+        operation: 'channel_memory',
+        arguments: {},
+      });
+      return memory?.result?.decisions?.some(
+        (decision) => decision.name === `Agent-native memory canary ${runId}`,
+      );
+    },
+    6 * 60_000,
+  );
+  if (schemaVersion === 2) {
+    await waitFor('v2 contributor competency query', async () => {
+      const contributors = await owner.postAuthed('/api/dkg/query', {
+        channelId,
+        operation: 'software_contributors',
+        arguments: {
+          repository: 'https://github.com/buzz-dkg/canary',
+          componentName: functionName,
+          componentType: 'function',
+        },
+      });
+      return contributors?.result?.contributors?.some((entry) => entry.sha === commitSha);
+    });
+    await waitFor('v2 decision competency query', async () => {
+      const trace = await owner.postAuthed('/api/dkg/query', {
+        channelId,
+        operation: 'decision_trace',
+        arguments: {
+          repository: 'https://github.com/buzz-dkg/canary',
+          commitSha,
+          componentName,
+        },
+      });
+      return trace?.result?.decisions?.some(
+        (entry) => entry.decisionName === 'Use signed semantic proposals',
+      );
+    });
+    console.log('✓ v2 contributor and decision competency queries returned the canary graph');
+  }
+  agentMemory = {
+    proposalEventId: proposal.event.id,
+    kaName: proposal.res.kaName,
+    contextGraphId: proposal.res.contextGraphId,
+  };
+  console.log(`✓ signed agent memory ${proposal.event.id.slice(0, 12)}… is queryable through Buzz`);
+} else {
+  console.log('○ agent-memory smoke skipped (relay does not advertise buzz-dkg-memory-v1)');
+}
 
 mkdirSync(stateDir, { recursive: true });
 const result = {
@@ -155,10 +307,11 @@ const result = {
   channelId,
   contextGraphId: String(bindings[0].contextGraphId),
   rootEventId: rootId,
-  receiptEventId: receipt.id,
-  answerEventId: answer.id,
-  refusalEventId: refusal.id,
+  receiptEventId: receipt?.id ?? null,
+  answerEventId: answer?.id ?? null,
+  refusalEventId: refusal?.id ?? null,
   publicationMode: 'disabled',
+  agentMemory,
 };
 writeFileSync(join(stateDir, 'smoke.json'), `${JSON.stringify(result, null, 2)}\n`, {
   mode: 0o600,

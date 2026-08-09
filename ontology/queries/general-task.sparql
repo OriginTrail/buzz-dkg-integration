@@ -1,0 +1,19 @@
+PREFIX schema: <http://schema.org/>
+PREFIX tasks: <http://dkg.io/ontology/tasks/>
+
+SELECT DISTINCT ?task ?taskName ?assigneeName ?eventName ?when ?where ?due WHERE {
+  GRAPH ?g {
+    ?task a tasks:Task ;
+      schema:name ?taskName ;
+      schema:about ?event ;
+      tasks:status "todo" ;
+      tasks:assignee ?assignee ;
+      tasks:dueDate ?due .
+    ?assignee schema:name ?assigneeName .
+    ?event a schema:Event ;
+      schema:name ?eventName ;
+      schema:startDate ?when ;
+      schema:location ?where .
+  }
+}
+

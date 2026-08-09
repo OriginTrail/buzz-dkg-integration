@@ -126,6 +126,7 @@ export class MockRelay {
 }
 
 interface KaState {
+  contextGraphId: string;
   quads: Quad[];
   state: 'created' | 'promoted' | 'published';
   writes: number;
@@ -139,6 +140,14 @@ export class MockDkg {
   kas = new Map<string, KaState>();
   chainId = 'evm:31337';
   contextGraphs = ['devnet-test'];
+  createdContextGraphs: Record<string, unknown>[] = [];
+  createContextGraphGate: Promise<void> | null = null;
+  createContextGraphStarted = 0;
+  lifecycleLog: Array<{
+    operation: 'write' | 'finalize' | 'share';
+    name: string;
+    contextGraphId: string;
+  }> = [];
   evidence: { rootUri: string; name: string; description: string; digest: string | null }[] = [];
   failShareOnce: Error | null = null;
   failWriteOnce: Error | null = null;
@@ -154,21 +163,43 @@ export class MockDkg {
   async contextGraphExists(id: string) {
     return { exists: this.contextGraphs.includes(id) };
   }
-  #ka(name: string): KaState {
+  async createContextGraph(payload: Record<string, unknown>) {
+    this.createContextGraphStarted += 1;
+    if (this.createContextGraphGate) await this.createContextGraphGate;
+    const id = String(payload.id);
+    if (!this.contextGraphs.includes(id)) this.contextGraphs.push(id);
+    this.createdContextGraphs.push(payload);
+    return { id };
+  }
+  #ka(name: string, contextGraphId: string): KaState {
     let ka = this.kas.get(name);
     if (!ka) {
-      ka = { quads: [], state: 'created', writes: 0, finalizes: 0, shares: 0, publishes: 0 };
+      ka = {
+        contextGraphId,
+        quads: [],
+        state: 'created',
+        writes: 0,
+        finalizes: 0,
+        shares: 0,
+        publishes: 0,
+      };
       this.kas.set(name, ka);
+    }
+    if (ka.contextGraphId !== contextGraphId) {
+      throw new Error(
+        `KA '${name}' belongs to '${ka.contextGraphId}', not requested graph '${contextGraphId}'`,
+      );
     }
     return ka;
   }
-  async write(name: string, _cg: string, quads: Quad[]) {
+  async write(name: string, contextGraphId: string, quads: Quad[]) {
+    this.lifecycleLog.push({ operation: 'write', name, contextGraphId });
     if (this.failWriteOnce) {
       const err = this.failWriteOnce;
       this.failWriteOnce = null;
       throw err;
     }
-    const ka = this.#ka(name);
+    const ka = this.#ka(name, contextGraphId);
     ka.writes++;
     // set semantics like a triple store
     for (const q of quads) {
@@ -182,8 +213,9 @@ export class MockDkg {
     }
     return { written: quads.length };
   }
-  async finalize(name: string, _cg: string) {
-    const ka = this.#ka(name);
+  async finalize(name: string, contextGraphId: string) {
+    this.lifecycleLog.push({ operation: 'finalize', name, contextGraphId });
+    const ka = this.#ka(name, contextGraphId);
     ka.finalizes++;
     return {
       assertionUri: `did:dkg:context-graph/mock/assertion/0xmock/${name}`,
@@ -191,13 +223,14 @@ export class MockDkg {
       authorAddress: '0xmock',
     };
   }
-  async share(name: string, _cg: string) {
+  async share(name: string, contextGraphId: string) {
+    this.lifecycleLog.push({ operation: 'share', name, contextGraphId });
     if (this.failShareOnce) {
       const err = this.failShareOnce;
       this.failShareOnce = null;
       throw err;
     }
-    const ka = this.#ka(name);
+    const ka = this.#ka(name, contextGraphId);
     ka.shares++;
     ka.state = 'promoted';
     return {
@@ -207,8 +240,8 @@ export class MockDkg {
       publishReady: true,
     };
   }
-  async publish(name: string, _cg: string) {
-    const ka = this.#ka(name);
+  async publish(name: string, contextGraphId: string) {
+    const ka = this.#ka(name, contextGraphId);
     ka.publishes++;
     ka.state = 'published';
     if (this.failPublishButSucceed) throw new Error('socket hang up (simulated lost response)');
@@ -217,6 +250,11 @@ export class MockDkg {
   async descriptor(name: string, contextGraphId: string) {
     const ka = this.kas.get(name);
     if (!ka) {
+      const err = new Error('404') as Error & { status?: number };
+      err.status = 404;
+      throw err;
+    }
+    if (ka.contextGraphId !== contextGraphId) {
       const err = new Error('404') as Error & { status?: number };
       err.status = 404;
       throw err;
@@ -239,7 +277,10 @@ export class MockDkg {
       const m = opts.sparql.match(/sourceSetDigest> "([0-9a-f]{64})"/);
       if (m) {
         const found = [...this.kas.values()].some(
-          (ka) => ka.state !== 'created' && ka.quads.some((q) => q.object === JSON.stringify(m[1])),
+          (ka) =>
+            ka.contextGraphId === opts.contextGraphId &&
+            ka.state !== 'created' &&
+            ka.quads.some((q) => q.object === JSON.stringify(m[1])),
         );
         return { result: { bindings: found ? [{ ask: { value: 'true' } }] : [] } };
       }
@@ -248,7 +289,10 @@ export class MockDkg {
       const known =
         this.evidence.some((e) => e.rootUri === s) ||
         [...this.kas.values()].some(
-          (ka) => ka.state !== 'created' && ka.quads.some((q) => q.subject === s),
+          (ka) =>
+            ka.contextGraphId === opts.contextGraphId &&
+            ka.state !== 'created' &&
+            ka.quads.some((q) => q.subject === s),
         );
       return { result: { bindings: known ? [{ ask: { value: 'true' } }] : [] } };
     }
@@ -257,6 +301,7 @@ export class MockDkg {
     if (subj) {
       const rows: any[] = [];
       for (const ka of this.kas.values()) {
+        if (ka.contextGraphId !== opts.contextGraphId) continue;
         if (ka.state === 'created') continue;
         for (const q of ka.quads) {
           if (q.subject === subj) rows.push({ p: { value: q.predicate }, o: { value: q.object } });

@@ -1,0 +1,40 @@
+@prefix sh:        <http://www.w3.org/ns/shacl#> .
+@prefix xsd:       <http://www.w3.org/2001/XMLSchema#> .
+@prefix schema:    <http://schema.org/> .
+@prefix prov:      <http://www.w3.org/ns/prov#> .
+@prefix memory:    <http://dkg.io/ontology/memory/> .
+@prefix decisions: <http://dkg.io/ontology/decisions/> .
+@prefix tasks:     <http://dkg.io/ontology/tasks/> .
+
+memory:MemoryShape
+  a sh:NodeShape ;
+  sh:targetClass memory:Memory ;
+  sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path memory:profile ; sh:minCount 1 ; sh:nodeKind sh:IRI ] ;
+  sh:property [ sh:path memory:sourceSetDigest ; sh:minCount 1 ; sh:maxCount 1 ; sh:pattern "^[0-9a-f]{64}$" ] ;
+  sh:property [ sh:path prov:wasGeneratedBy ; sh:minCount 1 ; sh:nodeKind sh:IRI ] ;
+  sh:property [ sh:path prov:wasDerivedFrom ; sh:minCount 1 ; sh:nodeKind sh:IRI ] .
+
+memory:AssertionShape
+  a sh:NodeShape ;
+  sh:targetClass memory:Assertion ;
+  sh:property [ sh:path memory:subject ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+  sh:property [ sh:path memory:predicate ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+  sh:property [ sh:path memory:object ; sh:minCount 1 ; sh:maxCount 1 ] ;
+  sh:property [ sh:path memory:confidence ; sh:maxCount 1 ; sh:datatype xsd:decimal ; sh:minInclusive 0 ; sh:maxInclusive 1 ] ;
+  sh:property [ sh:path prov:wasDerivedFrom ; sh:minCount 1 ; sh:nodeKind sh:IRI ] .
+
+decisions:DecisionShape
+  a sh:NodeShape ;
+  sh:targetClass decisions:Decision ;
+  sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path decisions:status ; sh:maxCount 1 ; sh:in ( "proposed" "accepted" "rejected" "superseded" ) ] ;
+  sh:property [ sh:path prov:wasDerivedFrom ; sh:minCount 1 ; sh:nodeKind sh:IRI ] .
+
+tasks:TaskShape
+  a sh:NodeShape ;
+  sh:targetClass tasks:Task ;
+  sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path tasks:status ; sh:maxCount 1 ; sh:in ( "todo" "in_progress" "blocked" "done" "cancelled" ) ] ;
+  sh:property [ sh:path prov:wasDerivedFrom ; sh:minCount 1 ; sh:nodeKind sh:IRI ] .
+
