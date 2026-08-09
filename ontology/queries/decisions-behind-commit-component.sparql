@@ -2,13 +2,18 @@ PREFIX schema: <http://schema.org/>
 PREFIX code: <http://dkg.io/ontology/code/>
 PREFIX github: <http://dkg.io/ontology/github/>
 PREFIX decisions: <http://dkg.io/ontology/decisions/>
+PREFIX software: <http://dkg.io/ontology/software/>
 
 SELECT DISTINCT ?decision ?decisionName ?context ?outcome ?commit ?sha ?component WHERE {
   GRAPH ?g {
     ?component a code:Package ;
-      schema:name "Authentication gateway" .
+      schema:name "Authentication gateway" ;
+      software:repository ?repository .
+    ?repository github:url ?repositoryUrl .
+    FILTER(STR(?repositoryUrl) = "https://github.com/acme/api")
     ?commit a github:Commit ;
       github:sha ?sha ;
+      github:inRepo ?repository ;
       github:affects ?component .
     FILTER(?sha = "a1b2c3d4")
     ?decision a decisions:Decision ;

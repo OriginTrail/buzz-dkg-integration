@@ -103,15 +103,15 @@ Send `POST /v1/query`, `Content-Type: application/json`, and
 
 The operation and its exact arguments are:
 
-| operation               | arguments                           | result                                                                                                                        |
-| ----------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `channel_memory`        | `{}`                                | `{ layers: { WM: null, SWM, VM }, decisions, contributors, subgraphs }`                                                       |
-| `contributor_trail`     | `{ pubkey }`                        | `{ pubkey, trail }`                                                                                                           |
-| `software_contributors` | `{ componentName, componentType? }` | `{ componentName, componentType, contributors }`                                                                              |
-| `decision_trace`        | `{ commitSha, componentName }`      | `{ commitSha, componentName, decisions }`                                                                                     |
-| `subgraph_graph`        | `{ name }`                          | `{ subgraph, nodes, edges }`                                                                                                  |
-| `subgraph_triples`      | `{ name }`                          | `{ subgraph, triples }`                                                                                                       |
-| `evidence`              | `{ uri }`                           | `{ found, claimId, name, status, trustState, memoryLayer, attribution, digest, asOf, sources, relations, receiptUal, graph }` |
+| operation               | arguments                                       | result                                                                                                                        |
+| ----------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `channel_memory`        | `{}`                                            | `{ layers: { WM: null, SWM, VM }, decisions, contributors, subgraphs }`                                                       |
+| `contributor_trail`     | `{ pubkey }`                                    | `{ pubkey, trail }`                                                                                                           |
+| `software_contributors` | `{ repository, componentName, componentType? }` | `{ repository, componentName, componentType, contributors }`                                                                  |
+| `decision_trace`        | `{ repository, commitSha, componentName }`      | `{ repository, commitSha, componentName, decisions }`                                                                         |
+| `subgraph_graph`        | `{ name }`                                      | `{ subgraph, nodes, edges }`                                                                                                  |
+| `subgraph_triples`      | `{ name }`                                      | `{ subgraph, triples }`                                                                                                       |
+| `evidence`              | `{ uri }`                                       | `{ found, claimId, name, status, trustState, memoryLayer, attribution, digest, asOf, sources, relations, receiptUal, graph }` |
 
 A successful response is:
 
@@ -134,6 +134,12 @@ queried and is represented as `null`.
 Errors use `{ "ok": false, "error": { "code": "...", "message": "..." } }`.
 Responses and structured audit logs never include gateway or DKG credentials or
 raw upstream failures.
+
+`repository` is a canonical HTTPS clone-page URL such as
+`https://github.com/acme/api`. The relay and sidecar normalize GitHub casing,
+an optional `.git` suffix, and trailing slashes. Requiring repository scope
+prevents two unrelated projects' identically named functions from being
+combined by a competency query.
 
 ## Agent-memory write contract
 

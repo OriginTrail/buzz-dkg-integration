@@ -5,6 +5,11 @@
 @prefix github:   <http://dkg.io/ontology/github/> .
 @prefix software: <http://dkg.io/ontology/software/> .
 
+code:ComponentIdentityShape
+  a sh:NodeShape ;
+  sh:targetClass code:Package, code:File, code:Function, code:Class, code:Interface, code:TypeAlias, code:Enum ;
+  sh:property [ sh:path software:repository ; sh:minCount 1 ; sh:maxCount 1 ; sh:class software:Repository ] .
+
 code:FileShape
   a sh:NodeShape ;
   sh:targetClass code:File ;
@@ -29,4 +34,3 @@ software:TestRunShape
   sh:targetClass software:TestRun ;
   sh:property [ sh:path software:executedTest ; sh:minCount 1 ; sh:class software:TestCase ] ;
   sh:property [ sh:path software:result ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ( "passed" "failed" "skipped" ) ] .
-

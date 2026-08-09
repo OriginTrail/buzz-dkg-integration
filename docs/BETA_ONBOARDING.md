@@ -173,13 +173,16 @@ proposal and source events preserve who asserted what.
 
 Profile-aware agents always use the general `dkg-memory@1` vocabulary and add
 `dkg-software@1` only for software evidence. The trusted integration mints
-stable DKG-native repository, commit, package, file, and symbol identifiers;
-the LLM emits only compact local IDs and allowlisted terms. In the Buzz Memory
+stable, repository-scoped DKG identifiers for repositories, commits, packages,
+files, and symbols; the LLM emits only compact local IDs, canonical locators,
+and allowlisted terms. The same repository or code symbol therefore converges
+on the same URI across authorized communities and Context Graphs, while the
+same symbol name in another repository remains distinct. In the Buzz Memory
 panel, **Software knowledge** exposes two beta questions through the
 authenticated relay:
 
-- “Who changed it?” for a named function; and
-- “Why this commit?” for a commit SHA and affected component.
+- “Who changed it?” for a repository URL and named function; and
+- “Why this commit?” for a repository URL, commit SHA, and affected component.
 
 These are fixed query operations. The app cannot submit SPARQL, a Context Graph
 ID, a DKG endpoint, or credentials.

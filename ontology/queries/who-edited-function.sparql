@@ -1,11 +1,15 @@
 PREFIX schema: <http://schema.org/>
 PREFIX code: <http://dkg.io/ontology/code/>
 PREFIX github: <http://dkg.io/ontology/github/>
+PREFIX software: <http://dkg.io/ontology/software/>
 
 SELECT DISTINCT ?editor ?editorName ?commit ?sha ?at WHERE {
   GRAPH ?g {
     ?function a code:Function ;
-      schema:name "verifyToken" .
+      schema:name "verifyToken" ;
+      software:repository ?repository .
+    ?repository github:url ?repositoryUrl .
+    FILTER(STR(?repositoryUrl) = "https://github.com/acme/api")
     ?commit a github:Commit ;
       github:affects ?function ;
       github:authoredBy ?editor ;
@@ -15,4 +19,3 @@ SELECT DISTINCT ?editor ?editorName ?commit ?sha ?at WHERE {
   }
 }
 ORDER BY ?at ?editorName
-

@@ -20,11 +20,12 @@ export type QueryGatewayRequest =
   | RequestBase<
       'software_contributors',
       {
+        repository: string;
         componentName: string;
         componentType?: 'function' | 'class' | 'interface' | 'file' | 'package';
       }
     >
-  | RequestBase<'decision_trace', { commitSha: string; componentName: string }>
+  | RequestBase<'decision_trace', { repository: string; commitSha: string; componentName: string }>
   | RequestBase<'subgraph_graph', { name: string }>
   | RequestBase<'subgraph_triples', { name: string }>
   | RequestBase<'evidence', { uri: string }>;
@@ -97,6 +98,7 @@ export interface SoftwareContributorEntry {
 }
 
 export interface SoftwareContributorsResult {
+  repository: string;
   componentName: string;
   componentType: string | null;
   contributors: SoftwareContributorEntry[];
@@ -114,6 +116,7 @@ export interface DecisionTraceEntry {
 }
 
 export interface DecisionTraceResult {
+  repository: string;
   commitSha: string;
   componentName: string;
   decisions: DecisionTraceEntry[];

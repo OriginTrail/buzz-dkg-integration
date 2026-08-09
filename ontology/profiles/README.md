@@ -60,6 +60,7 @@ predicate and deterministically mints RDF identifiers.
       "name": "Authentication gateway",
       "locator": {
         "kind": "code",
+        "repository": "https://github.com/acme/api",
         "package": "@acme/auth"
       }
     },
@@ -69,6 +70,7 @@ predicate and deterministically mints RDF identifiers.
       "name": "verifyToken",
       "locator": {
         "kind": "code",
+        "repository": "https://github.com/acme/api",
         "package": "@acme/auth",
         "path": "src/token.ts",
         "symbol": "verifyToken",
@@ -131,24 +133,44 @@ predicate and deterministically mints RDF identifiers.
 
 ## Deterministic identity
 
-The compiler, not the LLM, owns identifiers.
+The compiler, not the LLM, owns identifiers. Canonical identity is independent
+of the Buzz relay, community, channel, Context Graph, source event, and agent.
+Two authorized graphs that describe the same locator therefore converge on the
+same RDF subject. Names are labels only and MUST NOT be used to merge entities.
 
-| Locator               | Canonical identifier                                       |
-| --------------------- | ---------------------------------------------------------- |
-| GitHub repository     | `urn:dkg:github:repo:<owner>/<repo>`                       |
-| Pull request          | `urn:dkg:github:pr:<owner>/<repo>/<number>`                |
-| Issue                 | `urn:dkg:github:issue:<owner>/<repo>/<number>`             |
-| Commit                | `urn:dkg:github:commit:<owner>/<repo>/<sha>`               |
-| Code package          | `urn:dkg:code:package:<repository-or-package>`             |
-| Code file             | `urn:dkg:code:file:<repository-or-package>/<encoded-path>` |
-| Code symbol           | canonical file identifier plus `#<kind>:<encoded-symbol>`  |
-| Explicit external URI | exact URI after scheme and profile validation              |
-| Local/general entity  | `urn:buzz-dkg:entity:<source-set-digest>:<local-id>`       |
+| Locator               | Canonical identifier                                        |
+| --------------------- | ----------------------------------------------------------- |
+| GitHub repository     | `urn:dkg:github:repo:<owner>/<repo>`                        |
+| Pull request          | `urn:dkg:github:pr:<owner>/<repo>/<number>`                 |
+| Issue                 | `urn:dkg:github:issue:<owner>/<repo>/<number>`              |
+| Commit                | `urn:dkg:github:commit:<owner>/<repo>/<sha>`                |
+| Code package          | `urn:dkg:code:package:<canonical-repository>/<package>`     |
+| Code file             | `urn:dkg:code:file:<canonical-repository>/<package>/<path>` |
+| Code symbol           | canonical file identifier plus `#<kind>:<encoded-symbol>`   |
+| Explicit external URI | canonical HTTPS/URN identity after safe normalization       |
+| Local/general entity  | `urn:buzz-dkg:entity:<source-set-digest>:<local-id>`        |
 
 Code paths identify the evolving logical file or symbol. A `github:Commit`
 provides the immutable revision and links to affected entities through
 `github:affects`. This matches existing DKG code-graph identity rather than
 creating one function URI per commit.
+
+Every code locator MUST include a canonical HTTPS repository URL. GitHub URLs
+are normalized to lowercase `owner/repository`, trailing slashes and `.git`
+are removed, and the same repository URI is reused by GitHub and code entities.
+This prevents two unrelated repositories with identical package/path/symbol
+names from colliding.
+
+`schema:Project` MUST use an explicit `uri` locator. Other general entities may
+also use an HTTPS or URN locator when the signed evidence provides one. If no
+trustworthy locator exists, the compiler intentionally creates a source-set-
+local URI; it never hashes a display name into a false global identity.
+`schema:sameAs` may explicitly connect two separately identified aliases when
+the signed evidence supports that relationship.
+
+URI equality enables cross-Context-Graph joins but does not bypass graph access
+control. A query may traverse multiple graphs only after the caller is
+authorized for every graph in its explicit query scope.
 
 ## RDF compilation contract
 
@@ -178,8 +200,10 @@ lifelike data:
 4. What open tasks follow from a decision and who owns them?
 5. Which tests support a commit or component change?
 6. Can a non-software task/event be queried without using software terms?
-7. Can a mixed general/software turn be queried across both profiles?
-8. Can the same queries stay scoped to one Context Graph and SWM/VM view?
+7. Do two communities converge on the same repository/project/function URI,
+   while an identically named symbol in another repository stays distinct?
+8. Can a mixed general/software turn be queried across both profiles?
+9. Can the same queries stay scoped to one Context Graph and SWM/VM view?
 
 Executable SPARQL lives under `ontology/queries/`; fixtures and assertions live
 in `test/ontology-competency.test.ts`.

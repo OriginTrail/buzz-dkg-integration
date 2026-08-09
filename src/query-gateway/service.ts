@@ -1,5 +1,6 @@
 import type { DkgClient } from '../dkg/client.ts';
 import { IntegrationApiError } from '../errors.ts';
+import { canonicalRepositoryIdentityUrl } from '../memory/identity.ts';
 import type { QueryGatewayConfig } from '../types.ts';
 import type {
   ChannelMemoryResult,
@@ -61,6 +62,7 @@ const SCHEMA = 'http://schema.org/';
 const CODE = 'http://dkg.io/ontology/code/';
 const GITHUB = 'http://dkg.io/ontology/github/';
 const DECISIONS = 'http://dkg.io/ontology/decisions/';
+const SOFTWARE = 'http://dkg.io/ontology/software/';
 
 function invalid(message: string): never {
   throw new IntegrationApiError(400, 'invalid_request', message);
@@ -95,6 +97,15 @@ function requiredText(value: unknown, name: string, max: number): string {
     invalid(`${name} is invalid`);
   }
   return value.trim();
+}
+
+function requiredRepository(value: unknown): string {
+  const repository = requiredText(value, 'arguments.repository', 1_000);
+  try {
+    return canonicalRepositoryIdentityUrl(repository);
+  } catch {
+    invalid('arguments.repository is not a canonical HTTPS repository URL');
+  }
 }
 
 function sparqlLiteral(value: string): string {
@@ -144,7 +155,7 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
     };
   }
   if (operation === 'software_contributors') {
-    exactKeys(value.arguments, ['componentName', 'componentType'], 'arguments');
+    exactKeys(value.arguments, ['repository', 'componentName', 'componentType'], 'arguments');
     const componentType = value.arguments.componentType;
     if (
       componentType !== undefined &&
@@ -156,6 +167,7 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
       ...base,
       operation,
       arguments: {
+        repository: requiredRepository(value.arguments.repository),
         componentName: requiredText(value.arguments.componentName, 'arguments.componentName', 500),
         ...(componentType
           ? {
@@ -166,11 +178,12 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
     };
   }
   if (operation === 'decision_trace') {
-    exactKeys(value.arguments, ['commitSha', 'componentName'], 'arguments');
+    exactKeys(value.arguments, ['repository', 'commitSha', 'componentName'], 'arguments');
     return {
       ...base,
       operation,
       arguments: {
+        repository: requiredRepository(value.arguments.repository),
         commitSha: requiredString(
           value.arguments.commitSha,
           'arguments.commitSha',
@@ -314,11 +327,17 @@ export class QueryGatewayService {
       case 'software_contributors':
         return this.softwareContributors(
           cg,
+          request.arguments.repository,
           request.arguments.componentName,
           request.arguments.componentType,
         );
       case 'decision_trace':
-        return this.decisionTrace(cg, request.arguments.commitSha, request.arguments.componentName);
+        return this.decisionTrace(
+          cg,
+          request.arguments.repository,
+          request.arguments.commitSha,
+          request.arguments.componentName,
+        );
       case 'subgraph_graph':
         return this.subgraphGraph(cg, request.arguments.name);
       case 'subgraph_triples':
@@ -499,6 +518,7 @@ export class QueryGatewayService {
 
   private async softwareContributors(
     cg: string,
+    repository: string,
     componentName: string,
     componentType?: keyof typeof COMPONENT_TYPES,
   ): Promise<SoftwareContributorsResult> {
@@ -511,6 +531,9 @@ export class QueryGatewayService {
       cg,
       `SELECT DISTINCT ?contributor ?contributorName ?commit ?sha ?at WHERE { GRAPH ?g {
          ${componentPattern}
+         ?component <${SOFTWARE}repository> ?repository .
+         ?repository (<${GITHUB}url>|<${SCHEMA}url>) ?repositoryUrl .
+         FILTER(STR(?repositoryUrl) = ${sparqlLiteral(repository)})
          ?commit a <${GITHUB}Commit> ; <${GITHUB}affects> ?component ;
            <${GITHUB}authoredBy> ?contributor ; <${GITHUB}sha> ?sha .
          OPTIONAL { ?contributor <${SCHEMA}name> ?contributorName }
@@ -538,6 +561,7 @@ export class QueryGatewayService {
       if (!current || LAYER_RANK[layer] > LAYER_RANK[current.layer]) byKey.set(key, candidate);
     }
     return {
+      repository,
       componentName,
       componentType: componentType ?? null,
       contributors: [...byKey.values()].sort(
@@ -548,14 +572,19 @@ export class QueryGatewayService {
 
   private async decisionTrace(
     cg: string,
+    repository: string,
     commitSha: string,
     componentName: string,
   ): Promise<DecisionTraceResult> {
     const rows = await this.layered(
       cg,
       `SELECT DISTINCT ?decision ?decisionName ?context ?outcome ?commit ?sha ?component WHERE { GRAPH ?g {
-         ?component <${SCHEMA}name> ${sparqlLiteral(componentName)} .
-         ?commit a <${GITHUB}Commit> ; <${GITHUB}sha> ?sha ; <${GITHUB}affects> ?component .
+         ?component <${SCHEMA}name> ${sparqlLiteral(componentName)} ;
+           <${SOFTWARE}repository> ?repositoryEntity .
+         ?repositoryEntity (<${GITHUB}url>|<${SCHEMA}url>) ?repositoryUrl .
+         FILTER(STR(?repositoryUrl) = ${sparqlLiteral(repository)})
+         ?commit a <${GITHUB}Commit> ; <${GITHUB}sha> ?sha ;
+           <${GITHUB}inRepo> ?repositoryEntity ; <${GITHUB}affects> ?component .
          FILTER(LCASE(STR(?sha)) = ${sparqlLiteral(commitSha.toLowerCase())})
          ?decision a <${DECISIONS}Decision> ; <${DECISIONS}affects> ?component ;
            <${DECISIONS}implementedBy> ?commit .
@@ -591,7 +620,7 @@ export class QueryGatewayService {
       const current = byKey.get(key);
       if (!current || LAYER_RANK[layer] > LAYER_RANK[current.layer]) byKey.set(key, candidate);
     }
-    return { commitSha, componentName, decisions: [...byKey.values()] };
+    return { repository, commitSha, componentName, decisions: [...byKey.values()] };
   }
 
   private async subgraphGraph(cg: string, name: string): Promise<SubgraphGraphResult> {

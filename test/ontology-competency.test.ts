@@ -59,6 +59,7 @@ describe('DKG ontology profile competency questions', () => {
     ).toEqual([
       { editor: 'Alice Nguyen', sha: 'a1b2c3d4', at: '2026-07-14T10:15:00Z' },
       { editor: 'Bob Ortiz', sha: 'e5f6a7b8', at: '2026-07-21T16:40:00Z' },
+      { editor: 'Diana Okafor', sha: 'f00baa12', at: '2026-07-29T11:05:00Z' },
     ]);
   });
 
@@ -119,5 +120,19 @@ describe('DKG ontology profile competency questions', () => {
     expect(new Set(rows.map((row) => value(row, 'channel')))).toEqual(
       new Set(['urn:buzz:channel:8e8cd542-e5d0-4f81-a060-e9980b20599d']),
     );
+  });
+
+  it('joins the same function across communities without merging a homonym from another repo', () => {
+    const rows = select(loadKnowledgeBase(), 'cross-community-identity.sparql');
+    expect(rows.map((row) => value(row, 'sha'))).toEqual(['a1b2c3d4', 'e5f6a7b8', 'f00baa12']);
+    expect(new Set(rows.map((row) => value(row, 'editorName')))).toEqual(
+      new Set(['Alice Nguyen', 'Bob Ortiz', 'Diana Okafor']),
+    );
+    expect(new Set(rows.map((row) => value(row, 'function')))).toEqual(
+      new Set([
+        'urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken',
+      ]),
+    );
+    expect(rows.some((row) => value(row, 'editorName') === 'Erin Chen')).toBe(false);
   });
 });

@@ -64,6 +64,12 @@ code:Enum
   rdfs:label "Enumeration" ;
   rdfs:subClassOf code:Component .
 
+software:Repository
+  a owl:Class ;
+  rdfs:label "Source repository" ;
+  rdfs:comment "A canonical source-control repository identity shared by code, forge resources, and project graphs." ;
+  rdfs:subClassOf prov:Entity, schema:SoftwareSourceCode, doap:Project .
+
 software:Build
   a owl:Class ;
   rdfs:label "Software build" ;
@@ -91,7 +97,7 @@ software:Finding
 
 github:Repository
   a owl:Class ;
-  rdfs:subClassOf code:Component, schema:SoftwareSourceCode, doap:Project .
+  rdfs:subClassOf software:Repository, code:Component, schema:SoftwareSourceCode, doap:Project .
 
 github:PullRequest
   a owl:Class ;
@@ -184,7 +190,7 @@ github:closes
 
 software:repository
   a owl:ObjectProperty ;
-  rdfs:range github:Repository .
+  rdfs:range software:Repository .
 
 software:atRevision
   a owl:ObjectProperty ;

@@ -14,6 +14,7 @@ const REQUESTER = 'ab'.repeat(32);
 const CONTRIBUTOR = 'cd'.repeat(32);
 const CHANNEL = 'channel-one';
 const CONTEXT_GRAPH = 'did:dkg:otp/0xabc/42';
+const REPOSITORY = 'https://github.com/acme/api';
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 
 type EnabledConfig = Extract<QueryGatewayConfig, { enabled: true }>;
@@ -236,19 +237,31 @@ describe('query gateway request contract', () => {
     ).toMatchObject({ operation: 'contributor_trail', arguments: { pubkey: CONTRIBUTOR } });
     expect(
       parseQueryGatewayRequest(
-        body('software_contributors', { componentName: 'verifyToken', componentType: 'function' }),
+        body('software_contributors', {
+          repository: REPOSITORY,
+          componentName: 'verifyToken',
+          componentType: 'function',
+        }),
       ),
     ).toMatchObject({
       operation: 'software_contributors',
-      arguments: { componentName: 'verifyToken', componentType: 'function' },
+      arguments: {
+        repository: REPOSITORY,
+        componentName: 'verifyToken',
+        componentType: 'function',
+      },
     });
     expect(
       parseQueryGatewayRequest(
-        body('decision_trace', { commitSha: 'A1B2C3D4', componentName: 'Auth gateway' }),
+        body('decision_trace', {
+          repository: REPOSITORY,
+          commitSha: 'A1B2C3D4',
+          componentName: 'Auth gateway',
+        }),
       ),
     ).toMatchObject({
       operation: 'decision_trace',
-      arguments: { commitSha: 'a1b2c3d4', componentName: 'Auth gateway' },
+      arguments: { repository: REPOSITORY, commitSha: 'a1b2c3d4', componentName: 'Auth gateway' },
     });
     expect(parseQueryGatewayRequest(body('subgraph_graph', { name: 'core_1' }))).toMatchObject({
       operation: 'subgraph_graph',
@@ -281,11 +294,20 @@ describe('query gateway request contract', () => {
     expect(() =>
       parseQueryGatewayRequest(
         body('software_contributors', {
+          repository: REPOSITORY,
           componentName: 'verifyToken',
           componentType: 'service',
         }),
       ),
     ).toThrow(/componentType is invalid/);
+    expect(() =>
+      parseQueryGatewayRequest(
+        body('software_contributors', {
+          repository: 'github.com/acme/api',
+          componentName: 'verifyToken',
+        }),
+      ),
+    ).toThrow(/canonical HTTPS repository URL/);
   });
 });
 
@@ -401,13 +423,19 @@ describe('query gateway HTTP boundary', () => {
     ['contributor_trail', { pubkey: CONTRIBUTOR }, { pubkey: CONTRIBUTOR, trail: [] }],
     [
       'software_contributors',
-      { componentName: 'verifyToken', componentType: 'function' },
-      { componentName: 'verifyToken', componentType: 'function', contributors: [] },
+      { repository: REPOSITORY, componentName: 'verifyToken', componentType: 'function' },
+      {
+        repository: REPOSITORY,
+        componentName: 'verifyToken',
+        componentType: 'function',
+        contributors: [],
+      },
     ],
     [
       'decision_trace',
-      { commitSha: 'a1b2c3d4', componentName: 'Authentication gateway' },
+      { repository: REPOSITORY, commitSha: 'a1b2c3d4', componentName: 'Authentication gateway' },
       {
+        repository: REPOSITORY,
         commitSha: 'a1b2c3d4',
         componentName: 'Authentication gateway',
         decisions: [],
@@ -460,7 +488,11 @@ describe('query gateway HTTP boundary', () => {
     const { url } = await startGateway(dkg);
     const contributorResponse = await request(
       url,
-      body('software_contributors', { componentName: 'verifyToken', componentType: 'function' }),
+      body('software_contributors', {
+        repository: REPOSITORY,
+        componentName: 'verifyToken',
+        componentType: 'function',
+      }),
     );
     expect(await contributorResponse.json()).toMatchObject({
       result: {
@@ -481,18 +513,28 @@ describe('query gateway HTTP boundary', () => {
             at: Date.parse('2026-07-21T16:40:00Z') / 1_000,
             layer: 'VM',
           },
+          {
+            contributor: 'urn:dkg:github:user:diana',
+            contributorName: 'Diana Okafor',
+            commit: 'urn:dkg:github:commit:acme/api/f00baa12',
+            sha: 'f00baa12',
+            at: Date.parse('2026-07-29T11:05:00Z') / 1_000,
+            layer: 'VM',
+          },
         ],
       },
     });
     const traceResponse = await request(
       url,
       body('decision_trace', {
+        repository: REPOSITORY,
         commitSha: 'A1B2C3D4',
         componentName: 'Authentication gateway',
       }),
     );
     expect(await traceResponse.json()).toMatchObject({
       result: {
+        repository: REPOSITORY,
         commitSha: 'a1b2c3d4',
         decisions: [
           {
@@ -519,10 +561,20 @@ describe('query gateway HTTP boundary', () => {
     for (const [operation, arguments_] of [
       [
         'software_contributors',
-        { componentName: 'functionThatDoesNotExist', componentType: 'function' },
+        {
+          repository: REPOSITORY,
+          componentName: 'functionThatDoesNotExist',
+          componentType: 'function',
+        },
       ],
-      ['decision_trace', { commitSha: 'deadbeef', componentName: 'Authentication gateway' }],
-      ['decision_trace', { commitSha: 'a1b2c3d4', componentName: 'Unrelated component' }],
+      [
+        'decision_trace',
+        { repository: REPOSITORY, commitSha: 'deadbeef', componentName: 'Authentication gateway' },
+      ],
+      [
+        'decision_trace',
+        { repository: REPOSITORY, commitSha: 'a1b2c3d4', componentName: 'Unrelated component' },
+      ],
     ] as const) {
       const negative = await request(url, body(operation, arguments_));
       const payload = (await negative.json()) as {

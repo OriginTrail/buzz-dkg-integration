@@ -70,6 +70,8 @@ export type AgentMemoryLocator =
     }
   | {
       kind: 'code';
+      /** Canonical HTTPS repository URL; scopes packages, files, and symbols globally. */
+      repository: string;
       package: string;
       path?: string;
       symbol?: string;

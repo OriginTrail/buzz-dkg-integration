@@ -93,16 +93,24 @@ function setup() {
 }
 
 function generatedStore(quads: ReturnType<typeof compileAgentMemory>['quads']) {
-  const graph = '<urn:test:generated:swm>';
+  const store = new oxigraph.Store();
+  loadGeneratedQuads(store, quads, 'urn:test:generated:swm');
+  return store;
+}
+
+function loadGeneratedQuads(
+  store: InstanceType<typeof oxigraph.Store>,
+  quads: ReturnType<typeof compileAgentMemory>['quads'],
+  graphUri: string,
+) {
+  const graph = `<${graphUri}>`;
   const serialized = quads
     .map(({ subject, predicate, object }) => {
       const rdfObject = object.startsWith('"') ? object : `<${object}>`;
       return `<${subject}> <${predicate}> ${rdfObject} ${graph} .`;
     })
     .join('\n');
-  const store = new oxigraph.Store();
   store.load(serialized, { format: 'application/n-quads' });
-  return store;
 }
 
 function queryRows(store: InstanceType<typeof oxigraph.Store>, sparql: string) {
@@ -121,7 +129,11 @@ const v2Content = () =>
         id: 'auth-gateway',
         type: 'code:Package',
         name: 'Authentication gateway',
-        locator: { kind: 'code', package: '@acme/auth' },
+        locator: {
+          kind: 'code',
+          repository: 'https://github.com/acme/api',
+          package: '@acme/auth',
+        },
       },
       {
         id: 'verify-token',
@@ -129,6 +141,7 @@ const v2Content = () =>
         name: 'verifyToken',
         locator: {
           kind: 'code',
+          repository: 'https://github.com/acme/api',
           package: '@acme/auth',
           path: 'src/token.ts',
           symbol: 'verifyToken',
@@ -386,6 +399,147 @@ describe('agent memory proposal contract', () => {
     expect(new Set(attributedAssertions.map((row) => row.get('agent')?.value))).toEqual(
       new Set([proposingAgent]),
     );
+  });
+
+  it('converges canonical repository, project, and function identity across communities', () => {
+    const firstContent = JSON.parse(v2Content()) as {
+      entities: Array<{ type: string; locator?: Record<string, unknown> }>;
+    } & Record<string, unknown>;
+    for (const entity of firstContent.entities) {
+      if (entity.locator?.kind === 'code') {
+        entity.locator.repository = 'https://github.com/Acme/API.git/';
+      }
+    }
+    const first = parseAgentMemoryEnvelope(
+      envelope({ proposalContent: JSON.stringify(firstContent) }),
+    );
+    const second = parseAgentMemoryEnvelope(
+      envelope({
+        channelId: 'e5a7cdb2-544e-480e-b388-71a1e5580370',
+        proposalContent: v2Content(),
+      }),
+    );
+    const firstCompiled = compileAgentMemory(first.envelope, first.proposal);
+    const secondCompiled = compileAgentMemory(second.envelope, second.proposal);
+    const codeFunctionType = 'http://dkg.io/ontology/code/Function';
+    const firstFunction = firstCompiled.quads.find(
+      (quad) =>
+        quad.predicate.endsWith('22-rdf-syntax-ns#type') && quad.object === codeFunctionType,
+    )!.subject;
+    const secondFunction = secondCompiled.quads.find(
+      (quad) =>
+        quad.predicate.endsWith('22-rdf-syntax-ns#type') && quad.object === codeFunctionType,
+    )!.subject;
+    expect(firstFunction).toBe(secondFunction);
+    expect(firstFunction).toBe(
+      'urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken',
+    );
+
+    const otherRepository = JSON.parse(v2Content()) as typeof firstContent;
+    for (const entity of otherRepository.entities) {
+      if (entity.locator?.kind === 'code') {
+        entity.locator.repository = 'https://github.com/other/api';
+      }
+    }
+    const other = parseAgentMemoryEnvelope(
+      envelope({ proposalContent: JSON.stringify(otherRepository) }),
+    );
+    const otherFunction = compileAgentMemory(other.envelope, other.proposal).quads.find(
+      (quad) =>
+        quad.predicate.endsWith('22-rdf-syntax-ns#type') && quad.object === codeFunctionType,
+    )!.subject;
+    expect(otherFunction).not.toBe(firstFunction);
+
+    const alternateForgePort = JSON.parse(v2Content()) as typeof firstContent;
+    for (const entity of alternateForgePort.entities) {
+      if (entity.locator?.kind === 'code') {
+        entity.locator.repository = 'https://forge.example.org:8443/acme/api';
+      }
+    }
+    const defaultForgePort = JSON.parse(v2Content()) as typeof firstContent;
+    for (const entity of defaultForgePort.entities) {
+      if (entity.locator?.kind === 'code') {
+        entity.locator.repository = 'https://forge.example.org/acme/api';
+      }
+    }
+    const functionUri = (content: typeof firstContent) => {
+      const parsed = parseAgentMemoryEnvelope(
+        envelope({ proposalContent: JSON.stringify(content) }),
+      );
+      return compileAgentMemory(parsed.envelope, parsed.proposal).quads.find(
+        (quad) =>
+          quad.predicate.endsWith('22-rdf-syntax-ns#type') && quad.object === codeFunctionType,
+      )!.subject;
+    };
+    expect(functionUri(alternateForgePort)).not.toBe(functionUri(defaultForgePort));
+
+    const store = new oxigraph.Store();
+    loadGeneratedQuads(store, firstCompiled.quads, 'urn:test:community-one');
+    loadGeneratedQuads(store, secondCompiled.quads, 'urn:test:community-two');
+    const sharedFunctions = queryRows(
+      store,
+      `PREFIX schema: <http://schema.org/>
+       PREFIX code: <http://dkg.io/ontology/code/>
+       SELECT ?function (COUNT(DISTINCT ?graph) AS ?graphs) WHERE {
+         GRAPH ?graph { ?function a code:Function ; schema:name "verifyToken" . }
+       } GROUP BY ?function`,
+    );
+    expect(sharedFunctions).toHaveLength(1);
+    expect(sharedFunctions[0]!.get('function')?.value).toBe(firstFunction);
+    expect(sharedFunctions[0]!.get('graphs')?.value).toBe('2');
+
+    const projectProposal = (uri: string) =>
+      JSON.stringify({
+        schemaVersion: 2,
+        profiles: ['dkg-memory@1'],
+        summary: 'Discuss the Open Climate project',
+        entities: [
+          {
+            id: 'project',
+            type: 'schema:Project',
+            name: 'Open Climate',
+            locator: { kind: 'uri', uri },
+          },
+        ],
+        relations: [],
+      });
+    const projectOne = parseAgentMemoryEnvelope(
+      envelope({ proposalContent: projectProposal('https://projects.example.org/open-climate/') }),
+    );
+    const projectTwo = parseAgentMemoryEnvelope(
+      envelope({
+        channelId: 'e5a7cdb2-544e-480e-b388-71a1e5580370',
+        proposalContent: projectProposal('https://projects.example.org/open-climate'),
+      }),
+    );
+    const projectType = 'http://schema.org/Project';
+    const projectUri = (parsed: typeof projectOne) =>
+      compileAgentMemory(parsed.envelope, parsed.proposal).quads.find(
+        (quad) => quad.predicate.endsWith('22-rdf-syntax-ns#type') && quad.object === projectType,
+      )!.subject;
+    expect(projectUri(projectOne)).toBe(projectUri(projectTwo));
+    expect(projectUri(projectOne)).toBe('https://projects.example.org/open-climate');
+
+    const localProposal = JSON.stringify({
+      schemaVersion: 2,
+      profiles: ['dkg-memory@1'],
+      summary: 'Discuss an unidentified local initiative',
+      entities: [{ id: 'initiative', type: 'memory:Entity', name: 'Phoenix' }],
+      relations: [],
+    });
+    const localOne = parseAgentMemoryEnvelope(envelope({ proposalContent: localProposal }));
+    const localTwo = parseAgentMemoryEnvelope(
+      envelope({
+        channelId: 'e5a7cdb2-544e-480e-b388-71a1e5580370',
+        proposalContent: localProposal,
+      }),
+    );
+    const localType = 'http://dkg.io/ontology/memory/Entity';
+    const localUri = (parsed: typeof localOne) =>
+      compileAgentMemory(parsed.envelope, parsed.proposal).quads.find(
+        (quad) => quad.predicate.endsWith('22-rdf-syntax-ns#type') && quad.object === localType,
+      )!.subject;
+    expect(localUri(localOne)).not.toBe(localUri(localTwo));
   });
 
   it('compiles a general-only profile into queryable event and task memory', () => {

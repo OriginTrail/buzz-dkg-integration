@@ -37,6 +37,7 @@ import {
   profileAllowsType,
   profileAttributeDatatype,
 } from './profiles.ts';
+import { canonicalExternalIdentityUri, canonicalRepositoryIdentityUrl } from './identity.ts';
 
 const HEX_64 = /^[0-9a-f]{64}$/u;
 const CHANNEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
@@ -61,6 +62,7 @@ const CODE_LOCATOR_TYPES = new Set([
   'code:TypeAlias',
   'code:Enum',
 ]);
+const EXTERNAL_IDENTITY_TYPES = new Set(['schema:Project']);
 const SAFE_EXTERNAL_IRI = /^(?:https:\/\/[^<>"{}|^`\\\s]{1,990}|urn:[^<>"{}|^`\\\s]{1,995})$/u;
 const MAX_SOURCES = 16;
 const MAX_ITEMS = 50;
@@ -98,6 +100,22 @@ function text(value: unknown, label: string, max: number): string {
 
 function optionalText(value: unknown, label: string, max: number): string | undefined {
   return value === undefined ? undefined : text(value, label, max);
+}
+
+function canonicalExternalUri(value: string, label: string): string {
+  try {
+    return canonicalExternalIdentityUri(value);
+  } catch (error) {
+    invalid(`${label} ${(error as Error).message}`);
+  }
+}
+
+function canonicalRepositoryUrl(value: string, label: string): string {
+  try {
+    return canonicalRepositoryIdentityUrl(value);
+  } catch (error) {
+    invalid(`${label} ${(error as Error).message}`);
+  }
 }
 
 function parseItem(raw: unknown, index: number): AgentMemoryItem {
@@ -184,7 +202,7 @@ function parseLocator(raw: unknown, label: string): AgentMemoryLocator {
     exactKeys(value, ['kind', 'uri'], label);
     const uri = text(value.uri, `${label}.uri`, 1_000);
     if (!SAFE_EXTERNAL_IRI.test(uri)) invalid(`${label}.uri must be an HTTPS or URN identifier`);
-    return { kind, uri };
+    return { kind, uri: canonicalExternalUri(uri, `${label}.uri`) };
   }
   if (kind === 'github') {
     exactKeys(value, ['kind', 'repository', 'resource', 'id'], label);
@@ -206,7 +224,11 @@ function parseLocator(raw: unknown, label: string): AgentMemoryLocator {
     return { kind, repository, resource, ...(id ? { id } : {}) };
   }
   if (kind === 'code') {
-    exactKeys(value, ['kind', 'package', 'path', 'symbol', 'symbolKind'], label);
+    exactKeys(value, ['kind', 'repository', 'package', 'path', 'symbol', 'symbolKind'], label);
+    const repository = canonicalRepositoryUrl(
+      text(value.repository, `${label}.repository`, 1_000),
+      `${label}.repository`,
+    );
     const packageName = text(value.package, `${label}.package`, 214);
     if (!/^(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+$/iu.test(packageName)) {
       invalid(`${label}.package is invalid`);
@@ -223,6 +245,7 @@ function parseLocator(raw: unknown, label: string): AgentMemoryLocator {
     if (symbolKind && !CODE_SYMBOL_KIND.has(symbolKind)) invalid(`${label}.symbolKind is invalid`);
     return {
       kind,
+      repository,
       package: packageName,
       ...(path ? { path } : {}),
       ...(symbol ? { symbol } : {}),
@@ -308,6 +331,9 @@ function parseEntity(
   }
   if (CODE_LOCATOR_TYPES.has(type) && locator?.kind !== 'code') {
     invalid(`${label}.locator must provide a stable code identifier for ${type}`);
+  }
+  if (EXTERNAL_IDENTITY_TYPES.has(type) && locator?.kind !== 'uri') {
+    invalid(`${label}.locator must provide a stable external identifier for ${type}`);
   }
   if (locator?.kind === 'github' && !type.startsWith('github:')) {
     invalid(`${label}.locator kind github requires a github type`);
@@ -569,20 +595,66 @@ function encodeId(value: string): string {
   return encodeURIComponent(value).replace(/%[0-9a-f]{2}/giu, (escape) => escape.toUpperCase());
 }
 
+interface RepositoryIdentity {
+  canonicalUrl: string;
+  key: string;
+  uri: string;
+  githubSlug: string | null;
+}
+
+function repositoryIdentity(canonicalUrl: string): RepositoryIdentity {
+  const url = new URL(canonicalUrl);
+  // `host` retains a non-default port, so independently hosted forges on the
+  // same DNS name cannot collapse into one repository identity.
+  const key = `${url.host}${url.pathname}`;
+  const githubSlug =
+    url.hostname === 'github.com' ? url.pathname.split('/').filter(Boolean).join('/') : null;
+  return {
+    canonicalUrl,
+    key,
+    uri: githubSlug ? `urn:dkg:github:repo:${githubSlug}` : `urn:dkg:repository:${encodeId(key)}`,
+    githubSlug,
+  };
+}
+
+function githubRepositoryIdentity(repository: string): RepositoryIdentity {
+  return repositoryIdentity(`https://github.com/${repository.toLowerCase()}`);
+}
+
+type CodeLocator = Extract<AgentMemoryLocator, { kind: 'code' }>;
+
+function codeIdentity(locator: CodeLocator): {
+  repository: RepositoryIdentity;
+  packageUri: string;
+  fileUri: string | null;
+  entityUri: string;
+} {
+  const repository = repositoryIdentity(locator.repository);
+  const scope = encodeId(repository.key);
+  const packageUri = `urn:dkg:code:package:${scope}/${encodeId(locator.package)}`;
+  if (!locator.path) return { repository, packageUri, fileUri: null, entityUri: packageUri };
+  const fileUri = `urn:dkg:code:file:${scope}/${encodeId(locator.package)}/${encodeId(locator.path)}`;
+  return {
+    repository,
+    packageUri,
+    fileUri,
+    entityUri: locator.symbol
+      ? `${fileUri}#${locator.symbolKind}:${encodeId(locator.symbol)}`
+      : fileUri,
+  };
+}
+
 function entityUri(digest: string, entity: AgentMemoryEntity): string {
   const locator = entity.locator;
   if (!locator) return `urn:buzz-dkg:entity:${digest}:${entity.id}`;
   if (locator.kind === 'uri') return locator.uri;
   if (locator.kind === 'github') {
-    const repository = locator.repository.toLowerCase();
-    if (locator.resource === 'repository') return `urn:dkg:github:repo:${repository}`;
+    const repository = githubRepositoryIdentity(locator.repository);
+    if (locator.resource === 'repository') return repository.uri;
     const kind = locator.resource === 'pull-request' ? 'pr' : locator.resource;
-    return `urn:dkg:github:${kind}:${repository}/${locator.id!.toLowerCase()}`;
+    return `urn:dkg:github:${kind}:${repository.githubSlug}/${locator.id!.toLowerCase()}`;
   }
-  const packageId = encodeId(locator.package);
-  if (!locator.path) return `urn:dkg:code:package:${packageId}`;
-  const fileUri = `urn:dkg:code:file:${packageId}/${encodeId(locator.path)}`;
-  return locator.symbol ? `${fileUri}#${locator.symbolKind}:${encodeId(locator.symbol)}` : fileUri;
+  return codeIdentity(locator).entityUri;
 }
 
 function attributeLiteral(value: string | number | boolean, datatype: string): string {
@@ -663,7 +735,7 @@ function compileAgentMemoryV2(
     }
     if (entity.locator?.kind === 'github') {
       const locator = entity.locator;
-      const repository = locator.repository.toLowerCase();
+      const repository = githubRepositoryIdentity(locator.repository);
       const suffix =
         locator.resource === 'repository'
           ? ''
@@ -675,8 +747,16 @@ function compileAgentMemoryV2(
       add(
         uri,
         `${PREFIXES.github}url`,
-        attributeLiteral(`https://github.com/${repository}${suffix}`, 'anyURI'),
+        attributeLiteral(`${repository.canonicalUrl}${suffix}`, 'anyURI'),
       );
+      add(repository.uri, `${RDF}type`, `${PREFIXES.software}Repository`);
+      add(repository.uri, `${RDF}type`, `${PREFIXES.github}Repository`);
+      add(
+        repository.uri,
+        `${PREFIXES.github}url`,
+        attributeLiteral(repository.canonicalUrl, 'anyURI'),
+      );
+      if (uri !== repository.uri) add(uri, `${PREFIXES.github}inRepo`, repository.uri);
       if (locator.resource === 'commit')
         add(uri, `${PREFIXES.github}sha`, literal(locator.id!.toLowerCase()));
       if (locator.resource === 'pull-request' || locator.resource === 'issue') {
@@ -684,9 +764,40 @@ function compileAgentMemoryV2(
       }
     }
     if (entity.locator?.kind === 'code') {
-      if (entity.locator.path) add(uri, `${PREFIXES.code}path`, literal(entity.locator.path));
-      if (entity.locator.symbol) {
-        add(uri, `${PREFIXES.code}qualifiedName`, literal(entity.locator.symbol));
+      const locator = entity.locator;
+      const identity = codeIdentity(locator);
+      add(identity.repository.uri, `${RDF}type`, `${PREFIXES.software}Repository`);
+      add(
+        identity.repository.uri,
+        `${SCHEMA}url`,
+        attributeLiteral(identity.repository.canonicalUrl, 'anyURI'),
+      );
+      if (identity.repository.githubSlug) {
+        add(identity.repository.uri, `${RDF}type`, `${PREFIXES.github}Repository`);
+        add(
+          identity.repository.uri,
+          `${PREFIXES.github}url`,
+          attributeLiteral(identity.repository.canonicalUrl, 'anyURI'),
+        );
+      }
+      add(identity.packageUri, `${RDF}type`, `${PREFIXES.code}Package`);
+      add(identity.packageUri, `${PREFIXES.software}repository`, identity.repository.uri);
+      add(uri, `${PREFIXES.software}repository`, identity.repository.uri);
+      if (uri !== identity.packageUri) add(uri, `${PREFIXES.code}package`, identity.packageUri);
+      if (identity.fileUri) {
+        add(identity.fileUri, `${RDF}type`, `${PREFIXES.code}File`);
+        if (uri !== identity.fileUri) {
+          add(identity.fileUri, `${SCHEMA}name`, literal(locator.path!.split('/').at(-1)!));
+        }
+        add(identity.fileUri, `${PREFIXES.code}path`, literal(locator.path!));
+        add(identity.fileUri, `${PREFIXES.code}package`, identity.packageUri);
+        add(identity.fileUri, `${PREFIXES.software}repository`, identity.repository.uri);
+      }
+      if (locator.path && uri !== identity.fileUri)
+        add(uri, `${PREFIXES.code}path`, literal(locator.path));
+      if (locator.symbol) {
+        add(uri, `${PREFIXES.code}qualifiedName`, literal(locator.symbol));
+        add(uri, `${PREFIXES.code}definedIn`, identity.fileUri!);
       }
     }
     for (const event of sorted) add(uri, `${PROV}wasDerivedFrom`, eventUri(event.id));

@@ -1,0 +1,24 @@
+PREFIX schema: <http://schema.org/>
+PREFIX code: <http://dkg.io/ontology/code/>
+PREFIX github: <http://dkg.io/ontology/github/>
+
+SELECT DISTINCT ?function ?graph ?editorName ?sha WHERE {
+  {
+    SELECT ?function WHERE {
+      GRAPH ?candidateGraph {
+        ?function a code:Function ;
+          schema:name "verifyToken" .
+      }
+    }
+    GROUP BY ?function
+    HAVING (COUNT(DISTINCT ?candidateGraph) = 2)
+  }
+  GRAPH ?graph {
+    ?commit a github:Commit ;
+      github:sha ?sha ;
+      github:affects ?function ;
+      github:authoredBy ?editor .
+    ?editor schema:name ?editorName .
+  }
+}
+ORDER BY ?sha

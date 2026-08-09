@@ -47,7 +47,15 @@ export const PROFILE_DEFINITIONS: Record<AgentMemoryProfileId, ProfileDefinition
       ...terms('memory', ['about', 'supports', 'contradicts', 'resolves']),
       ...terms('decisions', ['affects', 'recordedIn', 'implementedBy', 'supersedes']),
       ...terms('tasks', ['assignee', 'relatedDecision', 'dependsOn', 'touches']),
-      ...terms('schema', ['about', 'member', 'organizer', 'location', 'attendee', 'hasPart']),
+      ...terms('schema', [
+        'about',
+        'member',
+        'organizer',
+        'location',
+        'attendee',
+        'hasPart',
+        'sameAs',
+      ]),
     ]),
     attributes: new Map([
       ...attributes('decisions', {

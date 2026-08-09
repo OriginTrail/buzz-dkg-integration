@@ -180,7 +180,11 @@ if (agentMemoryCapability(relayInfo, agentMemoryOnly)) {
               id: 'component',
               type: 'code:Package',
               name: componentName,
-              locator: { kind: 'code', package: `canary-${canarySuffix}` },
+              locator: {
+                kind: 'code',
+                repository: 'https://github.com/buzz-dkg/canary',
+                package: `canary-${canarySuffix}`,
+              },
             },
             {
               id: 'function',
@@ -188,6 +192,7 @@ if (agentMemoryCapability(relayInfo, agentMemoryOnly)) {
               name: functionName,
               locator: {
                 kind: 'code',
+                repository: 'https://github.com/buzz-dkg/canary',
                 package: `canary-${canarySuffix}`,
                 path: 'src/canary.ts',
                 symbol: functionName,
@@ -260,7 +265,11 @@ if (agentMemoryCapability(relayInfo, agentMemoryOnly)) {
     const contributors = await owner.postAuthed('/api/dkg/query', {
       channelId,
       operation: 'software_contributors',
-      arguments: { componentName: functionName, componentType: 'function' },
+      arguments: {
+        repository: 'https://github.com/buzz-dkg/canary',
+        componentName: functionName,
+        componentType: 'function',
+      },
     });
     if (!contributors?.result?.contributors?.some((entry) => entry.sha === commitSha)) {
       throw new Error('v2 contributor competency query did not find the canary commit');
@@ -268,7 +277,11 @@ if (agentMemoryCapability(relayInfo, agentMemoryOnly)) {
     const trace = await owner.postAuthed('/api/dkg/query', {
       channelId,
       operation: 'decision_trace',
-      arguments: { commitSha, componentName },
+      arguments: {
+        repository: 'https://github.com/buzz-dkg/canary',
+        commitSha,
+        componentName,
+      },
     });
     if (
       !trace?.result?.decisions?.some(

@@ -13,26 +13,28 @@
 
 <urn:test:acme-api:swm:project> {
   <urn:dkg:github:repo:acme/api>
-    a github:Repository ;
+    a github:Repository, software:Repository ;
     schema:name "acme/api" ;
     github:url "https://github.com/acme/api"^^xsd:anyURI .
 
-  <urn:dkg:code:package:%40acme%2Fauth>
+  <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth>
     a code:Package ;
     schema:name "Authentication gateway" ;
     software:repository <urn:dkg:github:repo:acme/api> .
 
-  <urn:dkg:code:file:%40acme%2Fauth/src%2Ftoken.ts>
+  <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts>
     a code:File ;
     schema:name "token.ts" ;
     code:path "src/token.ts" ;
-    code:package <urn:dkg:code:package:%40acme%2Fauth> .
+    code:package <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> ;
+    software:repository <urn:dkg:github:repo:acme/api> .
 
-  <urn:dkg:code:file:%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken>
+  <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken>
     a code:Function ;
     schema:name "verifyToken" ;
     code:qualifiedName "auth/token.verifyToken" ;
-    code:definedIn <urn:dkg:code:file:%40acme%2Fauth/src%2Ftoken.ts> .
+    code:definedIn <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts> ;
+    software:repository <urn:dkg:github:repo:acme/api> .
 
   <urn:dkg:github:user:alice>
     a github:User ;
@@ -54,9 +56,9 @@
     github:inRepo <urn:dkg:github:repo:acme/api> ;
     github:authoredBy <urn:dkg:github:user:alice> ;
     github:affects
-      <urn:dkg:code:package:%40acme%2Fauth> ,
-      <urn:dkg:code:file:%40acme%2Fauth/src%2Ftoken.ts> ,
-      <urn:dkg:code:file:%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken> .
+      <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> ,
+      <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts> ,
+      <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken> .
 
   <urn:dkg:github:commit:acme/api/e5f6a7b8>
     a github:Commit ;
@@ -66,8 +68,8 @@
     github:inRepo <urn:dkg:github:repo:acme/api> ;
     github:authoredBy <urn:dkg:github:user:bob> ;
     github:affects
-      <urn:dkg:code:package:%40acme%2Fauth> ,
-      <urn:dkg:code:file:%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken> .
+      <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> ,
+      <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken> .
 
   <urn:dkg:github:pr:acme/api/42>
     a github:PullRequest ;
@@ -75,7 +77,7 @@
     github:number 42 ;
     github:state "merged" ;
     github:containsCommit <urn:dkg:github:commit:acme/api/a1b2c3d4> ;
-    github:affects <urn:dkg:code:package:%40acme%2Fauth> .
+    github:affects <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> .
 
   <urn:dkg:github:pr:acme/api/45>
     a github:PullRequest ;
@@ -83,7 +85,7 @@
     github:number 45 ;
     github:state "merged" ;
     github:containsCommit <urn:dkg:github:commit:acme/api/e5f6a7b8> ;
-    github:affects <urn:dkg:code:package:%40acme%2Fauth> .
+    github:affects <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> .
 
   <urn:dkg:decision:short-lived-jwt>
     a decisions:Decision ;
@@ -92,7 +94,7 @@
     decisions:context "Long-lived bearer tokens made credential exposure too costly." ;
     decisions:outcome "Use 15-minute access tokens with rotating refresh tokens." ;
     decisions:consequences "Clients must handle refresh rotation and replay detection." ;
-    decisions:affects <urn:dkg:code:package:%40acme%2Fauth> ;
+    decisions:affects <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> ;
     decisions:recordedIn <urn:dkg:github:pr:acme/api/42> ;
     decisions:implementedBy <urn:dkg:github:commit:acme/api/a1b2c3d4> ;
     prov:wasAttributedTo <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> ;
@@ -106,7 +108,7 @@
     decisions:status "accepted" ;
     decisions:context "Callers could not distinguish expiry from malformed tokens." ;
     decisions:outcome "Return ExpiredToken, InvalidSignature, and MalformedToken variants." ;
-    decisions:affects <urn:dkg:code:package:%40acme%2Fauth> ;
+    decisions:affects <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> ;
     decisions:recordedIn <urn:dkg:github:pr:acme/api/45> ;
     decisions:implementedBy <urn:dkg:github:commit:acme/api/e5f6a7b8> ;
     prov:wasAttributedTo <urn:nostr:pubkey:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> ;
@@ -119,13 +121,13 @@
     tasks:priority "p1" ;
     tasks:assignee <urn:dkg:github:user:carol> ;
     tasks:relatedDecision <urn:dkg:decision:short-lived-jwt> ;
-    tasks:touches <urn:dkg:code:package:%40acme%2Fauth> ;
+    tasks:touches <urn:dkg:code:package:github.com%2Facme%2Fapi/%40acme%2Fauth> ;
     prov:wasDerivedFrom <urn:nostr:event:2222222222222222222222222222222222222222222222222222222222222222> .
 
   <urn:dkg:software:test:refresh-token-replay>
     a software:TestCase ;
     schema:name "rejects refresh-token replay" ;
-    software:tests <urn:dkg:code:file:%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken> .
+    software:tests <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken> .
 
   <urn:dkg:software:test-run:ci-8812>
     a software:TestRun ;
@@ -135,6 +137,62 @@
     software:result "passed" ;
     software:supports <urn:dkg:github:commit:acme/api/a1b2c3d4> ;
     prov:wasDerivedFrom <urn:nostr:event:2222222222222222222222222222222222222222222222222222222222222222> .
+}
+
+# A second Buzz community independently discusses the same repository and
+# function. Canonical locator identity intentionally converges on the same
+# repository and function IRIs even though the named graph and evidence differ.
+<urn:test:partner-community:swm:project> {
+  <urn:dkg:github:repo:acme/api>
+    a github:Repository, software:Repository ;
+    schema:name "acme/api" ;
+    github:url "https://github.com/acme/api"^^xsd:anyURI .
+
+  <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken>
+    a code:Function ;
+    schema:name "verifyToken" ;
+    code:qualifiedName "auth/token.verifyToken" ;
+    software:repository <urn:dkg:github:repo:acme/api> .
+
+  <urn:dkg:github:user:diana>
+    a github:User ;
+    schema:name "Diana Okafor" .
+
+  <urn:dkg:github:commit:acme/api/f00baa12>
+    a github:Commit ;
+    schema:name "Reject keys with invalid audience" ;
+    schema:dateCreated "2026-07-29T11:05:00Z"^^xsd:dateTime ;
+    github:sha "f00baa12" ;
+    github:inRepo <urn:dkg:github:repo:acme/api> ;
+    github:authoredBy <urn:dkg:github:user:diana> ;
+    github:affects <urn:dkg:code:file:github.com%2Facme%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken> .
+}
+
+# An identically named function at the same package/path in another repository
+# must remain a different entity and therefore must not join with acme/api.
+<urn:test:other-repository:swm:project> {
+  <urn:dkg:github:repo:other/api>
+    a github:Repository, software:Repository ;
+    schema:name "other/api" ;
+    github:url "https://github.com/other/api"^^xsd:anyURI .
+
+  <urn:dkg:code:file:github.com%2Fother%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken>
+    a code:Function ;
+    schema:name "verifyToken" ;
+    code:qualifiedName "auth/token.verifyToken" ;
+    software:repository <urn:dkg:github:repo:other/api> .
+
+  <urn:dkg:github:user:erin>
+    a github:User ;
+    schema:name "Erin Chen" .
+
+  <urn:dkg:github:commit:other/api/deadbee1>
+    a github:Commit ;
+    schema:name "Unrelated verifier implementation" ;
+    github:sha "deadbee1" ;
+    github:inRepo <urn:dkg:github:repo:other/api> ;
+    github:authoredBy <urn:dkg:github:user:erin> ;
+    github:affects <urn:dkg:code:file:github.com%2Fother%2Fapi/%40acme%2Fauth/src%2Ftoken.ts#function:verifyToken> .
 }
 
 <urn:test:acme-api:swm:memory> {
