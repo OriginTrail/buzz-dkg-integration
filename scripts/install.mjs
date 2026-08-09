@@ -737,9 +737,10 @@ function remove(context) {
     }
     const container = JSON.parse(inspected.stdout)[0];
     const management = relayManagementFromContainer(container, values.BUZZ_DKG_RELAY_CONTAINER);
-    if (management?.compose && existsSync(join(context.configDir, 'relay.dkg.override.yml'))) {
+    const relayOverride = join(context.configDir, 'relay.dkg.override.yml');
+    if (management?.compose && existsSync(relayOverride)) {
       disableManagedRelayDkgProxy(context, management);
-    } else if (!management?.compose) {
+    } else {
       const relayEnvironment = new Map(
         (container?.Config?.Env ?? []).map((entry) => {
           const separator = entry.indexOf('=');
@@ -754,7 +755,7 @@ function remove(context) {
         Boolean(relayEnvironment.get('BUZZ_DKG_QUERY_TOKEN'));
       if (stillAdvertisesProxy) {
         fail(
-          `Buzz Relay '${values.BUZZ_DKG_RELAY_CONTAINER}' is operator-managed and still advertises the DKG proxy; remove BUZZ_DKG_MEMORY_ENABLED, BUZZ_DKG_QUERY_URL and BUZZ_DKG_QUERY_TOKEN from the relay, restart it, then rerun buzz-dkg remove`,
+          `Buzz Relay '${values.BUZZ_DKG_RELAY_CONTAINER}' is operator-managed and still advertises the DKG proxy, but its managed override cannot be restored; remove BUZZ_DKG_MEMORY_ENABLED, BUZZ_DKG_QUERY_URL and BUZZ_DKG_QUERY_TOKEN from the relay, restart it, then rerun buzz-dkg remove`,
         );
       }
     }

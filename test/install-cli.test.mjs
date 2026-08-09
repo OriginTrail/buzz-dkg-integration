@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -144,6 +145,7 @@ function configureBuzzRelay(
     buzzAdmin = 'present',
     compose = false,
     composeEnvFile = null,
+    extraEnv = [],
   } = {},
 ) {
   f.buzzAdmin = buzzAdmin;
@@ -155,7 +157,11 @@ function configureBuzzRelay(
         Name: '/buzz-relay-1',
         Config: {
           Image: 'ghcr.io/block/buzz:sha-test',
-          Env: [`RELAY_URL=${relayUrl}`, `BUZZ_REQUIRE_RELAY_MEMBERSHIP=${membershipRequired}`],
+          Env: [
+            `RELAY_URL=${relayUrl}`,
+            `BUZZ_REQUIRE_RELAY_MEMBERSHIP=${membershipRequired}`,
+            ...extraEnv,
+          ],
           Labels: {
             'com.docker.compose.service': 'relay',
             ...(compose
@@ -582,6 +588,40 @@ describe('Buzz-first installer CLI', () => {
     expect(restore).toBeGreaterThan(-1);
     expect(stop).toBeGreaterThan(restore);
     expect(existsSync(join(f.config, 'relay.dkg.override.yml'))).toBe(false);
+  });
+
+  it('refuses removal when a Compose relay still advertises a missing managed override', async () => {
+    const f = fixture();
+    const api = await apiServer('edge', {
+      supportedExtensions: ['buzz-dkg-memory-v1'],
+    });
+    configureBuzzRelay(f, api, {
+      membershipRequired: false,
+      compose: true,
+      extraEnv: [
+        'BUZZ_DKG_MEMORY_ENABLED=true',
+        'BUZZ_DKG_QUERY_URL=http://127.0.0.1:9297/v1/query',
+        'BUZZ_DKG_QUERY_TOKEN=relay-secret',
+      ],
+    });
+    const installed = await runInstaller(f, [
+      'install',
+      '--relay',
+      api,
+      '--dkg-api',
+      api,
+      '--dkg-token-path',
+      f.token,
+      '--yes',
+    ]);
+    expect(installed.status, installed.stderr).toBe(0);
+    rmSync(join(f.config, 'relay.dkg.override.yml'));
+    writeFileSync(f.dockerLog, '');
+
+    const removed = await runInstaller(f, ['remove']);
+    expect(removed.status).not.toBe(0);
+    expect(removed.stderr).toContain('still advertises the DKG proxy');
+    expect(readFileSync(f.dockerLog, 'utf8')).not.toContain('down');
   });
 
   it('refuses to stop the bridge while an operator-managed relay advertises it', async () => {
