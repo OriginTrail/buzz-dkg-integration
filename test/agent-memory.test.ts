@@ -265,6 +265,14 @@ describe('automatic channel memory lifecycle', () => {
       shares: 1,
       publishes: 0,
     });
+    expect(dkg.lifecycleLog).toEqual([
+      { operation: 'write', name: result.kaName, contextGraphId: expectedGraph },
+      { operation: 'finalize', name: result.kaName, contextGraphId: expectedGraph },
+      { operation: 'share', name: result.kaName, contextGraphId: expectedGraph },
+    ]);
+    expect(dkg.queryLog).toContainEqual(
+      expect.objectContaining({ contextGraphId: expectedGraph, view: 'shared-working-memory' }),
+    );
     expect(relay.sent).toHaveLength(0);
 
     const replay = await daemon.submitAgentMemory(request);
@@ -280,8 +288,44 @@ describe('automatic channel memory lifecycle', () => {
     const first = await daemon.submitAgentMemory(envelope());
     const second = await daemon.submitAgentMemory(envelope({ channelId: other }));
     expect(first.contextGraphId).not.toBe(second.contextGraphId);
-    expect(dkg.createdContextGraphs).toHaveLength(2);
     await daemon.drain();
+    expect(dkg.createdContextGraphs).toHaveLength(2);
+    const firstGraph = contextGraphIdForChannel('https://relay.example.test', CHANNEL);
+    const secondGraph = contextGraphIdForChannel('https://relay.example.test', other);
+    expect(
+      dkg.lifecycleLog
+        .filter((entry) => entry.name === first.kaName)
+        .map((entry) => entry.contextGraphId),
+    ).toEqual([firstGraph, firstGraph, firstGraph]);
+    expect(
+      dkg.lifecycleLog
+        .filter((entry) => entry.name === second.kaName)
+        .map((entry) => entry.contextGraphId),
+    ).toEqual([secondGraph, secondGraph, secondGraph]);
+    expect(dkg.queryLog.filter((entry) => entry.contextGraphId === firstGraph)).not.toHaveLength(0);
+    expect(dkg.queryLog.filter((entry) => entry.contextGraphId === secondGraph)).not.toHaveLength(
+      0,
+    );
+  });
+
+  it('accepts durably before slow first-use graph provisioning starts', async () => {
+    const { daemon, dkg } = setup();
+    let release!: () => void;
+    dkg.createContextGraphGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const accepted = daemon.submitAgentMemory(envelope());
+    expect(accepted).toMatchObject({ outcome: 'accepted', state: 'distilled' });
+    expect(dkg.createContextGraphStarted).toBe(0);
+    expect(dkg.lifecycleLog).toHaveLength(0);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(dkg.createContextGraphStarted).toBe(1);
+    expect(daemon.registry.opByTrigger(accepted.proposalEventId)?.state).toBe('distilled');
+    release();
+    await daemon.drain();
+    expect(daemon.registry.opByTrigger(accepted.proposalEventId)?.state).toBe('receipted');
   });
 
   it('treats reordered source events and JSON object keys as an idempotent retry', async () => {

@@ -506,6 +506,41 @@ describe('Buzz-first installer CLI', () => {
     ]);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('does not advertise buzz-dkg-memory-v1');
+    const dockerCalls = readFileSync(f.dockerLog, 'utf8');
+    expect(dockerCalls).toContain(
+      `--project-name buzz --project-directory ${f.root} -f ${f.relayCompose} up -d --no-deps relay`,
+    );
+  });
+
+  it('removes the managed relay capability before stopping the integration', async () => {
+    const f = fixture();
+    const api = await apiServer('edge', {
+      supportedExtensions: ['buzz-dkg-memory-v1'],
+    });
+    configureBuzzRelay(f, api, { membershipRequired: false, compose: true });
+    const installed = await runInstaller(f, [
+      'install',
+      '--relay',
+      api,
+      '--dkg-api',
+      api,
+      '--dkg-token-path',
+      f.token,
+      '--yes',
+    ]);
+    expect(installed.status, installed.stderr).toBe(0);
+
+    const removed = await runInstaller(f, ['remove']);
+    expect(removed.status, removed.stderr).toBe(0);
+    expect(removed.stdout).toContain('Disabling the managed DKG proxy');
+    const calls = readFileSync(f.dockerLog, 'utf8');
+    const restore = calls.lastIndexOf(
+      `--project-name buzz --project-directory ${f.root} -f ${f.relayCompose} up -d --no-deps relay`,
+    );
+    const stop = calls.lastIndexOf('--profile bridge-relay down');
+    expect(restore).toBeGreaterThan(-1);
+    expect(stop).toBeGreaterThan(restore);
+    expect(existsSync(join(f.config, 'relay.dkg.override.yml'))).toBe(false);
   });
 
   it('enrolls stable managed identities through the native Buzz admin CLI on a closed relay', async () => {

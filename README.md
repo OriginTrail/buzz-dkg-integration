@@ -177,9 +177,12 @@ sudo buzz-dkg install \
   --dkg-network testnet
 ```
 
-`remove` stops only the integration sidecar. It does not delete Buzz history,
-integration state, retained relay memberships, DKG state, or an
-operator-managed node. Release bundles pin their own Node runtime; the host
+`remove` first restarts a Compose-managed Buzz relay without the generated DKG
+proxy override, then stops the integration sidecar. It does not delete Buzz
+history, integration state, retained relay memberships, DKG state, or an
+operator-managed node. If the installer cannot safely inspect and restore a
+managed relay, removal fails closed instead of leaving a dead proxy advertised.
+Release bundles pin their own Node runtime; the host
 does not need Node.js preinstalled. The
 sidecar adds no public port, but it deliberately joins the Linux host network
 to reach loopback-only Buzz and DKG APIs. It runs with the uid/gid that owns the

@@ -254,25 +254,20 @@ describe('query gateway request contract', () => {
 describe('query gateway HTTP boundary', () => {
   it('accepts agent memory only through the authenticated loopback JSON boundary', async () => {
     const submitted: unknown[] = [];
-    const { url } = await startGateway(
-      new GatewayDkg(),
-      gatewayConfig(),
-      undefined,
-      async (raw) => {
-        submitted.push(raw);
-        return {
-          ok: true,
-          outcome: 'accepted',
-          proposalEventId: '11'.repeat(32),
-          channelId: 'c69311ba-a5a2-4b2a-a27f-99f7669af643',
-          requesterPubkey: REQUESTER,
-          contextGraphId: 'buzz-memory-graph',
-          kaName: 'buzz-dkg-memory',
-          digest: '22'.repeat(32),
-          state: 'distilled',
-        };
-      },
-    );
+    const { url } = await startGateway(new GatewayDkg(), gatewayConfig(), undefined, (raw) => {
+      submitted.push(raw);
+      return {
+        ok: true,
+        outcome: 'accepted',
+        proposalEventId: '11'.repeat(32),
+        channelId: 'c69311ba-a5a2-4b2a-a27f-99f7669af643',
+        requesterPubkey: REQUESTER,
+        contextGraphId: 'buzz-memory-graph',
+        kaName: 'buzz-dkg-memory',
+        digest: '22'.repeat(32),
+        state: 'distilled',
+      };
+    });
     const payload = { signed: 'envelope' };
     const response = await request(url.replace('/v1/query', '/v1/memory'), payload);
     expect(response.status).toBe(202);
@@ -288,23 +283,6 @@ describe('query gateway HTTP boundary', () => {
     });
     expect(unauthorized.status).toBe(401);
     expect(submitted).toHaveLength(1);
-  });
-
-  it('bounds memory acceptance by the gateway operation deadline', async () => {
-    const { url } = await startGateway(
-      new GatewayDkg(),
-      gatewayConfig({ operationTimeoutMs: 20 }),
-      undefined,
-      async () => new Promise<never>(() => undefined),
-    );
-    const response = await request(url.replace('/v1/query', '/v1/memory'), {
-      signed: 'envelope',
-    });
-    expect(response.status).toBe(504);
-    await expect(response.json()).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'gateway_timeout' },
-    });
   });
 
   it('resolves newly provisioned channel bindings at request time', async () => {

@@ -5,7 +5,7 @@ import type { DkgClient } from '../dkg/client.ts';
 import { IntegrationApiError } from '../errors.ts';
 import { logger } from '../log.ts';
 import type { AgentMemoryIngestResult, ChannelBinding, QueryGatewayConfig } from '../types.ts';
-import { parseQueryGatewayRequest, QueryGatewayService, withGatewayTimeout } from './service.ts';
+import { parseQueryGatewayRequest, QueryGatewayService } from './service.ts';
 
 type EnabledGatewayConfig = Extract<QueryGatewayConfig, { enabled: true }>;
 type GatewayLogger = Pick<typeof logger, 'info' | 'warn'>;
@@ -117,7 +117,7 @@ export class QueryGateway {
     dependencies: {
       log?: GatewayLogger;
       resolveContextGraph?: (channelId: string) => string | null | Promise<string | null>;
-      submitAgentMemory?: (raw: unknown) => Promise<AgentMemoryIngestResult>;
+      submitAgentMemory?: (raw: unknown) => AgentMemoryIngestResult;
     } = {},
   ) {
     this.config = config;
@@ -141,7 +141,7 @@ export class QueryGateway {
     this.#server.setTimeout(config.operationTimeoutMs + 5_000, (socket) => socket.destroy());
   }
 
-  readonly #submitAgentMemory: ((raw: unknown) => Promise<AgentMemoryIngestResult>) | undefined;
+  readonly #submitAgentMemory: ((raw: unknown) => AgentMemoryIngestResult) | undefined;
 
   get address(): AddressInfo | null {
     const address = this.#server.address();
@@ -221,10 +221,7 @@ export class QueryGateway {
             'agent memory ingestion is disabled',
           );
         }
-        const memory = await withGatewayTimeout(
-          this.#submitAgentMemory(raw),
-          this.config.operationTimeoutMs,
-        );
+        const memory = this.#submitAgentMemory(raw);
         output = memory;
         responseStatus = memory.state === 'receipted' ? 200 : 202;
         audit = {

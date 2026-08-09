@@ -39,6 +39,7 @@ describe('deployment artifacts', () => {
         BUZZ_DKG_STATE_DIR: '/tmp/buzz-dkg-v1a-state',
         BUZZ_DKG_RUNTIME_UID: '1000',
         BUZZ_DKG_RUNTIME_GID: '1000',
+        BUZZ_DKG_RELAY_CONTAINER: 'buzz-relay-test',
       };
       for (const profileArgs of [[], ['--profile', 'tools']]) {
         const result = spawnSync(
@@ -55,7 +56,7 @@ describe('deployment artifacts', () => {
       });
       expect(mvp.status, mvp.stderr).toBe(0);
 
-      for (const profileArgs of [[], ['--profile', 'tools']]) {
+      for (const profileArgs of [[], ['--profile', 'tools'], ['--profile', 'bridge-relay']]) {
         const v1a = spawnSync(
           'docker',
           ['compose', ...profileArgs, '-f', 'deploy/v1a/compose.yml', 'config'],
@@ -63,6 +64,23 @@ describe('deployment artifacts', () => {
         );
         expect(v1a.status, v1a.stderr).toBe(0);
       }
+      const bridgeServices = spawnSync(
+        'docker',
+        [
+          'compose',
+          '--profile',
+          'bridge-relay',
+          '-f',
+          'deploy/v1a/compose.yml',
+          'config',
+          '--services',
+        ],
+        { cwd: repo, env, encoding: 'utf8' },
+      );
+      expect(bridgeServices.status, bridgeServices.stderr).toBe(0);
+      expect(bridgeServices.stdout.split(/\s+/u)).toEqual(
+        expect.arrayContaining(['daemon', 'host-query-bridge', 'relay-query-bridge']),
+      );
     },
   );
 

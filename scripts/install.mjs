@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -15,10 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { getPublicKey } from 'nostr-tools/pure';
 import { createInstallContext } from './install/context.mjs';
-import {
-  assertManagedDkgPackageLock,
-  DKG_RELEASE_POLICY,
-} from './install/dkg-release.mjs';
+import { assertManagedDkgPackageLock, DKG_RELEASE_POLICY } from './install/dkg-release.mjs';
 import { resolveDkgPlan, SUPPORTED_DKG_NETWORKS } from './install/dkg-plan.mjs';
 import {
   probeRelay,
@@ -26,11 +24,7 @@ import {
   relayManagementFromContainer,
   relayEndpoints,
 } from './install/relay.mjs';
-import {
-  generatedSecrets,
-  parseEnvFile,
-  writeRuntimeEnv,
-} from './install/runtime-env.mjs';
+import { generatedSecrets, parseEnvFile, writeRuntimeEnv } from './install/runtime-env.mjs';
 
 export { relayEndpoints };
 
@@ -189,9 +183,7 @@ function prepareManagedDkg(context, identity) {
 }
 
 function verifyManagedDkgLock(context) {
-  const lock = JSON.parse(
-    readFileSync(join(context.managedDkgRoot, 'package-lock.json'), 'utf8'),
-  );
+  const lock = JSON.parse(readFileSync(join(context.managedDkgRoot, 'package-lock.json'), 'utf8'));
   assertManagedDkgPackageLock(lock);
 }
 
@@ -219,15 +211,7 @@ async function waitForIntegration(context) {
 }
 
 function composeArgs(context, command, ...args) {
-  return [
-    'compose',
-    '--env-file',
-    context.envPath,
-    '-f',
-    context.composePath,
-    command,
-    ...args,
-  ];
+  return ['compose', '--env-file', context.envPath, '-f', context.composePath, command, ...args];
 }
 
 function composeProfileArgs(context, profile, command, ...args) {
@@ -244,10 +228,9 @@ function composeProfileArgs(context, profile, command, ...args) {
   ];
 }
 
-function relayComposeArgs(compose, overridePath) {
-  const configFiles = [
-    ...new Set(compose.configFiles.filter((path) => path !== overridePath)),
-  ];
+function relayComposeArgs(compose, overridePath, includeOverride = true) {
+  const configFiles = [...new Set(compose.configFiles.filter((path) => path !== overridePath))];
+  if (!configFiles.length) fail('the adopted relay has no base Compose file to restore');
   return [
     'compose',
     '--project-name',
@@ -255,13 +238,21 @@ function relayComposeArgs(compose, overridePath) {
     '--project-directory',
     compose.workingDir,
     ...configFiles.flatMap((path) => ['-f', path]),
-    '-f',
-    overridePath,
+    ...(includeOverride ? ['-f', overridePath] : []),
     'up',
     '-d',
     '--no-deps',
     compose.service,
   ];
+}
+
+function disableManagedRelayDkgProxy(context, management) {
+  if (!management?.compose) return false;
+  const overridePath = join(context.configDir, 'relay.dkg.override.yml');
+  console.log('Disabling the managed DKG proxy and restarting the Buzz Relay...');
+  run('docker', relayComposeArgs(management.compose, overridePath, false));
+  rmSync(overridePath, { force: true });
+  return true;
 }
 
 async function configureRelayDkgProxy(context, plan, secrets) {
@@ -315,8 +306,12 @@ async function configureRelayDkgProxy(context, plan, secrets) {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
-  if (!relayInfo) fail('Buzz Relay did not become ready after DKG proxy configuration');
+  if (!relayInfo) {
+    disableManagedRelayDkgProxy(context, management);
+    fail('Buzz Relay did not become ready after DKG proxy configuration');
+  }
   if (!relayInfo.supportedExtensions.includes('buzz-dkg-memory-v1')) {
+    disableManagedRelayDkgProxy(context, management);
     fail(
       'the restarted Buzz Relay does not advertise buzz-dkg-memory-v1; deploy a Buzz build containing the DKG memory proxy, then rerun the installer',
     );
@@ -332,9 +327,13 @@ function showPlan(context, plan) {
   );
   console.log('  Integration: install projector/provider sidecar with VM publication disabled');
   if (plan.relayManagement?.compose) {
-    console.log('  Agent memory: configure the authenticated proxy and restart the local Compose relay');
+    console.log(
+      '  Agent memory: configure the authenticated proxy and restart the local Compose relay',
+    );
   } else {
-    console.log('  Agent memory: print the two relay proxy values for operator-managed configuration');
+    console.log(
+      '  Agent memory: print the two relay proxy values for operator-managed configuration',
+    );
   }
   if (plan.relayManagement?.membershipRequired) {
     console.log(
@@ -351,7 +350,9 @@ function showPlan(context, plan) {
         : '  Relay access: external/unknown; no automatic membership change',
     );
   }
-  console.log('  Memory:      seed Web of Trust; lazily create one private Context Graph per channel');
+  console.log(
+    '  Memory:      seed Web of Trust; lazily create one private Context Graph per channel',
+  );
   console.log(`  State:       ${context.stateDir}`);
   console.log('  Public ports: none added by the integration');
   console.log('  Network:     sidecar uses the Linux host network to reach loopback Buzz/DKG APIs');
@@ -619,44 +620,51 @@ export async function install(options, prompt, context = installContext) {
   });
 
   await ensureRelayEnrollment(plan, secrets);
-  const relayProxyManaged = await configureRelayDkgProxy(context, plan, secrets);
-  const relayBridgeAvailable = Boolean(
-    plan.relayManagement?.containerName || plan.relayManagement?.containerId,
-  );
+  let relayProxyManaged = false;
+  try {
+    relayProxyManaged = await configureRelayDkgProxy(context, plan, secrets);
+    const relayBridgeAvailable = Boolean(
+      plan.relayManagement?.containerName || plan.relayManagement?.containerId,
+    );
 
-  console.log('Creating or reusing the Web of Trust channel and Context Graph...');
-  run('docker', composeArgs(context, 'run', '--rm', 'bootstrap'));
-  run(
-    'docker',
-    relayBridgeAvailable
-      ? composeProfileArgs(
-          context,
-          'bridge-relay',
-          'up',
-          '-d',
-          'daemon',
-          'host-query-bridge',
-          'relay-query-bridge',
-        )
-      : composeArgs(context, 'up', '-d', 'daemon'),
-  );
-  await waitForIntegration(context);
-  console.log('Running the end-to-end smoke check...');
-  run('docker', composeArgs(context, 'run', '--rm', 'smoke'));
-  const bootstrap = JSON.parse(
-    readFileSync(join(context.stateDir, 'bootstrap.json'), 'utf8'),
-  );
-  console.log('\nBuzz + DKG is ready.');
-  console.log(`  Buzz Relay:   ${plan.relay.ws}`);
-  console.log(`  DKG node:     ${status.nodeRole} ${status.version || ''}`.trimEnd());
-  console.log(`  Channel:      ${bootstrap.channelName} (${bootstrap.channelId})`);
-  console.log(`  Context Graph: ${bootstrap.contextGraphId}`);
-  console.log(
-    relayProxyManaged
-      ? '  Agent memory: enabled for authenticated Buzz agents in every channel'
-      : '  Agent memory: pending the relay proxy values printed above',
-  );
-  console.log('\nCommands: sudo buzz-dkg status | logs | smoke | remove');
+    console.log('Creating or reusing the Web of Trust channel and Context Graph...');
+    run('docker', composeArgs(context, 'run', '--rm', 'bootstrap'));
+    run(
+      'docker',
+      relayBridgeAvailable
+        ? composeProfileArgs(
+            context,
+            'bridge-relay',
+            'up',
+            '-d',
+            'daemon',
+            'host-query-bridge',
+            'relay-query-bridge',
+          )
+        : composeArgs(context, 'up', '-d', 'daemon'),
+    );
+    await waitForIntegration(context);
+    console.log('Running the end-to-end smoke check...');
+    run('docker', composeArgs(context, 'run', '--rm', 'smoke'));
+    const bootstrap = JSON.parse(readFileSync(join(context.stateDir, 'bootstrap.json'), 'utf8'));
+    console.log('\nBuzz + DKG is ready.');
+    console.log(`  Buzz Relay:   ${plan.relay.ws}`);
+    console.log(`  DKG node:     ${status.nodeRole} ${status.version || ''}`.trimEnd());
+    console.log(`  Channel:      ${bootstrap.channelName} (${bootstrap.channelId})`);
+    console.log(`  Context Graph: ${bootstrap.contextGraphId}`);
+    console.log(
+      relayProxyManaged
+        ? '  Agent memory: enabled for authenticated Buzz agents in every channel'
+        : '  Agent memory: pending the relay proxy values printed above',
+    );
+    console.log('\nCommands: sudo buzz-dkg status | logs | smoke | remove');
+  } catch (error) {
+    const overridePath = join(context.configDir, 'relay.dkg.override.yml');
+    if (existsSync(overridePath) && plan.relayManagement?.compose) {
+      disableManagedRelayDkgProxy(context, plan.relayManagement);
+    }
+    throw error;
+  }
 }
 
 async function plan(context, options, prompt) {
@@ -712,6 +720,22 @@ function identities(context) {
 function remove(context) {
   if (!existsSync(context.envPath)) fail(`no V1a installation found at ${context.envPath}`);
   const values = parseEnvFile(context.envPath);
+  if (values.BUZZ_DKG_RELAY_CONTAINER) {
+    const inspected = run('docker', ['inspect', values.BUZZ_DKG_RELAY_CONTAINER], {
+      capture: true,
+      allowFailure: true,
+    });
+    if (inspected.status !== 0) {
+      fail(
+        `cannot inspect managed Buzz Relay '${values.BUZZ_DKG_RELAY_CONTAINER}'; refusing to leave a potentially advertised dead proxy`,
+      );
+    }
+    const container = JSON.parse(inspected.stdout)[0];
+    const management = relayManagementFromContainer(container, values.BUZZ_DKG_RELAY_CONTAINER);
+    if (management?.compose && existsSync(join(context.configDir, 'relay.dkg.override.yml'))) {
+      disableManagedRelayDkgProxy(context, management);
+    }
+  }
   run(
     'docker',
     values.BUZZ_DKG_RELAY_CONTAINER

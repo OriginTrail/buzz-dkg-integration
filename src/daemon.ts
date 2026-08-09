@@ -91,8 +91,11 @@ export class Daemon {
    * the daemon queue. Production Core nodes can take minutes to finalize/share;
    * a Buzz agent should receive an acknowledgement, not hold an HTTP socket.
    */
-  async submitAgentMemory(raw: unknown): Promise<AgentMemoryIngestResult> {
-    const accepted = await this.acceptAgentMemory(raw);
+  submitAgentMemory(raw: unknown): AgentMemoryIngestResult {
+    // Validation, deterministic binding, envelope persistence and op claim are
+    // all local and synchronous. A caller can never receive a timeout while an
+    // uncancellable acceptance continues mutating durable state.
+    const accepted = this.acceptAgentMemory(raw);
     if (!['receipted', 'failed'].includes(accepted.op.state)) {
       this.scheduleAgentMemory(accepted.op.triggerEventId);
     }
@@ -120,18 +123,31 @@ export class Daemon {
     );
   }
 
-  /** Resolve or lazily provision the private Context Graph for one Buzz channel. */
-  async ensureContextGraph(channelId: string): Promise<string | null> {
+  /** Reserve the deterministic private graph without doing network I/O. */
+  private reserveContextGraph(channelId: string): string | null {
     const existing = this.registry.contextGraphFor(channelId);
     if (existing) return existing;
     if (this.config.autoProvisionChannels !== true) return null;
+    const contextGraphId = contextGraphIdForChannel(this.config.relayHttpUrl, channelId);
+    this.registry.bindChannel(channelId, contextGraphId);
+    return contextGraphId;
+  }
+
+  /** Create and read back a reserved graph on the crash-recoverable queue. */
+  private async ensureContextGraphReady(channelId: string, contextGraphId: string): Promise<void> {
     const pending = this.#graphProvisioning.get(channelId);
-    if (pending) return pending;
-    const operation = this.provisionContextGraph(channelId).finally(() =>
+    if (pending) {
+      const provisioned = await pending;
+      if (provisioned !== contextGraphId) {
+        throw new Error(`channel '${channelId}' provisioning resolved to '${provisioned}'`);
+      }
+      return;
+    }
+    const operation = this.provisionContextGraph(channelId, contextGraphId).finally(() =>
       this.#graphProvisioning.delete(channelId),
     );
     this.#graphProvisioning.set(channelId, operation);
-    return operation;
+    await operation;
   }
 
   /** Side-effect-free resolver used exclusively by read/query requests. */
@@ -139,8 +155,10 @@ export class Daemon {
     return this.registry.contextGraphFor(channelId);
   }
 
-  private async provisionContextGraph(channelId: string): Promise<string> {
-    const contextGraphId = contextGraphIdForChannel(this.config.relayHttpUrl, channelId);
+  private async provisionContextGraph(channelId: string, contextGraphId: string): Promise<string> {
+    if (this.registry.contextGraphFor(channelId) !== contextGraphId) {
+      throw new Error(`channel '${channelId}' is not reserved for '${contextGraphId}'`);
+    }
     let exists = await this.dkg.contextGraphExists(contextGraphId);
     if (!exists.exists) {
       try {
@@ -369,14 +387,14 @@ export class Daemon {
     await this.executeOp(op, events);
   }
 
-  private async acceptAgentMemory(raw: unknown): Promise<{
+  private acceptAgentMemory(raw: unknown): {
     result: AgentMemoryIngestResult;
     op: OpRecord;
-  }> {
+  } {
     const parsed = parseAgentMemoryEnvelope(raw);
     const { envelope, proposal } = parsed;
     this.registry.saveAgentMemoryEnvelope(envelope.proposalEvent.id, envelope);
-    const contextGraphId = await this.ensureContextGraph(envelope.channelId);
+    const contextGraphId = this.reserveContextGraph(envelope.channelId);
     if (!contextGraphId) {
       throw new IntegrationApiError(
         404,
@@ -455,6 +473,7 @@ export class Daemon {
     }
     try {
       if (op.state === 'distilled') {
+        await this.ensureContextGraphReady(op.channelId, op.contextGraphId);
         await this.dkg.write(op.kaName, op.contextGraphId, compiled.quads);
         this.registry.transition(op.id, 'wm_written');
         op = this.registry.opByTrigger(op.triggerEventId)!;
