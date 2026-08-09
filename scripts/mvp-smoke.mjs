@@ -262,34 +262,32 @@ if (agentMemoryCapability(relayInfo, agentMemoryOnly)) {
     6 * 60_000,
   );
   if (schemaVersion === 2) {
-    const contributors = await owner.postAuthed('/api/dkg/query', {
-      channelId,
-      operation: 'software_contributors',
-      arguments: {
-        repository: 'https://github.com/buzz-dkg/canary',
-        componentName: functionName,
-        componentType: 'function',
-      },
+    await waitFor('v2 contributor competency query', async () => {
+      const contributors = await owner.postAuthed('/api/dkg/query', {
+        channelId,
+        operation: 'software_contributors',
+        arguments: {
+          repository: 'https://github.com/buzz-dkg/canary',
+          componentName: functionName,
+          componentType: 'function',
+        },
+      });
+      return contributors?.result?.contributors?.some((entry) => entry.sha === commitSha);
     });
-    if (!contributors?.result?.contributors?.some((entry) => entry.sha === commitSha)) {
-      throw new Error('v2 contributor competency query did not find the canary commit');
-    }
-    const trace = await owner.postAuthed('/api/dkg/query', {
-      channelId,
-      operation: 'decision_trace',
-      arguments: {
-        repository: 'https://github.com/buzz-dkg/canary',
-        commitSha,
-        componentName,
-      },
-    });
-    if (
-      !trace?.result?.decisions?.some(
+    await waitFor('v2 decision competency query', async () => {
+      const trace = await owner.postAuthed('/api/dkg/query', {
+        channelId,
+        operation: 'decision_trace',
+        arguments: {
+          repository: 'https://github.com/buzz-dkg/canary',
+          commitSha,
+          componentName,
+        },
+      });
+      return trace?.result?.decisions?.some(
         (entry) => entry.decisionName === 'Use signed semantic proposals',
-      )
-    ) {
-      throw new Error('v2 decision competency query did not find the canary decision');
-    }
+      );
+    });
     console.log('✓ v2 contributor and decision competency queries returned the canary graph');
   }
   agentMemory = {
