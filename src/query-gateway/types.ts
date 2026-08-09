@@ -1,3 +1,5 @@
+import type { SemanticQueryMetrics } from './sparql-policy.ts';
+
 export type QueryOperation =
   | 'channel_memory'
   | 'contributor_trail'
@@ -5,13 +7,23 @@ export type QueryOperation =
   | 'decision_trace'
   | 'subgraph_graph'
   | 'subgraph_triples'
-  | 'evidence';
+  | 'evidence'
+  | 'semantic_query';
 
 interface RequestBase<T extends QueryOperation, A> {
   channelId: string;
   operation: T;
   arguments: A;
   requesterPubkey: string;
+}
+
+export type SemanticQueryView = 'both' | 'shared' | 'verified';
+
+interface SemanticQueryRequest extends RequestBase<
+  'semantic_query',
+  { sparql: string; view: SemanticQueryView }
+> {
+  scope: { type: 'current_channel' };
 }
 
 export type QueryGatewayRequest =
@@ -28,7 +40,8 @@ export type QueryGatewayRequest =
   | RequestBase<'decision_trace', { repository: string; commitSha: string; componentName: string }>
   | RequestBase<'subgraph_graph', { name: string }>
   | RequestBase<'subgraph_triples', { name: string }>
-  | RequestBase<'evidence', { uri: string }>;
+  | RequestBase<'evidence', { uri: string }>
+  | SemanticQueryRequest;
 
 export type VisibleMemoryLayer = 'SWM' | 'VM';
 
@@ -186,6 +199,23 @@ export interface EvidenceResult {
   graph: string | null;
 }
 
+export interface SemanticQueryLayerResult {
+  layer: VisibleMemoryLayer;
+  bindings: Record<string, unknown>[];
+  quads?: unknown[];
+}
+
+export interface SemanticQueryResult {
+  queryType: 'select' | 'ask' | 'construct';
+  scope: { type: 'current_channel' };
+  cost: {
+    score: number;
+    budget: number;
+    metrics: SemanticQueryMetrics;
+  };
+  layers: SemanticQueryLayerResult[];
+}
+
 export type QueryGatewayResult =
   | ChannelMemoryResult
   | ContributorTrailResult
@@ -193,7 +223,8 @@ export type QueryGatewayResult =
   | DecisionTraceResult
   | SubgraphGraphResult
   | SubgraphTriplesResult
-  | EvidenceResult;
+  | EvidenceResult
+  | SemanticQueryResult;
 
 export interface QueryGatewaySuccess {
   ok: true;

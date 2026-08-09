@@ -160,6 +160,16 @@ function body(operation: string, args: Record<string, unknown> = {}) {
   return { channelId: CHANNEL, operation, arguments: args, requesterPubkey: REQUESTER };
 }
 
+function semanticBody(sparql: string, view = 'both') {
+  return {
+    channelId: CHANNEL,
+    operation: 'semantic_query',
+    scope: { type: 'current_channel' },
+    arguments: { sparql, view },
+    requesterPubkey: REQUESTER,
+  };
+}
+
 function binding(value: string): { value: string } {
   return { value };
 }
@@ -227,7 +237,7 @@ describe('query gateway configuration', () => {
 });
 
 describe('query gateway request contract', () => {
-  it('accepts only the seven typed operations and exact argument shapes', () => {
+  it('accepts the typed operations and exact argument shapes', () => {
     expect(parseQueryGatewayRequest(body('channel_memory'))).toMatchObject({
       operation: 'channel_memory',
       requesterPubkey: REQUESTER,
@@ -272,6 +282,15 @@ describe('query gateway request contract', () => {
     expect(parseQueryGatewayRequest(body('evidence', { uri: 'urn:buzz:claim:1' }))).toMatchObject({
       operation: 'evidence',
     });
+    expect(
+      parseQueryGatewayRequest(
+        semanticBody('SELECT ?s WHERE { GRAPH ?g { ?s <urn:type> <urn:Decision> } } LIMIT 25'),
+      ),
+    ).toMatchObject({
+      operation: 'semantic_query',
+      scope: { type: 'current_channel' },
+      arguments: { view: 'both' },
+    });
   });
 
   it('rejects omitted requester identity and all client-supplied query controls', () => {
@@ -292,6 +311,18 @@ describe('query gateway request contract', () => {
     ).toThrow(/unexpected field/);
     expect(() => parseQueryGatewayRequest(body('raw_query'))).toThrow(/operation is invalid/);
     expect(() =>
+      parseQueryGatewayRequest({
+        ...semanticBody('ASK { <urn:s> <urn:p> ?o }'),
+        scope: { type: 'context_graph', id: 'did:dkg:attacker' },
+      }),
+    ).toThrow(/scope contains unexpected field|scope.type/);
+    expect(() =>
+      parseQueryGatewayRequest({
+        ...semanticBody('ASK { <urn:s> <urn:p> ?o }'),
+        contextGraphId: 'did:dkg:attacker',
+      }),
+    ).toThrow(/unexpected field/);
+    expect(() =>
       parseQueryGatewayRequest(
         body('software_contributors', {
           repository: REPOSITORY,
@@ -308,6 +339,86 @@ describe('query gateway request contract', () => {
         }),
       ),
     ).toThrow(/canonical HTTPS repository URL/);
+  });
+});
+
+describe('semantic query execution', () => {
+  it('resolves the current channel graph server-side and queries selected visible layers', async () => {
+    const dkg = new GatewayDkg();
+    dkg.bindingResolver = ({ sparql }) =>
+      sparql.includes('<urn:decision>') ? [{ name: binding('Use x402') }] : [];
+    const service = new QueryGatewayService(
+      (channelId) => (channelId === CHANNEL ? CONTEXT_GRAPH : null),
+      dkg.asDkg(),
+      gatewayConfig(),
+    );
+    const sparql =
+      'SELECT ?name WHERE { GRAPH ?g { <urn:decision> <http://schema.org/name> ?name } } LIMIT 25';
+    const result = await service.execute(semanticBody(sparql, 'shared'));
+
+    expect(result).toMatchObject({
+      ok: true,
+      channelId: CHANNEL,
+      cg: CONTEXT_GRAPH,
+      operation: 'semantic_query',
+      result: {
+        queryType: 'select',
+        scope: { type: 'current_channel' },
+        layers: [{ layer: 'SWM', bindings: [{ name: binding('Use x402') }] }],
+      },
+    });
+    expect(dkg.calls).toEqual([
+      expect.objectContaining({
+        kind: 'query',
+        contextGraphId: CONTEXT_GRAPH,
+        view: 'shared-working-memory',
+        sparql,
+      }),
+    ]);
+  });
+
+  it('answers a lifelike agent-authored decision trace with the ontology fixture', async () => {
+    const dkg = new GatewayDkg();
+    dkg.bindingResolver = ({ sparql }) => fixtureQuery(sparql);
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+    const sparql = `PREFIX schema: <http://schema.org/>
+      PREFIX github: <http://dkg.io/ontology/github/>
+      PREFIX decisions: <http://dkg.io/ontology/decisions/>
+      SELECT ?decision ?name ?context ?outcome WHERE { GRAPH ?g {
+        VALUES ?commit { <urn:dkg:github:commit:acme/api/a1b2c3d4> }
+        ?decision a decisions:Decision ; schema:name ?name ;
+          decisions:implementedBy ?commit ; decisions:context ?context ;
+          decisions:outcome ?outcome .
+      } } LIMIT 25`;
+    const response = await service.execute(semanticBody(sparql, 'shared'));
+    const layers = (
+      response.result as {
+        layers: Array<{ bindings: Array<Record<string, { value?: string }>> }>;
+      }
+    ).layers;
+
+    expect(layers[0]?.bindings).toHaveLength(1);
+    expect(layers[0]?.bindings[0]).toMatchObject({
+      name: binding('Use short-lived JWT access tokens'),
+    });
+    expect(String(layers[0]?.bindings[0]?.outcome?.value)).toContain('15-minute');
+  });
+
+  it('returns structured simplification feedback through the HTTP gateway', async () => {
+    const { url, dkg } = await startGateway();
+    const response = await request(
+      url,
+      semanticBody('SELECT ?s ?p ?o WHERE { GRAPH ?g { ?s ?p ?o } } LIMIT 25'),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: {
+        code: 'unsafe_query',
+        details: { suggestions: expect.any(Array) },
+      },
+    });
+    expect(dkg.calls).toHaveLength(0);
   });
 });
 

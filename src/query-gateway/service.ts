@@ -2,6 +2,7 @@ import type { DkgClient } from '../dkg/client.ts';
 import { IntegrationApiError } from '../errors.ts';
 import { canonicalRepositoryIdentityUrl } from '../memory/identity.ts';
 import type { QueryGatewayConfig } from '../types.ts';
+import { enforceSemanticQueryPolicy } from './sparql-policy.ts';
 import type {
   ChannelMemoryResult,
   ContributorSummary,
@@ -20,6 +21,8 @@ import type {
   QueryGatewayResult,
   QueryGatewaySuccess,
   QueryOperation,
+  SemanticQueryResult,
+  SemanticQueryView,
   SoftwareContributorEntry,
   SoftwareContributorsResult,
   SubGraphSummary,
@@ -54,6 +57,9 @@ const MAX_DKG_ROWS = 2_500;
 const MAX_GRAPH_NODES = 1_200;
 const MAX_GRAPH_EDGES = 2_400;
 const MAX_TRIPLES = 1_000;
+const MAX_SEMANTIC_ROWS = 100;
+const MAX_SEMANTIC_QUADS = 300;
+const MAX_SEMANTIC_QUERY_TIMEOUT_MS = 10_000;
 
 const BUZZ = 'https://w3id.org/buzz-dkg/buzz#';
 const NOSTR = 'https://w3id.org/buzz-dkg/nostr#';
@@ -99,6 +105,18 @@ function requiredText(value: unknown, name: string, max: number): string {
   return value.trim();
 }
 
+function requiredSparql(value: unknown): string {
+  if (
+    typeof value !== 'string' ||
+    !value.trim() ||
+    Buffer.byteLength(value, 'utf8') > 64 * 1024 ||
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)
+  ) {
+    invalid('arguments.sparql is invalid');
+  }
+  return value.trim();
+}
+
 function requiredRepository(value: unknown): string {
   const repository = requiredText(value, 'arguments.repository', 1_000);
   try {
@@ -116,7 +134,7 @@ function sparqlLiteral(value: string): string {
 
 export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
   if (!plainObject(value)) invalid('request body must be a JSON object');
-  exactKeys(value, ['channelId', 'operation', 'arguments', 'requesterPubkey'], 'request');
+  exactKeys(value, ['channelId', 'operation', 'scope', 'arguments', 'requesterPubkey'], 'request');
   const channelId = requiredString(value.channelId, 'channelId', CHANNEL_ID);
   const operations = new Set<QueryOperation>([
     'channel_memory',
@@ -126,6 +144,7 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
     'subgraph_graph',
     'subgraph_triples',
     'evidence',
+    'semantic_query',
   ]);
   if (typeof value.operation !== 'string' || !operations.has(value.operation as QueryOperation)) {
     invalid('operation is invalid');
@@ -140,6 +159,23 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
   );
 
   const base = { channelId, operation, requesterPubkey };
+  if (operation === 'semantic_query') {
+    if (!plainObject(value.scope)) invalid('scope must be a JSON object');
+    exactKeys(value.scope, ['type'], 'scope');
+    if (value.scope.type !== 'current_channel') invalid('scope.type must be current_channel');
+    exactKeys(value.arguments, ['sparql', 'view'], 'arguments');
+    const view = value.arguments.view ?? 'both';
+    if (view !== 'both' && view !== 'shared' && view !== 'verified') {
+      invalid('arguments.view is invalid');
+    }
+    return {
+      ...base,
+      operation,
+      scope: { type: 'current_channel' },
+      arguments: { sparql: requiredSparql(value.arguments.sparql), view },
+    };
+  }
+  if (value.scope !== undefined) invalid('scope is only accepted for semantic_query');
   if (operation === 'channel_memory') {
     exactKeys(value.arguments, [], 'arguments');
     return { ...base, operation, arguments: {} };
@@ -344,7 +380,29 @@ export class QueryGatewayService {
         return this.subgraphTriples(cg, request.arguments.name);
       case 'evidence':
         return this.evidence(cg, request.arguments.uri);
+      case 'semantic_query':
+        return this.semanticQuery(cg, request.arguments.sparql, request.arguments.view);
     }
+  }
+
+  private async queryResult(
+    cg: string,
+    view: VisibleView,
+    sparql: string,
+    subGraphName?: string,
+    timeoutMs = this.config.dkgTimeoutMs,
+  ): Promise<{ bindings: BindingRow[]; quads?: unknown[] }> {
+    const response = await this.dkg.query(
+      { contextGraphId: cg, view, sparql, ...(subGraphName ? { subGraphName } : {}) },
+      timeoutMs,
+    );
+    const rows = response?.result?.bindings;
+    if (!Array.isArray(rows)) throw new Error('DKG query returned an invalid bindings shape');
+    const quads = response.result.quads;
+    return {
+      bindings: rows as BindingRow[],
+      ...(Array.isArray(quads) ? { quads } : {}),
+    };
   }
 
   private async query(
@@ -360,13 +418,42 @@ export class QueryGatewayService {
         'internal query exceeded its bound',
       );
     }
-    const response = await this.dkg.query(
-      { contextGraphId: cg, view, sparql, ...(subGraphName ? { subGraphName } : {}) },
-      this.config.dkgTimeoutMs,
+    const result = await this.queryResult(cg, view, sparql, subGraphName);
+    return result.bindings.slice(0, MAX_DKG_ROWS);
+  }
+
+  private async semanticQuery(
+    cg: string,
+    sparql: string,
+    selectedView: SemanticQueryView,
+  ): Promise<SemanticQueryResult> {
+    const policy = enforceSemanticQueryPolicy(sparql, this.config.maxQueryBytes);
+    const views = VIEWS.filter(([, layer]) => {
+      if (selectedView === 'both') return true;
+      return selectedView === 'shared' ? layer === 'SWM' : layer === 'VM';
+    });
+    const layers = await Promise.all(
+      views.map(async ([view, layer]) => {
+        const result = await this.queryResult(
+          cg,
+          view,
+          sparql,
+          undefined,
+          Math.min(this.config.dkgTimeoutMs, MAX_SEMANTIC_QUERY_TIMEOUT_MS),
+        );
+        return {
+          layer,
+          bindings: result.bindings.slice(0, MAX_SEMANTIC_ROWS),
+          ...(result.quads ? { quads: result.quads.slice(0, MAX_SEMANTIC_QUADS) } : {}),
+        };
+      }),
     );
-    const rows = response?.result?.bindings;
-    if (!Array.isArray(rows)) throw new Error('DKG query returned an invalid bindings shape');
-    return rows.slice(0, MAX_DKG_ROWS) as BindingRow[];
+    return {
+      queryType: policy.queryType,
+      scope: { type: 'current_channel' },
+      cost: { score: policy.score, budget: policy.budget, metrics: policy.metrics },
+      layers,
+    };
   }
 
   private async layered(cg: string, sparql: string, subGraphName?: string): Promise<LayeredRow[]> {

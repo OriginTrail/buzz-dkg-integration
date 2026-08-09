@@ -259,7 +259,11 @@ export class QueryGateway {
       if (!res.headersSent) {
         responseJson(res, failure.status, {
           ok: false,
-          error: { code: failure.code, message: failure.message },
+          error: {
+            code: failure.code,
+            message: failure.message,
+            ...(failure.details ? { details: failure.details } : {}),
+          },
         });
       } else {
         res.destroy();
