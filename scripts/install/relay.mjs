@@ -63,6 +63,7 @@ export function relayManagementFromContainer(container, fallbackId = '') {
   const service = String(labels['com.docker.compose.service'] || '');
   const workingDir = String(labels['com.docker.compose.project.working_dir'] || '');
   const rawFiles = String(labels['com.docker.compose.project.config_files'] || '');
+  const rawEnvFiles = String(labels['com.docker.compose.project.environment_file'] || '');
   if (
     /^[A-Za-z0-9_.-]{1,128}$/.test(project) &&
     /^[A-Za-z0-9_.-]{1,128}$/.test(service) &&
@@ -75,8 +76,15 @@ export function relayManagementFromContainer(container, fallbackId = '') {
       .map((path) => path.trim())
       .filter(Boolean)
       .map((path) => (isAbsolute(path) ? path : resolve(workingDir, path)));
-    if (configFiles.length > 0) {
-      management.compose = { project, service, workingDir, configFiles };
+    const envFiles = rawEnvFiles
+      ? rawEnvFiles
+          .split(',')
+          .map((path) => path.trim())
+          .filter(Boolean)
+          .map((path) => (isAbsolute(path) ? path : resolve(workingDir, path)))
+      : [];
+    if (configFiles.length > 0 && !rawEnvFiles.includes('\n')) {
+      management.compose = { project, service, workingDir, configFiles, envFiles };
     }
   }
   return management;

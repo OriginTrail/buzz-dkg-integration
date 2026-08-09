@@ -139,7 +139,12 @@ esac
 function configureBuzzRelay(
   f,
   relayUrl,
-  { membershipRequired = true, buzzAdmin = 'present', compose = false } = {},
+  {
+    membershipRequired = true,
+    buzzAdmin = 'present',
+    compose = false,
+    composeEnvFile = null,
+  } = {},
 ) {
   f.buzzAdmin = buzzAdmin;
   writeFileSync(
@@ -158,6 +163,9 @@ function configureBuzzRelay(
                   'com.docker.compose.project': 'buzz',
                   'com.docker.compose.project.working_dir': f.root,
                   'com.docker.compose.project.config_files': f.relayCompose,
+                  ...(composeEnvFile
+                    ? { 'com.docker.compose.project.environment_file': composeEnvFile }
+                    : {}),
                 }
               : {}),
           },
@@ -292,6 +300,7 @@ describe('Buzz-first installer CLI', () => {
             'com.docker.compose.service': 'relay',
             'com.docker.compose.project.working_dir': '/srv/buzz',
             'com.docker.compose.project.config_files': 'compose.yml,/etc/buzz/secure.yml',
+            'com.docker.compose.project.environment_file': '/etc/buzz/prod.env',
           },
         },
       }),
@@ -301,6 +310,7 @@ describe('Buzz-first installer CLI', () => {
         service: 'relay',
         workingDir: '/srv/buzz',
         configFiles: ['/srv/buzz/compose.yml', '/etc/buzz/secure.yml'],
+        envFiles: ['/etc/buzz/prod.env'],
       },
     });
   });
@@ -489,6 +499,35 @@ describe('Buzz-first installer CLI', () => {
     expect(dockerCalls).toContain(`--project-name buzz --project-directory ${f.root}`);
     expect(dockerCalls).toContain(
       '--profile bridge-relay up -d daemon host-query-bridge relay-query-bridge',
+    );
+  });
+
+  it('replays the adopted relay Compose environment file on restart', async () => {
+    const f = fixture();
+    const api = await apiServer('edge', {
+      supportedExtensions: ['buzz-dkg-memory-v1'],
+    });
+    const relayEnv = join(f.root, 'relay.prod.env');
+    writeFileSync(relayEnv, 'BUZZ_DB_DIR=/srv/buzz/data\n');
+    configureBuzzRelay(f, api, {
+      membershipRequired: false,
+      compose: true,
+      composeEnvFile: relayEnv,
+    });
+    const result = await runInstaller(f, [
+      'install',
+      '--relay',
+      api,
+      '--dkg-api',
+      api,
+      '--dkg-token-path',
+      f.token,
+      '--yes',
+    ]);
+    expect(result.status, result.stderr).toBe(0);
+    const dockerCalls = readFileSync(f.dockerLog, 'utf8');
+    expect(dockerCalls).toContain(
+      `--project-name buzz --project-directory ${f.root} --env-file ${relayEnv} -f ${f.relayCompose}`,
     );
   });
 

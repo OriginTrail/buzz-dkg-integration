@@ -230,6 +230,7 @@ function composeProfileArgs(context, profile, command, ...args) {
 
 function relayComposeArgs(compose, overridePath, includeOverride = true) {
   const configFiles = [...new Set(compose.configFiles.filter((path) => path !== overridePath))];
+  const envFiles = [...new Set(compose.envFiles || [])];
   if (!configFiles.length) fail('the adopted relay has no base Compose file to restore');
   return [
     'compose',
@@ -237,6 +238,7 @@ function relayComposeArgs(compose, overridePath, includeOverride = true) {
     compose.project,
     '--project-directory',
     compose.workingDir,
+    ...envFiles.flatMap((path) => ['--env-file', path]),
     ...configFiles.flatMap((path) => ['-f', path]),
     ...(includeOverride ? ['-f', overridePath] : []),
     'up',
@@ -279,6 +281,9 @@ async function configureRelayDkgProxy(context, plan, secrets) {
   }
   for (const path of management.compose.configFiles) {
     if (!existsSync(path)) fail(`Buzz Relay Compose file is not readable: ${path}`);
+  }
+  for (const path of management.compose.envFiles || []) {
+    if (!existsSync(path)) fail(`Buzz Relay Compose environment file is not readable: ${path}`);
   }
   const overridePath = join(context.configDir, 'relay.dkg.override.yml');
   const service = management.compose.service;
