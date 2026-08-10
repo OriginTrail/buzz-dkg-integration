@@ -458,18 +458,20 @@ describe('semantic query execution', () => {
 describe('query gateway HTTP boundary', () => {
   it('accepts agent memory only through the authenticated loopback JSON boundary', async () => {
     const submitted: unknown[] = [];
+    let stored = false;
     const { url } = await startGateway(new GatewayDkg(), gatewayConfig(), undefined, (raw) => {
       submitted.push(raw);
       return {
         ok: true,
         outcome: 'accepted',
+        operationId: 42,
         proposalEventId: '11'.repeat(32),
         channelId: 'c69311ba-a5a2-4b2a-a27f-99f7669af643',
         requesterPubkey: REQUESTER,
         contextGraphId: 'buzz-memory-graph',
         kaName: 'buzz-dkg-memory',
         digest: '22'.repeat(32),
-        state: 'distilled',
+        state: stored ? 'stored' : 'processing',
       };
     });
     const payload = { signed: 'envelope' };
@@ -482,11 +484,20 @@ describe('query gateway HTTP boundary', () => {
       requesterPubkey: REQUESTER,
     });
 
+    stored = true;
+    const poll = await request(url.replace('/v1/query', '/v1/memory'), payload);
+    expect(poll.status).toBe(200);
+    await expect(poll.json()).resolves.toMatchObject({
+      ok: true,
+      operationId: 42,
+      state: 'stored',
+    });
+
     const unauthorized = await request(url.replace('/v1/query', '/v1/memory'), payload, {
       token: 'wrong-token-that-is-still-long-enough',
     });
     expect(unauthorized.status).toBe(401);
-    expect(submitted).toHaveLength(1);
+    expect(submitted).toEqual([payload, payload]);
   });
 
   it('resolves newly provisioned channel bindings at request time', async () => {

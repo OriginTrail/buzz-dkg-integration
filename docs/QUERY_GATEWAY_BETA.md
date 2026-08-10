@@ -23,9 +23,12 @@ settings are `BDI_QUERY_GATEWAY_MAX_BODY_BYTES`,
 
 The installer uses a 120-second end-to-end gateway deadline. Individual DKG
 lifecycle calls use a 180-second deadline. Memory submission returns HTTP `202`
-after the signed envelope and operation intent are durably recorded; slow
-finalize/share work continues on the crash-recoverable daemon queue rather than
-holding the agent's HTTP request open.
+with `state: "processing"` after the signed envelope and operation intent are
+durably recorded; slow finalize/share work continues on the crash-recoverable
+daemon queue rather than holding the agent's HTTP request open. A client polls
+by resubmitting the exact same signed envelope. The proposal event ID makes
+that retry idempotent. The endpoint returns HTTP `200` with `state: "stored"`
+only after the graph is queryable.
 
 A same-host Buzz authorization front should use:
 
@@ -198,6 +201,25 @@ Memory, promotes it to Shared Working Memory, and records a terminal local
 operation. The proposal event ID is the idempotency key, so retries do not
 duplicate graph state. This beta performs no Verifiable Memory publication and
 emits no relay chat event for the background write.
+
+The public response exposes one stable `operationId` and only two lifecycle
+states. Internal recovery phases are intentionally hidden:
+
+```json
+{
+  "ok": true,
+  "outcome": "accepted",
+  "operationId": 42,
+  "proposalEventId": "<64-hex-event-id>",
+  "channelId": "<channel-uuid>",
+  "contextGraphId": "buzz-<deterministic-id>",
+  "state": "processing"
+}
+```
+
+An idempotent poll changes `outcome` to `duplicate` and eventually changes
+`state` to `stored`. Clients must not claim that memory was recorded while the
+state is `processing`.
 
 The normative beta profiles, SHACL shapes, lifelike fixture, and executable
 competency queries ship in the installer under `ontology/`. The acceptance
