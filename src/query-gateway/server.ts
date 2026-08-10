@@ -223,7 +223,7 @@ export class QueryGateway {
         }
         const memory = this.#submitAgentMemory(raw);
         output = memory;
-        responseStatus = memory.state === 'receipted' ? 200 : 202;
+        responseStatus = memory.state === 'stored' ? 200 : 202;
         audit = {
           channelId: memory.channelId,
           operation: 'agent_memory',

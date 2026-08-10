@@ -462,13 +462,14 @@ export class Daemon {
       result: {
         ok: true,
         outcome: duplicate ? 'duplicate' : 'accepted',
+        operationId: op.id,
         proposalEventId: acceptedProposalEventId,
         channelId: envelope.channelId,
         requesterPubkey: envelope.requesterPubkey,
         contextGraphId,
         kaName: op.kaName,
         digest: op.digest,
-        state: op.state,
+        state: op.state === 'receipted' ? 'stored' : 'processing',
       },
     };
   }

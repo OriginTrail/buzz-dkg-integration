@@ -124,13 +124,16 @@ export interface AgentMemoryIngestResult {
   ok: true;
   /** `accepted` is durably queued; `duplicate` reuses the existing operation. */
   outcome: 'accepted' | 'duplicate';
+  /** Stable operation id returned on every idempotent status poll. */
+  operationId: number;
   proposalEventId: string;
   channelId: string;
   requesterPubkey: string;
   contextGraphId: string;
   kaName: string;
   digest: string;
-  state: OpState;
+  /** Public readiness state; internal lifecycle phases never leak to clients. */
+  state: 'processing' | 'stored';
 }
 
 /** Operation lifecycle for one trigger → one KA → one receipt. Forward-only. */
