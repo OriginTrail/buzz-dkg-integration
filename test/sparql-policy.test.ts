@@ -103,4 +103,37 @@ describe('agent-authored SPARQL policy', () => {
       ),
     ).toMatchObject({ queryType: 'select' });
   });
+
+  it('does not let scoped VALUES bindings authorize unrelated scans', () => {
+    expect(
+      failure(`SELECT ?s ?p ?o WHERE {
+        OPTIONAL { VALUES ?s { <urn:known> } }
+        GRAPH ?g { ?s ?p ?o }
+      } LIMIT 25`).code,
+    ).toBe('unsafe_query');
+
+    expect(
+      failure(`SELECT ?s ?p ?o WHERE {
+        { VALUES ?s { <urn:known> } ?s ?p ?o }
+        UNION
+        { ?s ?p ?o }
+      } LIMIT 25`).code,
+    ).toBe('unsafe_query');
+  });
+
+  it('rejects CONSTRUCT templates whose bounded fanout can exceed the quad cap', () => {
+    const error = failure(`CONSTRUCT {
+      ?s <urn:p1> ?o1 .
+      ?s <urn:p2> ?o2 .
+      ?s <urn:p3> ?o3 .
+      ?s <urn:p4> ?o4 .
+    } WHERE {
+      GRAPH ?g {
+        ?s <urn:p1> ?o1 ; <urn:p2> ?o2 ; <urn:p3> ?o3 ; <urn:p4> ?o4 .
+      }
+    } LIMIT 100`);
+    expect(error.status).toBe(422);
+    expect(error.code).toBe('query_too_expensive');
+    expect(error.details).toMatchObject({ templateTriples: 4, maximumQuads: 400, maxQuads: 300 });
+  });
 });

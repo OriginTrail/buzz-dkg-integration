@@ -4,6 +4,7 @@ import { IntegrationApiError } from '../errors.ts';
 export const SEMANTIC_QUERY_MAX_LIMIT = 100;
 export const SEMANTIC_QUERY_DEFAULT_LIMIT = 25;
 export const SEMANTIC_QUERY_COST_BUDGET = 40;
+export const SEMANTIC_QUERY_MAX_QUADS = 300;
 
 export interface SemanticQueryMetrics {
   triples: number;
@@ -89,6 +90,82 @@ function queryOffset(ast: JsonObject): number {
   const modifiers = object(ast.solutionModifiers) ? ast.solutionModifiers : null;
   const limitOffset = modifiers && object(modifiers.limitOffset) ? modifiers.limitOffset : null;
   return typeof limitOffset?.offset === 'number' ? limitOffset.offset : 0;
+}
+
+function valuesAnchors(value: unknown): Set<string> {
+  const anchors = new Set<string>();
+  if (!object(value) || value.type !== 'pattern' || value.subType !== 'values') return anchors;
+  const variables = Array.isArray(value.variables) ? value.variables : [];
+  const values = Array.isArray(value.values) ? value.values : [];
+  for (const variable of variables) {
+    const name = variableName(variable);
+    if (name && values.some((row) => object(row) && object(row[name]))) anchors.add(name);
+  }
+  return anchors;
+}
+
+function validatePatternList(
+  patterns: unknown[],
+  inheritedAnchors: ReadonlySet<string>,
+  violations: string[],
+): void {
+  const anchors = new Set(inheritedAnchors);
+  // VALUES is join-compatible with its mandatory siblings regardless of textual order. Only
+  // direct siblings contribute here: bindings inside OPTIONAL or one UNION arm must not escape.
+  for (const pattern of patterns) {
+    for (const name of valuesAnchors(pattern)) anchors.add(name);
+  }
+  for (const pattern of patterns) validateBroadScans(pattern, anchors, violations);
+}
+
+function validateBroadScans(
+  value: unknown,
+  inheritedAnchors: ReadonlySet<string>,
+  violations: string[],
+): void {
+  if (Array.isArray(value)) {
+    validatePatternList(value, inheritedAnchors, violations);
+    return;
+  }
+  if (!object(value) || value.type !== 'pattern') return;
+  if (value.subType === 'values') return;
+  if (value.subType === 'union') {
+    const branches = Array.isArray(value.patterns) ? value.patterns : [];
+    for (const branch of branches) validateBroadScans(branch, inheritedAnchors, violations);
+    return;
+  }
+  if (value.subType === 'bgp') {
+    const triples = Array.isArray(value.triples) ? value.triples : [];
+    for (const triple of triples) {
+      if (!object(triple)) continue;
+      const subject = variableName(triple.subject);
+      const predicate = variableName(triple.predicate);
+      const objectName = variableName(triple.object);
+      if (
+        subject &&
+        predicate &&
+        objectName &&
+        !inheritedAnchors.has(subject) &&
+        !inheritedAnchors.has(predicate) &&
+        !inheritedAnchors.has(objectName)
+      ) {
+        violations.push('fully unbound triple pattern is not allowed');
+      }
+    }
+    return;
+  }
+  const patterns = Array.isArray(value.patterns) ? value.patterns : [];
+  validatePatternList(patterns, inheritedAnchors, violations);
+}
+
+function constructTemplateTripleCount(ast: JsonObject): number {
+  let count = 0;
+  walk(ast.template, (node) => {
+    if (node.type === 'pattern' && node.subType === 'bgp' && Array.isArray(node.triples)) {
+      count += node.triples.length;
+    }
+  });
+  return count;
 }
 
 /** Parse and statically bound one agent-authored, read-only SPARQL 1.1 query. */
@@ -190,20 +267,9 @@ export function enforceSemanticQueryPolicy(
   const group = object(modifiers.group) ? modifiers.group : null;
   metrics.orderConditions = order && Array.isArray(order.orderDefs) ? order.orderDefs.length : 0;
   metrics.groupConditions = group && Array.isArray(group.groupings) ? group.groupings.length : 0;
-  const anchoredVariables = new Set<string>();
   walk(ast.where, (node) => {
     if (node.type !== 'pattern' || node.subType !== 'values') return;
-    const variables = Array.isArray(node.variables) ? node.variables : [];
     const values = Array.isArray(node.values) ? node.values : [];
-    for (const variable of variables) {
-      const name = variableName(variable);
-      if (
-        name &&
-        values.some((row) => object(row) && object(row[name]) && row[name].type === 'term')
-      ) {
-        anchoredVariables.add(name);
-      }
-    }
     metrics.valuesRows += values.length;
   });
 
@@ -234,22 +300,11 @@ export function enforceSemanticQueryPolicy(
     metrics.triples += triples.length;
     for (const triple of triples) {
       if (!object(triple)) continue;
-      const subject = variableName(triple.subject);
       const predicate = variableName(triple.predicate);
-      const objectName = variableName(triple.object);
       if (predicate) metrics.variablePredicates += 1;
-      if (
-        subject &&
-        predicate &&
-        objectName &&
-        !anchoredVariables.has(subject) &&
-        !anchoredVariables.has(predicate) &&
-        !anchoredVariables.has(objectName)
-      ) {
-        violations.push('fully unbound triple pattern is not allowed');
-      }
     }
   });
+  validateBroadScans(ast.where, new Set(), violations);
 
   if (violations.length > 0) {
     unsafe(violations[0]!, [
@@ -282,6 +337,23 @@ export function enforceSemanticQueryPolicy(
         'Use VALUES to anchor known URIs and remove optional fields you do not need yet.',
       ],
     });
+  }
+
+  if (queryType === 'construct') {
+    const templateTriples = constructTemplateTripleCount(ast);
+    const maximumQuads = templateTriples * (limit ?? 0);
+    if (templateTriples < 1 || maximumQuads > SEMANTIC_QUERY_MAX_QUADS) {
+      policyError(422, 'query_too_expensive', 'CONSTRUCT result may exceed the allowed size', {
+        templateTriples,
+        limit,
+        maximumQuads,
+        maxQuads: SEMANTIC_QUERY_MAX_QUADS,
+        suggestions: [
+          'Reduce LIMIT or construct fewer triples per matched solution.',
+          'Use SELECT to discover a small set of entities, then run a focused CONSTRUCT query.',
+        ],
+      });
+    }
   }
 
   const score =

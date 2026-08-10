@@ -55,6 +55,7 @@ class GatewayDkg {
         subGraphName?: string;
       }) => Array<Record<string, { value: string }>> | null)
     | null = null;
+  quads: unknown[] | null = null;
 
   async query(
     options: { contextGraphId: string; view: string; sparql: string; subGraphName?: string },
@@ -65,7 +66,7 @@ class GatewayDkg {
     if (this.hang) return new Promise<never>(() => undefined);
     const resolved = this.bindingResolver?.(options);
     if (resolved !== null && resolved !== undefined) {
-      return { result: { bindings: resolved } };
+      return { result: { bindings: resolved, ...(this.quads ? { quads: this.quads } : {}) } };
     }
     if (options.sparql.includes('SAMPLE(?n)')) {
       return {
@@ -419,6 +420,38 @@ describe('semantic query execution', () => {
       },
     });
     expect(dkg.calls).toHaveLength(0);
+  });
+
+  it('rejects oversized CONSTRUCT fanout before querying the DKG', async () => {
+    const dkg = new GatewayDkg();
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+    const sparql = `CONSTRUCT {
+      ?s <urn:p1> ?o1 . ?s <urn:p2> ?o2 . ?s <urn:p3> ?o3 . ?s <urn:p4> ?o4 .
+    } WHERE {
+      GRAPH ?g { ?s <urn:p1> ?o1 ; <urn:p2> ?o2 ; <urn:p3> ?o3 ; <urn:p4> ?o4 }
+    } LIMIT 100`;
+
+    await expect(service.execute(semanticBody(sparql, 'shared'))).rejects.toMatchObject({
+      status: 422,
+      code: 'query_too_expensive',
+    });
+    expect(dkg.calls).toHaveLength(0);
+  });
+
+  it('fails closed if the DKG violates a verified CONSTRUCT result bound', async () => {
+    const dkg = new GatewayDkg();
+    dkg.bindingResolver = () => [];
+    dkg.quads = Array.from({ length: 301 }, (_, index) => ({ index }));
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    await expect(
+      service.execute(
+        semanticBody(
+          'CONSTRUCT { ?s <urn:p> ?o } WHERE { GRAPH ?g { ?s <urn:p> ?o } } LIMIT 100',
+          'shared',
+        ),
+      ),
+    ).rejects.toMatchObject({ status: 502, code: 'result_bound_exceeded' });
   });
 });
 

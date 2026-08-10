@@ -2,7 +2,7 @@ import type { DkgClient } from '../dkg/client.ts';
 import { IntegrationApiError } from '../errors.ts';
 import { canonicalRepositoryIdentityUrl } from '../memory/identity.ts';
 import type { QueryGatewayConfig } from '../types.ts';
-import { enforceSemanticQueryPolicy } from './sparql-policy.ts';
+import { enforceSemanticQueryPolicy, SEMANTIC_QUERY_MAX_QUADS } from './sparql-policy.ts';
 import type {
   ChannelMemoryResult,
   ContributorSummary,
@@ -58,7 +58,6 @@ const MAX_GRAPH_NODES = 1_200;
 const MAX_GRAPH_EDGES = 2_400;
 const MAX_TRIPLES = 1_000;
 const MAX_SEMANTIC_ROWS = 100;
-const MAX_SEMANTIC_QUADS = 300;
 const MAX_SEMANTIC_QUERY_TIMEOUT_MS = 10_000;
 
 const BUZZ = 'https://w3id.org/buzz-dkg/buzz#';
@@ -441,10 +440,18 @@ export class QueryGatewayService {
           undefined,
           Math.min(this.config.dkgTimeoutMs, MAX_SEMANTIC_QUERY_TIMEOUT_MS),
         );
+        if (result.quads && result.quads.length > SEMANTIC_QUERY_MAX_QUADS) {
+          throw new IntegrationApiError(
+            502,
+            'result_bound_exceeded',
+            'DKG returned more CONSTRUCT quads than the verified query bound',
+            { maxQuads: SEMANTIC_QUERY_MAX_QUADS, receivedQuads: result.quads.length },
+          );
+        }
         return {
           layer,
           bindings: result.bindings.slice(0, MAX_SEMANTIC_ROWS),
-          ...(result.quads ? { quads: result.quads.slice(0, MAX_SEMANTIC_QUADS) } : {}),
+          ...(result.quads ? { quads: result.quads } : {}),
         };
       }),
     );
