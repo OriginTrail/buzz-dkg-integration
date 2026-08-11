@@ -59,6 +59,8 @@ const MAX_DKG_ROWS = 2_500;
 const MAX_GRAPH_NODES = 1_200;
 const MAX_GRAPH_EDGES = 2_400;
 const MAX_TRIPLES = 1_000;
+const MAX_TRUST_PEOPLE = 200;
+const MAX_TRUST_VOUCHES = 400;
 
 const BUZZ = 'https://w3id.org/buzz-dkg/buzz#';
 const NOSTR = 'https://w3id.org/buzz-dkg/nostr#';
@@ -658,7 +660,7 @@ export class QueryGatewayService {
            }
            ?agent <${NOSTR}pubkeyHex> ?pk .
            OPTIONAL { ?source <${NOSTR}createdAt> ?at }
-         } } GROUP BY ?pk ORDER BY DESC(?n) LIMIT 200`,
+         } } GROUP BY ?pk ORDER BY DESC(?n) LIMIT ${MAX_TRUST_PEOPLE + 1}`,
       ),
       this.layered(
         cg,
@@ -672,9 +674,17 @@ export class QueryGatewayService {
              ?vouch <${PROV}wasDerivedFrom> ?source .
              OPTIONAL { ?source <${NOSTR}createdAt> ?at }
            }
-         } } ORDER BY DESC(?at) LIMIT 400`,
+         } } ORDER BY DESC(?at) LIMIT ${MAX_TRUST_VOUCHES + 1}`,
       ),
     ]);
+
+    const queryHitBound = (rows: LayeredRow[], maximum: number): boolean =>
+      VIEWS.some(
+        ([, layer]) => rows.filter((candidate) => candidate.layer === layer).length > maximum,
+      );
+    let partial =
+      queryHitBound(contributionRows, MAX_TRUST_PEOPLE) ||
+      queryHitBound(vouchRows, MAX_TRUST_VOUCHES);
 
     const people = new Map<string, TrustPersonSummary>();
     const upsertPerson = (pubkey: string, layer: VisibleMemoryLayer): TrustPersonSummary => {
@@ -730,22 +740,28 @@ export class QueryGatewayService {
         vouchesByUri.set(uri, candidate);
       }
     }
-    for (const vouch of vouchesByUri.values()) {
+    const sortedVouches = [...vouchesByUri.values()].sort(
+      (a, b) => (b.at ?? 0) - (a.at ?? 0) || a.uri.localeCompare(b.uri),
+    );
+    if (sortedVouches.length > MAX_TRUST_VOUCHES) partial = true;
+    const vouches = sortedVouches.slice(0, MAX_TRUST_VOUCHES);
+    for (const vouch of vouches) {
       upsertPerson(vouch.issuer, vouch.layer).vouchesGiven += 1;
       upsertPerson(vouch.subject, vouch.layer).vouchesReceived += 1;
     }
 
+    const sortedPeople = [...people.values()].sort(
+      (a, b) =>
+        b.vouchesReceived - a.vouchesReceived ||
+        b.contributions - a.contributions ||
+        a.pubkey.localeCompare(b.pubkey),
+    );
+    if (sortedPeople.length > MAX_TRUST_PEOPLE) partial = true;
+
     return {
-      completeness: 'complete',
-      people: [...people.values()].sort(
-        (a, b) =>
-          b.vouchesReceived - a.vouchesReceived ||
-          b.contributions - a.contributions ||
-          a.pubkey.localeCompare(b.pubkey),
-      ),
-      vouches: [...vouchesByUri.values()].sort(
-        (a, b) => (b.at ?? 0) - (a.at ?? 0) || a.uri.localeCompare(b.uri),
-      ),
+      completeness: partial ? 'partial' : 'complete',
+      people: sortedPeople.slice(0, MAX_TRUST_PEOPLE),
+      vouches,
     };
   }
 
@@ -828,6 +844,11 @@ export class QueryGatewayService {
       );
     }
     if (verifiableEvidence) reasons.push('Verifiable-memory evidence is available.');
+    if (network.completeness === 'partial') {
+      reasons.push(
+        'Evidence discovery reached the channel bound; this score uses a bounded sample.',
+      );
+    }
     if (reasons.length === 0) reasons.push('No reputation evidence exists in this channel yet.');
 
     const pathSubjects = new Set([...twoHopIssuers]);
@@ -846,6 +867,7 @@ export class QueryGatewayService {
       subject,
       perspective,
       context: 'channel',
+      completeness: network.completeness,
       score,
       confidence,
       breakdown: { directTrust, networkTrust, demonstratedWork, evidenceDiversity },

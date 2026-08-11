@@ -147,8 +147,8 @@ export interface TrustVouchSummary {
 }
 
 export interface TrustNetworkResult {
-  /** Evidence discovery completed for every visible DKG layer. */
-  completeness: 'complete';
+  /** Whether every visible row fit inside the fixed operation bounds. */
+  completeness: 'complete' | 'partial';
   people: TrustPersonSummary[];
   vouches: TrustVouchSummary[];
 }
@@ -174,6 +174,7 @@ export interface ReputationSummaryResult {
   subject: string;
   perspective: string;
   context: 'channel';
+  completeness: 'complete' | 'partial';
   score: number;
   confidence: ReputationConfidence;
   breakdown: ReputationBreakdown;

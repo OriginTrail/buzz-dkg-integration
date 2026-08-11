@@ -526,6 +526,10 @@ function tagValues(event: NostrEvent, name: string): string[] {
 
 function validateTrustProposal(envelope: AgentMemoryEnvelope, proposal: AgentMemoryProposal): void {
   if (proposal.schemaVersion !== 2 || !proposal.profiles.includes('dkg-trust@1')) return;
+  const profiles = new Set(proposal.profiles);
+  if (profiles.size !== 2 || !profiles.has('dkg-memory@1') || !profiles.has('dkg-trust@1')) {
+    invalid('dkg-trust@1 proposals cannot mix trust with other memory profiles');
+  }
   if (envelope.sourceEvents.length !== 1) {
     invalid('dkg-trust@1 proposals must reference exactly one signed vouch event');
   }
@@ -567,6 +571,14 @@ function validateTrustProposal(envelope: AgentMemoryEnvelope, proposal: AgentMem
   const attributes = new Map(
     (vouch.attributes ?? []).map((attribute) => [attribute.predicate, attribute.value]),
   );
+  if (
+    attributes.size !== 2 ||
+    (vouch.attributes ?? []).length !== 2 ||
+    !attributes.has('trust:status') ||
+    !attributes.has('trust:scope')
+  ) {
+    invalid('dkg-trust@1 vouch must contain only status and scope attributes');
+  }
   if (attributes.get('trust:status') !== 'active' || attributes.get('trust:scope') !== 'channel') {
     invalid('new dkg-trust@1 vouches must be active and channel-scoped');
   }
@@ -579,6 +591,29 @@ function validateTrustProposal(envelope: AgentMemoryEnvelope, proposal: AgentMem
   };
   const issuer = relationTarget('trust:issuer');
   const subject = relationTarget('trust:subject');
+  const projectionIds = new Set([vouch.id, issuer.id, subject.id]);
+  if (proposal.entities.length !== 3 || projectionIds.size !== 3) {
+    invalid('dkg-trust@1 proposals must contain only the vouch, issuer, and subject entities');
+  }
+  if (
+    proposal.relations.length !== 2 ||
+    proposal.relations.some(
+      (relation) =>
+        relation.subject !== vouch.id ||
+        !new Set(['trust:issuer', 'trust:subject']).has(relation.predicate),
+    )
+  ) {
+    invalid('dkg-trust@1 proposals must contain only issuer and subject relations');
+  }
+  if (
+    vouch.locator ||
+    issuer.description ||
+    issuer.attributes?.length ||
+    subject.description ||
+    subject.attributes?.length
+  ) {
+    invalid('dkg-trust@1 projection entities contain unsupported extra data');
+  }
   if (
     issuer.type !== 'schema:Person' ||
     issuer.locator?.kind !== 'uri' ||

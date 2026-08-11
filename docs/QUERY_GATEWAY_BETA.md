@@ -110,7 +110,7 @@ The operation and its exact arguments are:
 | `software_contributors` | `{ repository, componentName, componentType? }` | `{ repository, componentName, componentType, contributors }`                                                                  |
 | `decision_trace`        | `{ repository, commitSha, componentName }`      | `{ repository, commitSha, componentName, decisions }`                                                                         |
 | `trust_network`         | `{}`                                            | `{ completeness, people, vouches }`, including signed source-event provenance and no aggregate trust score                    |
-| `reputation_summary`    | `{ pubkey }`                                    | A channel-contextual score, confidence, four-part breakdown, reasons, signals, and bounded source evidence                     |
+| `reputation_summary`    | `{ pubkey }`                                    | A channel-contextual score, confidence, four-part breakdown, reasons, signals, and bounded source evidence                    |
 | `subgraph_graph`        | `{ name }`                                      | `{ subgraph, nodes, edges }`                                                                                                  |
 | `subgraph_triples`      | `{ name }`                                      | `{ subgraph, triples }`                                                                                                       |
 | `evidence`              | `{ uri }`                                       | `{ found, claimId, name, status, trustState, memoryLayer, attribution, digest, asOf, sources, relations, receiptUal, graph }` |
@@ -172,6 +172,10 @@ inspect; it deliberately does not mint a universal trust score.
 ### Contextual reputation lens
 
 `reputation_summary` is a calculated, non-authoritative view over that evidence.
+Both trust operations report whether evidence discovery was `complete` or
+`partial`. The latter is returned when a visible DKG layer reaches the fixed
+200-person or 400-vouch bound; the score then includes an explicit bounded-sample
+reason rather than claiming exhaustive coverage.
 The channel is the context and the authenticated requester is the perspective.
 The gateway first executes the same bounded SPARQL reads as `trust_network`
 (maximum 200 people and 400 vouches across SWM and VM), then traverses the

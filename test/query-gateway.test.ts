@@ -354,6 +354,49 @@ describe('query gateway request contract', () => {
     expect(dkg.calls.filter((call) => call.kind === 'query')).toHaveLength(4);
   });
 
+  it('executes the production trust SPARQL against source-provenance ontology data', async () => {
+    const dkg = new GatewayDkg();
+    dkg.bindingResolver = (options) =>
+      options.view === 'verifiable-memory' ? fixtureQuery(options.sparql) : [];
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('trust_network'));
+
+    expect(response.result).toMatchObject({
+      completeness: 'complete',
+      vouches: [
+        {
+          uri: 'urn:buzz-dkg:vouch:alice-for-bob',
+          issuer: 'aa'.repeat(32),
+          subject: 'bb'.repeat(32),
+          note: 'Bob reviewed the token changes carefully and caught the rollback edge case.',
+          status: 'active',
+          at: Date.parse('2026-07-30T13:00:00Z') / 1_000,
+          sourceEvent: `urn:nostr:event:${'44'.repeat(32)}`,
+          layer: 'VM',
+        },
+      ],
+    });
+  });
+
+  it('reports partial evidence instead of hiding fixed query truncation', async () => {
+    const dkg = new GatewayDkg();
+    const rows = Array.from({ length: 201 }, (_, index) => ({
+      pk: binding(index.toString(16).padStart(64, '0')),
+      n: binding(String(201 - index)),
+      latest: binding('2026-07-30T13:00:00Z'),
+    }));
+    dkg.bindingResolver = ({ view, sparql }) =>
+      view === 'shared-working-memory' && sparql.includes('COUNT(DISTINCT ?record)') ? rows : [];
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('trust_network'));
+    const result = response.result as { completeness: string; people: unknown[] };
+
+    expect(result.completeness).toBe('partial');
+    expect(result.people).toHaveLength(200);
+  });
+
   it('scores a bounded two-hop reputation lens and keeps every component explainable', async () => {
     const dkg = new GatewayDkg();
     const subject = 'bb'.repeat(32);
@@ -400,6 +443,7 @@ describe('query gateway request contract', () => {
       subject,
       perspective: REQUESTER,
       context: 'channel',
+      completeness: 'complete',
       score: 74,
       confidence: 'high',
       breakdown: {

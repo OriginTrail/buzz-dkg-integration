@@ -524,6 +524,51 @@ describe('agent memory proposal contract', () => {
         sourceEvents: [ambiguousSource],
       }),
     ).toThrow(/exactly one p-tag subject/);
+
+    const mixed = JSON.parse(proposal.content) as {
+      entities: Array<{
+        id: string;
+        type: string;
+        name?: string;
+        attributes?: Array<{ predicate: string; value: string }>;
+      }>;
+      relations: Array<{ subject: string; predicate: string; object: string }>;
+    };
+    mixed.entities.push({ id: 'claim', type: 'memory:Claim', name: 'Smuggled approval claim' });
+    const mixedProposal = signed({
+      kind: DKG_MEMORY_PROPOSAL_KIND,
+      created_at: proposal.created_at,
+      tags: proposal.tags,
+      content: JSON.stringify(mixed),
+    });
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: mixedProposal,
+        sourceEvents: [source],
+      }),
+    ).toThrow(/only the vouch, issuer, and subject entities/);
+
+    const revoked = JSON.parse(proposal.content) as typeof mixed;
+    const status = revoked.entities
+      .find((entity) => entity.id === 'vouch')!
+      .attributes!.find((attribute) => attribute.predicate === 'trust:status')!;
+    status.value = 'revoked';
+    const revokedProposal = signed({
+      kind: DKG_MEMORY_PROPOSAL_KIND,
+      created_at: proposal.created_at,
+      tags: proposal.tags,
+      content: JSON.stringify(revoked),
+    });
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: revokedProposal,
+        sourceEvents: [source],
+      }),
+    ).toThrow(/active and channel-scoped/);
   });
 
   it('rejects unsupported trust lifecycle states and non-channel scopes', () => {
