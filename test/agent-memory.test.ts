@@ -569,6 +569,83 @@ describe('agent memory proposal contract', () => {
         sourceEvents: [source],
       }),
     ).toThrow(/active and channel-scoped/);
+
+    const proposalFor = (trustSource: NostrEvent, content = proposal.content) =>
+      signed({
+        kind: DKG_MEMORY_PROPOSAL_KIND,
+        created_at: proposal.created_at,
+        tags: [
+          ['h', CHANNEL],
+          ['e', trustSource.id, '', 'source'],
+          ['t', 'dkg-memory-proposal'],
+        ],
+        content,
+      });
+    const wrongKind = signed({ ...source, kind: 1 });
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: proposalFor(wrongKind),
+        sourceEvents: [wrongKind],
+      }),
+    ).toThrow(/kind 1985 event signed by the requester/);
+
+    const wrongSigner = signedWith(
+      {
+        kind: source.kind,
+        created_at: source.created_at,
+        tags: source.tags,
+        content: source.content,
+      },
+      OTHER_SECRET,
+    );
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: proposalFor(wrongSigner),
+        sourceEvents: [wrongSigner],
+      }),
+    ).toThrow(/source event must be authored by the proposing agent/);
+
+    const unlabeled = signed({
+      kind: source.kind,
+      created_at: source.created_at,
+      tags: [
+        ['h', CHANNEL],
+        ['p', subject],
+      ],
+      content: source.content,
+    });
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: proposalFor(unlabeled),
+        sourceEvents: [unlabeled],
+      }),
+    ).toThrow(/buzz.wot vouch label/);
+
+    const selfVouch = signed({
+      kind: source.kind,
+      created_at: source.created_at,
+      tags: source.tags.map((tag) => (tag[0] === 'p' ? ['p', PUBKEY] : tag)),
+      content: source.content,
+    });
+    const selfProjection = JSON.parse(proposal.content) as {
+      entities: Array<{ id: string; locator?: { uri: string } }>;
+    };
+    selfProjection.entities.find((entity) => entity.id === 'subject')!.locator!.uri =
+      `urn:nostr:pubkey:${PUBKEY}`;
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: proposalFor(selfVouch, JSON.stringify(selfProjection)),
+        sourceEvents: [selfVouch],
+      }),
+    ).toThrow(/does not allow self-vouches/);
   });
 
   it('rejects unsupported trust lifecycle states and non-channel scopes', () => {

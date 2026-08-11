@@ -422,6 +422,10 @@ describe('query gateway request contract', () => {
           // Active-looking graph data without a signed source is visible for
           // diagnostics but must never affect the calculated reputation.
           vouch(5, 'ee'.repeat(32), subject, false),
+          // Historical lifecycle records remain inspectable in trust_network,
+          // but reputation must use active evidence only.
+          { ...vouch(6, 'ff'.repeat(32), subject), status: binding('revoked') },
+          { ...vouch(7, '12'.repeat(32), subject), status: binding('superseded') },
         ];
       }
       if (sparql.includes('COUNT(DISTINCT ?record)')) {
@@ -477,6 +481,7 @@ describe('query gateway request contract', () => {
         'urn:buzz-dkg:vouch:4',
       ]),
     );
+    expect(evidence.some((item) => item.uri.endsWith(':6') || item.uri.endsWith(':7'))).toBe(false);
     expect(dkg.calls.filter((call) => call.kind === 'query')).toHaveLength(4);
   });
 
