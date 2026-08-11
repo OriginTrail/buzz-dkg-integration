@@ -1,0 +1,52 @@
+@prefix owl:     <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:     <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:     <http://www.w3.org/2001/XMLSchema#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix schema:  <http://schema.org/> .
+@prefix prov:    <http://www.w3.org/ns/prov#> .
+@prefix trust:   <http://dkg.io/ontology/trust/> .
+
+<http://dkg.io/ontology/profile/dkg-trust/1>
+  a owl:Ontology ;
+  dcterms:title "DKG evidence-backed trust profile" ;
+  dcterms:description "Signed, contextual trust attestations whose conclusions remain separate from their source evidence." ;
+  owl:versionInfo "1.0.0-beta" ;
+  dcterms:created "2026-08-11"^^xsd:date ;
+  owl:imports
+    <http://dkg.io/ontology/profile/dkg-memory/1> ,
+    <http://schema.org/> ,
+    <http://www.w3.org/ns/prov#> .
+
+trust:Vouch
+  a owl:Class ;
+  rdfs:label "Vouch" ;
+  rdfs:comment "A signed, evidence-backed positive attestation by one Nostr identity about another." ;
+  rdfs:subClassOf prov:Entity, schema:Claim .
+
+trust:issuer
+  a owl:ObjectProperty ;
+  rdfs:label "issued by" ;
+  rdfs:domain trust:Vouch ;
+  rdfs:range prov:Agent ;
+  rdfs:subPropertyOf prov:wasAttributedTo .
+
+trust:subject
+  a owl:ObjectProperty ;
+  rdfs:label "trust subject" ;
+  rdfs:domain trust:Vouch ;
+  rdfs:range prov:Agent ;
+  rdfs:subPropertyOf schema:about .
+
+trust:status
+  a owl:DatatypeProperty ;
+  rdfs:label "attestation status" ;
+  rdfs:domain trust:Vouch ;
+  rdfs:range xsd:string .
+
+trust:scope
+  a owl:DatatypeProperty ;
+  rdfs:label "attestation scope" ;
+  rdfs:comment "The context in which the attestation applies. Version 1 permits channel only." ;
+  rdfs:domain trust:Vouch ;
+  rdfs:range xsd:string .

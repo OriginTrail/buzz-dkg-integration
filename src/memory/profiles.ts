@@ -3,6 +3,7 @@ import type { AgentMemoryProfileId } from '../types.ts';
 export const PROFILE_IRIS: Record<AgentMemoryProfileId | 'buzz-nostr@1', string> = {
   'dkg-memory@1': 'http://dkg.io/ontology/profile/dkg-memory/1',
   'dkg-software@1': 'http://dkg.io/ontology/profile/dkg-software/1',
+  'dkg-trust@1': 'http://dkg.io/ontology/profile/dkg-trust/1',
   'buzz-nostr@1': 'https://w3id.org/buzz-dkg/profile/buzz-nostr/1',
 };
 
@@ -14,6 +15,7 @@ export const PREFIXES = {
   tasks: 'http://dkg.io/ontology/tasks/',
   agent: 'http://dkg.io/ontology/agent/',
   software: 'http://dkg.io/ontology/software/',
+  trust: 'http://dkg.io/ontology/trust/',
   schema: 'http://schema.org/',
   prov: 'http://www.w3.org/ns/prov#',
 } as const;
@@ -136,6 +138,16 @@ export const PROFILE_DEFINITIONS: Record<AgentMemoryProfileId, ProfileDefinition
         mergedAt: 'dateTime',
       }),
       ...attributes('software', { result: 'string', environment: 'string' }),
+    ]),
+  },
+  'dkg-trust@1': {
+    types: new Set([...terms('trust', ['Vouch'])]),
+    relations: new Set([...terms('trust', ['issuer', 'subject'])]),
+    attributes: new Map([
+      ...attributes('trust', {
+        status: 'string',
+        scope: 'string',
+      }),
     ]),
   },
 };

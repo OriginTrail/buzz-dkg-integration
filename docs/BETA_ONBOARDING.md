@@ -187,6 +187,15 @@ authenticated relay:
 These are fixed query operations. The app cannot submit SPARQL, a Context Graph
 ID, a DKG endpoint, or credentials.
 
+The Web of Trust beta adds a capability-gated **Trust** tab to the same Memory
+panel. A member selects a person, writes what they directly observed, and
+clicks **Sign vouch**. Buzz publishes a channel-scoped NIP-32 vouch and submits
+that exact signed event for `dkg-trust@1` projection. Other members see the
+person's contribution evidence, received/given vouches, explanation, time,
+memory layer, and source-event identifier. This is evidence discovery, not a
+leaderboard: the beta calculates no global trust score, and agents cannot vouch
+on a human's behalf.
+
 ## Operate or stop it
 
 ```bash

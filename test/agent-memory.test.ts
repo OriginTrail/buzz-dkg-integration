@@ -401,6 +401,159 @@ describe('agent memory proposal contract', () => {
     );
   });
 
+  it('compiles a signed human vouch into queryable trust edges with source provenance', () => {
+    const subject = 'ab'.repeat(32);
+    const source = signed({
+      kind: 1985,
+      created_at: 1_788_000_030,
+      tags: [
+        ['h', CHANNEL],
+        ['L', 'buzz.wot'],
+        ['l', 'vouch', 'buzz.wot'],
+        ['p', subject],
+      ],
+      content: 'Reviewed two releases carefully and caught a rollback edge case.',
+    });
+    const proposal = signed({
+      kind: DKG_MEMORY_PROPOSAL_KIND,
+      created_at: source.created_at + 1,
+      tags: [
+        ['h', CHANNEL],
+        ['e', source.id, '', 'source'],
+        ['t', 'dkg-memory-proposal'],
+      ],
+      content: JSON.stringify({
+        schemaVersion: 2,
+        profiles: ['dkg-memory@1', 'dkg-trust@1'],
+        summary: 'Vouch for Alice',
+        entities: [
+          {
+            id: 'vouch',
+            type: 'trust:Vouch',
+            name: 'Vouch for Alice',
+            description: source.content,
+            attributes: [
+              { predicate: 'trust:status', value: 'active' },
+              { predicate: 'trust:scope', value: 'channel' },
+            ],
+          },
+          {
+            id: 'issuer',
+            type: 'schema:Person',
+            name: 'Vouch issuer',
+            locator: { kind: 'uri', uri: `urn:nostr:pubkey:${PUBKEY}` },
+          },
+          {
+            id: 'subject',
+            type: 'schema:Person',
+            name: 'Alice',
+            locator: { kind: 'uri', uri: `urn:nostr:pubkey:${subject}` },
+          },
+        ],
+        relations: [
+          { subject: 'vouch', predicate: 'trust:issuer', object: 'issuer' },
+          { subject: 'vouch', predicate: 'trust:subject', object: 'subject' },
+        ],
+        promptVersion: 'human-vouch-v1',
+      }),
+    });
+    const parsed = parseAgentMemoryEnvelope({
+      channelId: CHANNEL,
+      requesterPubkey: PUBKEY,
+      proposalEvent: proposal,
+      sourceEvents: [source],
+    });
+    const store = generatedStore(compileAgentMemory(parsed.envelope, parsed.proposal).quads);
+    const rows = queryRows(
+      store,
+      `PREFIX trust: <http://dkg.io/ontology/trust/>
+       PREFIX schema: <http://schema.org/>
+       PREFIX prov: <http://www.w3.org/ns/prov#>
+       SELECT ?issuer ?subject ?note ?source WHERE { GRAPH ?g {
+         ?vouch a trust:Vouch ; trust:issuer ?issuer ; trust:subject ?subject ;
+           schema:description ?note ; prov:wasDerivedFrom ?source .
+       } }`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.get('issuer')?.value).toBe(`urn:nostr:pubkey:${PUBKEY}`);
+    expect(rows[0]!.get('subject')?.value).toBe(`urn:nostr:pubkey:${subject}`);
+    expect(rows[0]!.get('note')?.value).toBe(source.content);
+    expect(rows[0]!.get('source')?.value).toBe(`urn:nostr:event:${source.id}`);
+
+    const tampered = JSON.parse(proposal.content) as {
+      entities: Array<{ id: string; locator?: { uri: string } }>;
+    };
+    tampered.entities.find((entity) => entity.id === 'subject')!.locator!.uri =
+      `urn:nostr:pubkey:${'cd'.repeat(32)}`;
+    const tamperedProposal = signed({
+      kind: DKG_MEMORY_PROPOSAL_KIND,
+      created_at: proposal.created_at,
+      tags: proposal.tags,
+      content: JSON.stringify(tampered),
+    });
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: tamperedProposal,
+        sourceEvents: [source],
+      }),
+    ).toThrow(/subject must resolve to the signed source p tag/);
+
+    const ambiguousSource = signed({
+      kind: 1985,
+      created_at: source.created_at,
+      tags: [...source.tags, ['p', '']],
+      content: source.content,
+    });
+    const ambiguousProposal = signed({
+      kind: DKG_MEMORY_PROPOSAL_KIND,
+      created_at: proposal.created_at,
+      tags: [
+        ['h', CHANNEL],
+        ['e', ambiguousSource.id, '', 'source'],
+        ['t', 'dkg-memory-proposal'],
+      ],
+      content: proposal.content,
+    });
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: ambiguousProposal,
+        sourceEvents: [ambiguousSource],
+      }),
+    ).toThrow(/exactly one p-tag subject/);
+  });
+
+  it('rejects unsupported trust lifecycle states and non-channel scopes', () => {
+    const trustProposal = (predicate: string, value: string) =>
+      JSON.stringify({
+        schemaVersion: 2,
+        profiles: ['dkg-memory@1', 'dkg-trust@1'],
+        summary: 'Invalid vouch',
+        entities: [
+          {
+            id: 'vouch',
+            type: 'trust:Vouch',
+            name: 'Invalid vouch',
+            attributes: [{ predicate, value }],
+          },
+        ],
+        relations: [],
+      });
+    expect(() =>
+      parseAgentMemoryEnvelope(
+        envelope({ proposalContent: trustProposal('trust:status', 'trusted') }),
+      ),
+    ).toThrow(/supported trust status/);
+    expect(() =>
+      parseAgentMemoryEnvelope(
+        envelope({ proposalContent: trustProposal('trust:scope', 'global') }),
+      ),
+    ).toThrow(/supported trust scope/);
+  });
+
   it('converges canonical repository, project, and function identity across communities', () => {
     const firstContent = JSON.parse(v2Content()) as {
       entities: Array<{ type: string; locator?: Record<string, unknown> }>;

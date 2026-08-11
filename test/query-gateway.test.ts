@@ -227,7 +227,7 @@ describe('query gateway configuration', () => {
 });
 
 describe('query gateway request contract', () => {
-  it('accepts only the seven typed operations and exact argument shapes', () => {
+  it('accepts only typed operations and exact argument shapes', () => {
     expect(parseQueryGatewayRequest(body('channel_memory'))).toMatchObject({
       operation: 'channel_memory',
       requesterPubkey: REQUESTER,
@@ -272,6 +272,80 @@ describe('query gateway request contract', () => {
     expect(parseQueryGatewayRequest(body('evidence', { uri: 'urn:buzz:claim:1' }))).toMatchObject({
       operation: 'evidence',
     });
+    expect(parseQueryGatewayRequest(body('trust_network'))).toMatchObject({
+      operation: 'trust_network',
+      arguments: {},
+    });
+  });
+
+  it('returns bounded trust relationships with contribution and source evidence', async () => {
+    const dkg = new GatewayDkg();
+    const issuer = 'aa'.repeat(32);
+    const subject = 'bb'.repeat(32);
+    dkg.bindingResolver = ({ view, sparql }) => {
+      if (view === 'verifiable-memory') return [];
+      if (sparql.includes('trust/Vouch')) {
+        return [
+          {
+            vouch: binding('urn:buzz-dkg:vouch:1'),
+            issuer: binding(`urn:nostr:pubkey:${issuer}`),
+            subject: binding(`urn:nostr:pubkey:${subject}`),
+            note: binding('Careful reviewer who found the rollback edge case.'),
+            status: binding('active'),
+            at: binding('2026-07-30T13:00:00Z'),
+            source: binding(`urn:nostr:event:${'44'.repeat(32)}`),
+          },
+        ];
+      }
+      if (sparql.includes('COUNT(DISTINCT ?event)')) {
+        return [
+          {
+            pk: binding(subject),
+            n: binding('3'),
+            latest: binding('2026-07-29T11:05:00Z'),
+          },
+        ];
+      }
+      return [];
+    };
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('trust_network'));
+
+    expect(response.result).toEqual({
+      completeness: 'complete',
+      people: [
+        {
+          pubkey: subject,
+          contributions: 3,
+          latest: Date.parse('2026-07-29T11:05:00Z') / 1_000,
+          vouchesReceived: 1,
+          vouchesGiven: 0,
+          layer: 'SWM',
+        },
+        {
+          pubkey: issuer,
+          contributions: 0,
+          latest: null,
+          vouchesReceived: 0,
+          vouchesGiven: 1,
+          layer: 'SWM',
+        },
+      ],
+      vouches: [
+        {
+          uri: 'urn:buzz-dkg:vouch:1',
+          issuer,
+          subject,
+          note: 'Careful reviewer who found the rollback edge case.',
+          status: 'active',
+          at: Date.parse('2026-07-30T13:00:00Z') / 1_000,
+          sourceEvent: `urn:nostr:event:${'44'.repeat(32)}`,
+          layer: 'SWM',
+        },
+      ],
+    });
+    expect(dkg.calls.filter((call) => call.kind === 'query')).toHaveLength(4);
   });
 
   it('rejects omitted requester identity and all client-supplied query controls', () => {

@@ -109,6 +109,7 @@ The operation and its exact arguments are:
 | `contributor_trail`     | `{ pubkey }`                                    | `{ pubkey, trail }`                                                                                                           |
 | `software_contributors` | `{ repository, componentName, componentType? }` | `{ repository, componentName, componentType, contributors }`                                                                  |
 | `decision_trace`        | `{ repository, commitSha, componentName }`      | `{ repository, commitSha, componentName, decisions }`                                                                         |
+| `trust_network`         | `{}`                                            | `{ completeness, people, vouches }`, including signed source-event provenance and no aggregate trust score                    |
 | `subgraph_graph`        | `{ name }`                                      | `{ subgraph, nodes, edges }`                                                                                                  |
 | `subgraph_triples`      | `{ name }`                                      | `{ subgraph, triples }`                                                                                                       |
 | `evidence`              | `{ uri }`                                       | `{ found, claimId, name, status, trustState, memoryLayer, attribution, digest, asOf, sources, relations, receiptUal, graph }` |
@@ -151,12 +152,21 @@ markers, requester/author equality, source-set equality, semantic bounds, and
 that the agent authored at least one source. It does not trust the relay to
 construct RDF.
 
-Schema v2 always selects `dkg-memory@1` and may add `dkg-software@1`. The Buzz
-adapter attaches `buzz-nostr@1`; agents cannot select it. The sidecar validates
-all profile types, relation predicates, literal attributes, locators, and
-bounds before minting RDF identifiers. Direct edges support ordinary SPARQL
-joins, while reified assertion nodes carry confidence and signed evidence.
-Schema v1 still compiles through its unchanged legacy graph path.
+Schema v2 always selects `dkg-memory@1` and may add `dkg-software@1` or
+`dkg-trust@1`. The Buzz adapter attaches `buzz-nostr@1`; agents cannot select
+it. The sidecar validates all profile types, relation predicates, literal
+attributes, locators, and bounds before minting RDF identifiers. Direct edges
+support ordinary SPARQL joins, while reified assertion nodes carry confidence
+and signed evidence. Schema v1 still compiles through its unchanged legacy
+graph path.
+
+`dkg-trust@1` is a stricter human-action path, not an agent inference profile.
+It accepts one channel-scoped NIP-32 kind-`1985` event in the `buzz.wot`
+namespace, signed by the requester and naming exactly one `p`-tag subject. The
+projected issuer, subject, explanation, active state, and channel scope must
+match that source event exactly. Self-vouches and altered projections are
+rejected. The graph therefore records contextual evidence that clients can
+inspect; it deliberately does not mint a universal trust score.
 
 For a valid proposal the sidecar deterministically creates or reuses that
 channel's private Context Graph, compiles provenance-bearing RDF, writes Working

@@ -10,9 +10,11 @@ function loadKnowledgeBase(): InstanceType<typeof oxigraph.Store> {
   for (const file of [
     'ontology/profiles/dkg-memory-v1.ttl',
     'ontology/profiles/dkg-software-v1.ttl',
+    'ontology/profiles/dkg-trust-v1.ttl',
     'ontology/profiles/buzz-nostr-v1.ttl',
     'ontology/profiles/dkg-memory-v1.shacl.ttl',
     'ontology/profiles/dkg-software-v1.shacl.ttl',
+    'ontology/profiles/dkg-trust-v1.shacl.ttl',
     'ontology/profiles/buzz-nostr-v1.shacl.ttl',
   ]) {
     store.load(read(file), { format: 'text/turtle' });
@@ -42,10 +44,26 @@ describe('DKG ontology profile competency questions', () => {
       ASK {
         <http://dkg.io/ontology/profile/dkg-memory/1> a owl:Ontology .
         <http://dkg.io/ontology/profile/dkg-software/1> a owl:Ontology .
+        <http://dkg.io/ontology/profile/dkg-trust/1> a owl:Ontology .
         <https://w3id.org/buzz-dkg/profile/buzz-nostr/1> a owl:Ontology .
       }`);
     expect(result).toBe(true);
     expect(store.size).toBeGreaterThan(250);
+  });
+
+  it('returns a contextual vouch with its signed evidence instead of a score', () => {
+    const rows = select(loadKnowledgeBase(), 'web-of-trust.sparql');
+    expect(rows).toHaveLength(1);
+    expect(value(rows[0]!, 'issuer')).toBe(
+      'urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    );
+    expect(value(rows[0]!, 'subject')).toBe(
+      'urn:nostr:pubkey:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    );
+    expect(value(rows[0]!, 'note')).toContain('rollback edge case');
+    expect(value(rows[0]!, 'source')).toBe(
+      'urn:nostr:event:4444444444444444444444444444444444444444444444444444444444444444',
+    );
   });
 
   it('answers who all edited a function with distinct people, commits, and timestamps', () => {

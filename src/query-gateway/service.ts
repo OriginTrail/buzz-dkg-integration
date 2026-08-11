@@ -25,6 +25,9 @@ import type {
   SubGraphSummary,
   SubgraphGraphResult,
   SubgraphTriplesResult,
+  TrustNetworkResult,
+  TrustPersonSummary,
+  TrustVouchSummary,
   VisibleMemoryLayer,
 } from './types.ts';
 
@@ -63,6 +66,8 @@ const CODE = 'http://dkg.io/ontology/code/';
 const GITHUB = 'http://dkg.io/ontology/github/';
 const DECISIONS = 'http://dkg.io/ontology/decisions/';
 const SOFTWARE = 'http://dkg.io/ontology/software/';
+const TRUST = 'http://dkg.io/ontology/trust/';
+const NOSTR_PUBKEY_URI = 'urn:nostr:pubkey:';
 
 function invalid(message: string): never {
   throw new IntegrationApiError(400, 'invalid_request', message);
@@ -123,6 +128,7 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
     'contributor_trail',
     'software_contributors',
     'decision_trace',
+    'trust_network',
     'subgraph_graph',
     'subgraph_triples',
     'evidence',
@@ -140,7 +146,7 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
   );
 
   const base = { channelId, operation, requesterPubkey };
-  if (operation === 'channel_memory') {
+  if (operation === 'channel_memory' || operation === 'trust_network') {
     exactKeys(value.arguments, [], 'arguments');
     return { ...base, operation, arguments: {} };
   }
@@ -338,6 +344,8 @@ export class QueryGatewayService {
           request.arguments.commitSha,
           request.arguments.componentName,
         );
+      case 'trust_network':
+        return this.trustNetwork(cg);
       case 'subgraph_graph':
         return this.subgraphGraph(cg, request.arguments.name);
       case 'subgraph_triples':
@@ -621,6 +629,106 @@ export class QueryGatewayService {
       if (!current || LAYER_RANK[layer] > LAYER_RANK[current.layer]) byKey.set(key, candidate);
     }
     return { repository, commitSha, componentName, decisions: [...byKey.values()] };
+  }
+
+  private async trustNetwork(cg: string): Promise<TrustNetworkResult> {
+    const [contributionRows, vouchRows] = await Promise.all([
+      this.layered(
+        cg,
+        `SELECT ?pk (COUNT(DISTINCT ?event) AS ?n) (MAX(?at) AS ?latest)
+         WHERE { GRAPH ?g {
+           ?event <${PROV}wasAttributedTo> ?agent .
+           ?agent <${NOSTR}pubkeyHex> ?pk .
+           OPTIONAL { ?event <${NOSTR}createdAt> ?at }
+         } } GROUP BY ?pk ORDER BY DESC(?n) LIMIT 200`,
+      ),
+      this.layered(
+        cg,
+        `SELECT DISTINCT ?vouch ?issuer ?subject ?note ?status ?at ?source WHERE { GRAPH ?g {
+           ?vouch a <${TRUST}Vouch> ;
+             <${TRUST}issuer> ?issuer ;
+             <${TRUST}subject> ?subject .
+           OPTIONAL { ?vouch <${SCHEMA}description> ?note }
+           OPTIONAL { ?vouch <${TRUST}status> ?status }
+           OPTIONAL {
+             ?vouch <${PROV}wasDerivedFrom> ?source .
+             OPTIONAL { ?source <${NOSTR}createdAt> ?at }
+           }
+         } } ORDER BY DESC(?at) LIMIT 400`,
+      ),
+    ]);
+
+    const people = new Map<string, TrustPersonSummary>();
+    const upsertPerson = (pubkey: string, layer: VisibleMemoryLayer): TrustPersonSummary => {
+      const current = people.get(pubkey);
+      if (current) {
+        if (LAYER_RANK[layer] > LAYER_RANK[current.layer]) current.layer = layer;
+        return current;
+      }
+      const created: TrustPersonSummary = {
+        pubkey,
+        contributions: 0,
+        latest: null,
+        vouchesReceived: 0,
+        vouchesGiven: 0,
+        layer,
+      };
+      people.set(pubkey, created);
+      return created;
+    };
+    for (const { row, layer } of contributionRows) {
+      const pubkey = term(row, 'pk').toLowerCase();
+      if (!HEX_PUBKEY.test(pubkey)) continue;
+      const person = upsertPerson(pubkey, layer);
+      person.contributions = Math.max(person.contributions, count(row.n));
+      person.latest = Math.max(person.latest ?? 0, dateTimestamp(row.latest) ?? 0) || null;
+    }
+
+    const pubkeyFromEntity = (value: string): string | null => {
+      if (!value.startsWith(NOSTR_PUBKEY_URI)) return null;
+      const pubkey = value.slice(NOSTR_PUBKEY_URI.length).toLowerCase();
+      return HEX_PUBKEY.test(pubkey) ? pubkey : null;
+    };
+    const vouchesByUri = new Map<string, TrustVouchSummary>();
+    for (const { row, layer } of vouchRows) {
+      const uri = bounded(term(row, 'vouch'), 1_000);
+      const issuer = pubkeyFromEntity(term(row, 'issuer'));
+      const subject = pubkeyFromEntity(term(row, 'subject'));
+      if (!uri || !issuer || !subject || issuer === subject) continue;
+      const candidate: TrustVouchSummary = {
+        uri,
+        issuer,
+        subject,
+        note: optionalTerm(row, 'note') ? bounded(optionalTerm(row, 'note')!, 1_000) : null,
+        status: optionalTerm(row, 'status') ? bounded(optionalTerm(row, 'status')!, 64) : 'active',
+        at: dateTimestamp(row.at),
+        sourceEvent: optionalTerm(row, 'source')
+          ? bounded(optionalTerm(row, 'source')!, 1_000)
+          : null,
+        layer,
+      };
+      const current = vouchesByUri.get(uri);
+      if (!current || LAYER_RANK[layer] > LAYER_RANK[current.layer]) {
+        vouchesByUri.set(uri, candidate);
+      }
+    }
+    for (const vouch of vouchesByUri.values()) {
+      upsertPerson(vouch.issuer, vouch.layer).vouchesGiven += 1;
+      upsertPerson(vouch.subject, vouch.layer).vouchesReceived += 1;
+    }
+
+    return {
+      completeness: 'complete',
+      people: [...people.values()].sort(
+        (a, b) =>
+          b.vouchesReceived - a.vouchesReceived ||
+          b.contributions - a.contributions ||
+          a.pubkey.localeCompare(b.pubkey),
+      ),
+      vouches: [...vouchesByUri.values()].sort(
+        (a, b) => (b.at ?? 0) - (a.at ?? 0) || a.uri.localeCompare(b.uri),
+      ),
+    };
   }
 
   private async subgraphGraph(cg: string, name: string): Promise<SubgraphGraphResult> {

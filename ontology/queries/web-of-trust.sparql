@@ -1,0 +1,17 @@
+PREFIX schema: <http://schema.org/>
+PREFIX prov: <http://www.w3.org/ns/prov#>
+PREFIX trust: <http://dkg.io/ontology/trust/>
+PREFIX nostr: <https://w3id.org/buzz-dkg/nostr#>
+
+SELECT ?vouch ?issuer ?subject ?note ?source ?at WHERE {
+  GRAPH ?g {
+    ?vouch a trust:Vouch ;
+      trust:issuer ?issuer ;
+      trust:subject ?subject ;
+      prov:wasDerivedFrom ?source .
+    OPTIONAL { ?vouch schema:description ?note }
+    OPTIONAL { ?source nostr:createdAt ?at }
+  }
+}
+ORDER BY DESC(?at)
+LIMIT 100

@@ -3,6 +3,7 @@ export type QueryOperation =
   | 'contributor_trail'
   | 'software_contributors'
   | 'decision_trace'
+  | 'trust_network'
   | 'subgraph_graph'
   | 'subgraph_triples'
   | 'evidence';
@@ -26,6 +27,7 @@ export type QueryGatewayRequest =
       }
     >
   | RequestBase<'decision_trace', { repository: string; commitSha: string; componentName: string }>
+  | RequestBase<'trust_network', Record<string, never>>
   | RequestBase<'subgraph_graph', { name: string }>
   | RequestBase<'subgraph_triples', { name: string }>
   | RequestBase<'evidence', { uri: string }>;
@@ -122,6 +124,33 @@ export interface DecisionTraceResult {
   decisions: DecisionTraceEntry[];
 }
 
+export interface TrustPersonSummary {
+  pubkey: string;
+  contributions: number;
+  latest: number | null;
+  vouchesReceived: number;
+  vouchesGiven: number;
+  layer: VisibleMemoryLayer;
+}
+
+export interface TrustVouchSummary {
+  uri: string;
+  issuer: string;
+  subject: string;
+  note: string | null;
+  status: string;
+  at: number | null;
+  sourceEvent: string | null;
+  layer: VisibleMemoryLayer;
+}
+
+export interface TrustNetworkResult {
+  /** Evidence discovery completed for every visible DKG layer. */
+  completeness: 'complete';
+  people: TrustPersonSummary[];
+  vouches: TrustVouchSummary[];
+}
+
 export interface GraphNode {
   id: string;
   kind: 'claim' | 'commit' | 'decision';
@@ -191,6 +220,7 @@ export type QueryGatewayResult =
   | ContributorTrailResult
   | SoftwareContributorsResult
   | DecisionTraceResult
+  | TrustNetworkResult
   | SubgraphGraphResult
   | SubgraphTriplesResult
   | EvidenceResult;

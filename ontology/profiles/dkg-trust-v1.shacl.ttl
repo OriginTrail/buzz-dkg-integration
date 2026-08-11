@@ -1,0 +1,44 @@
+@prefix sh:     <http://www.w3.org/ns/shacl#> .
+@prefix xsd:    <http://www.w3.org/2001/XMLSchema#> .
+@prefix prov:   <http://www.w3.org/ns/prov#> .
+@prefix schema: <http://schema.org/> .
+@prefix trust:  <http://dkg.io/ontology/trust/> .
+
+trust:VouchShape
+  a sh:NodeShape ;
+  sh:targetClass trust:Vouch ;
+  sh:property [
+    sh:path trust:issuer ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:nodeKind sh:IRI
+  ] ;
+  sh:property [
+    sh:path trust:subject ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:nodeKind sh:IRI
+  ] ;
+  sh:property [
+    sh:path trust:status ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:in ("active" "revoked" "superseded")
+  ] ;
+  sh:property [
+    sh:path trust:scope ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:in ("channel")
+  ] ;
+  sh:property [
+    sh:path schema:description ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:string
+  ] ;
+  sh:property [
+    sh:path prov:wasDerivedFrom ;
+    sh:minCount 1 ;
+    sh:nodeKind sh:IRI
+  ] .

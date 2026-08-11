@@ -42,7 +42,11 @@ import { canonicalExternalIdentityUri, canonicalRepositoryIdentityUrl } from './
 const HEX_64 = /^[0-9a-f]{64}$/u;
 const CHANNEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const ITEM_KINDS = new Set(['decision', 'claim', 'question', 'task', 'relationship']);
-const PROFILE_IDS = new Set<AgentMemoryProfileId>(['dkg-memory@1', 'dkg-software@1']);
+const PROFILE_IDS = new Set<AgentMemoryProfileId>([
+  'dkg-memory@1',
+  'dkg-software@1',
+  'dkg-trust@1',
+]);
 const LOCAL_ID = /^[a-z][a-z0-9-]{0,63}$/u;
 const GITHUB_REPOSITORY = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/u;
 const GITHUB_RESOURCE = new Set(['repository', 'pull-request', 'issue', 'commit']);
@@ -306,6 +310,15 @@ function parseAttribute(
   ) {
     invalid(`${label}.value is not a supported task status`);
   }
+  if (
+    predicate === 'trust:status' &&
+    !new Set(['active', 'revoked', 'superseded']).has(String(value.value))
+  ) {
+    invalid(`${label}.value is not a supported trust status`);
+  }
+  if (predicate === 'trust:scope' && value.value !== 'channel') {
+    invalid(`${label}.value is not a supported trust scope`);
+  }
   return { predicate, value: value.value as string | number | boolean };
 }
 
@@ -511,6 +524,77 @@ function tagValues(event: NostrEvent, name: string): string[] {
   return event.tags.filter((tag) => tag[0] === name && tag[1]).map((tag) => tag[1]!);
 }
 
+function validateTrustProposal(envelope: AgentMemoryEnvelope, proposal: AgentMemoryProposal): void {
+  if (proposal.schemaVersion !== 2 || !proposal.profiles.includes('dkg-trust@1')) return;
+  if (envelope.sourceEvents.length !== 1) {
+    invalid('dkg-trust@1 proposals must reference exactly one signed vouch event');
+  }
+  const source = envelope.sourceEvents[0]!;
+  if (source.kind !== 1985 || source.pubkey !== envelope.requesterPubkey) {
+    invalid('dkg-trust@1 source must be a kind 1985 event signed by the requester');
+  }
+  const namespaces = source.tags.filter((tag) => tag[0] === 'L');
+  const labels = source.tags.filter((tag) => tag[0] === 'l');
+  if (
+    namespaces.length !== 1 ||
+    namespaces[0]!.length !== 2 ||
+    namespaces[0]![1] !== 'buzz.wot' ||
+    labels.length !== 1 ||
+    labels[0]!.length !== 3 ||
+    labels[0]![1] !== 'vouch' ||
+    labels[0]![2] !== 'buzz.wot'
+  ) {
+    invalid('dkg-trust@1 source must be a buzz.wot vouch label');
+  }
+  if (!source.content.trim() || source.content.length > 1_000) {
+    invalid('dkg-trust@1 signed vouch explanation must contain 1 to 1,000 characters');
+  }
+  const subjectTags = source.tags.filter((tag) => tag[0] === 'p');
+  const subjectPubkey = subjectTags[0]?.[1];
+  if (subjectTags.length !== 1 || !subjectPubkey || !HEX_64.test(subjectPubkey)) {
+    invalid('dkg-trust@1 source must identify exactly one p-tag subject');
+  }
+  const issuerUri = `urn:nostr:pubkey:${source.pubkey}`;
+  const subjectUri = `urn:nostr:pubkey:${subjectPubkey.toLowerCase()}`;
+  if (issuerUri === subjectUri) invalid('dkg-trust@1 does not allow self-vouches');
+
+  const vouches = proposal.entities.filter((entity) => entity.type === 'trust:Vouch');
+  if (vouches.length !== 1) invalid('dkg-trust@1 proposal must contain exactly one trust:Vouch');
+  const vouch = vouches[0]!;
+  if (vouch.description !== source.content) {
+    invalid('dkg-trust@1 vouch explanation must match the signed source content');
+  }
+  const attributes = new Map(
+    (vouch.attributes ?? []).map((attribute) => [attribute.predicate, attribute.value]),
+  );
+  if (attributes.get('trust:status') !== 'active' || attributes.get('trust:scope') !== 'channel') {
+    invalid('new dkg-trust@1 vouches must be active and channel-scoped');
+  }
+  const relationTarget = (predicate: 'trust:issuer' | 'trust:subject'): AgentMemoryEntity => {
+    const matches = proposal.relations.filter(
+      (relation) => relation.subject === vouch.id && relation.predicate === predicate,
+    );
+    if (matches.length !== 1) invalid(`dkg-trust@1 vouch must have exactly one ${predicate}`);
+    return proposal.entities.find((entity) => entity.id === matches[0]!.object)!;
+  };
+  const issuer = relationTarget('trust:issuer');
+  const subject = relationTarget('trust:subject');
+  if (
+    issuer.type !== 'schema:Person' ||
+    issuer.locator?.kind !== 'uri' ||
+    issuer.locator.uri !== issuerUri
+  ) {
+    invalid('dkg-trust@1 issuer must resolve to the signed source author');
+  }
+  if (
+    subject.type !== 'schema:Person' ||
+    subject.locator?.kind !== 'uri' ||
+    subject.locator.uri !== subjectUri
+  ) {
+    invalid('dkg-trust@1 subject must resolve to the signed source p tag');
+  }
+}
+
 export function parseAgentMemoryEnvelope(raw: unknown): {
   envelope: AgentMemoryEnvelope;
   proposal: AgentMemoryProposal;
@@ -571,9 +655,12 @@ export function parseAgentMemoryEnvelope(raw: unknown): {
   // is a transport detail and must not turn a legitimate retry into a conflict.
   const sourcesById = new Map(sourceEvents.map((event) => [event.id, event]));
   const orderedSourceEvents = referenced.map((id) => sourcesById.get(id)!);
+  const envelope = { channelId, requesterPubkey, proposalEvent, sourceEvents: orderedSourceEvents };
+  const proposal = parseAgentMemoryProposal(proposalEvent.content);
+  validateTrustProposal(envelope, proposal);
   return {
-    envelope: { channelId, requesterPubkey, proposalEvent, sourceEvents: orderedSourceEvents },
-    proposal: parseAgentMemoryProposal(proposalEvent.content),
+    envelope,
+    proposal,
   };
 }
 

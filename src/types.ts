@@ -58,7 +58,7 @@ export interface AgentMemoryProposalV1 {
   promptVersion?: string;
 }
 
-export type AgentMemoryProfileId = 'dkg-memory@1' | 'dkg-software@1';
+export type AgentMemoryProfileId = 'dkg-memory@1' | 'dkg-software@1' | 'dkg-trust@1';
 
 export type AgentMemoryLocator =
   | { kind: 'uri'; uri: string }
