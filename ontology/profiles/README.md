@@ -19,7 +19,7 @@ not introduce a parallel `buzz-code:` namespace.
 | ---------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `dkg-memory@1`   | Always                                  | General decisions, claims, questions, tasks, relationships, evidence, and provenance                   |
 | `dkg-software@1` | Agent when software evidence is present | Repositories, commits, pull requests, issues, packages, files, symbols, builds, tests, and deployments |
-| `dkg-trust@1`    | Explicit signed trust action            | Contextual vouches with issuer, subject, status, and source-event provenance                           |
+| `dkg-trust@1`    | Explicit signed trust action            | Contextual vouches and a non-persisted, calculated reputation-assessment vocabulary                    |
 | `buzz-nostr@1`   | Buzz integration, never the LLM         | Buzz channel and signed Nostr source-event provenance                                                  |
 
 Profiles are additive. A coding agent discussing an event or assigning a task

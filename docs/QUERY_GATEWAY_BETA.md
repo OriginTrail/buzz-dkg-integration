@@ -110,6 +110,7 @@ The operation and its exact arguments are:
 | `software_contributors` | `{ repository, componentName, componentType? }` | `{ repository, componentName, componentType, contributors }`                                                                  |
 | `decision_trace`        | `{ repository, commitSha, componentName }`      | `{ repository, commitSha, componentName, decisions }`                                                                         |
 | `trust_network`         | `{}`                                            | `{ completeness, people, vouches }`, including signed source-event provenance and no aggregate trust score                    |
+| `reputation_summary`    | `{ pubkey }`                                    | A channel-contextual score, confidence, four-part breakdown, reasons, signals, and bounded source evidence                     |
 | `subgraph_graph`        | `{ name }`                                      | `{ subgraph, nodes, edges }`                                                                                                  |
 | `subgraph_triples`      | `{ name }`                                      | `{ subgraph, triples }`                                                                                                       |
 | `evidence`              | `{ uri }`                                       | `{ found, claimId, name, status, trustState, memoryLayer, attribution, digest, asOf, sources, relations, receiptUal, graph }` |
@@ -167,6 +168,31 @@ projected issuer, subject, explanation, active state, and channel scope must
 match that source event exactly. Self-vouches and altered projections are
 rejected. The graph therefore records contextual evidence that clients can
 inspect; it deliberately does not mint a universal trust score.
+
+### Contextual reputation lens
+
+`reputation_summary` is a calculated, non-authoritative view over that evidence.
+The channel is the context and the authenticated requester is the perspective.
+The gateway first executes the same bounded SPARQL reads as `trust_network`
+(maximum 200 people and 400 vouches across SWM and VM), then traverses the
+returned graph in memory for at most two trust hops. No recursive SPARQL or
+client-authored query is accepted.
+
+Methodology `dkg-reputation-v1` returns four 0–100 dimensions:
+
+- direct trust: 60 points for the requester's vouch plus 20 for each of at most
+  two other independent issuers;
+- network trust: 45 per distinct two-hop issuer and 15 per other independent
+  community issuer;
+- demonstrated work: 12.5 per attributed channel evidence record, capped at
+  eight records;
+- evidence diversity: bounded issuer, evidence-record, and verifiable-memory
+  signals.
+
+The displayed score is `35% direct + 25% network + 30% work + 10% diversity`.
+Confidence is reported separately from the score, and every reason links back
+to the bounded evidence set. This beta score is advisory: it never changes
+relay membership, write access, moderation, or agent authorization.
 
 For a valid proposal the sidecar deterministically creates or reuses that
 channel's private Context Graph, compiles provenance-bearing RDF, writes Working

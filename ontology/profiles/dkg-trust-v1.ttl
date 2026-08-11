@@ -50,3 +50,36 @@ trust:scope
   rdfs:comment "The context in which the attestation applies. Version 1 permits channel only." ;
   rdfs:domain trust:Vouch ;
   rdfs:range xsd:string .
+
+# Reputation assessments are calculated views, not signed assertions. The beta
+# API returns this shape without persisting it back into the Context Graph.
+trust:ReputationAssessment
+  a owl:Class ;
+  rdfs:label "Contextual reputation assessment" ;
+  rdfs:comment "A deterministic, non-authoritative score derived from bounded trust and contribution evidence." ;
+  rdfs:subClassOf prov:Entity .
+
+trust:reputationSubject
+  a owl:ObjectProperty ;
+  rdfs:domain trust:ReputationAssessment ;
+  rdfs:range prov:Agent .
+
+trust:perspective
+  a owl:ObjectProperty ;
+  rdfs:domain trust:ReputationAssessment ;
+  rdfs:range prov:Agent .
+
+trust:score
+  a owl:DatatypeProperty ;
+  rdfs:domain trust:ReputationAssessment ;
+  rdfs:range xsd:integer .
+
+trust:confidence
+  a owl:DatatypeProperty ;
+  rdfs:domain trust:ReputationAssessment ;
+  rdfs:range xsd:string .
+
+trust:methodology
+  a owl:DatatypeProperty ;
+  rdfs:domain trust:ReputationAssessment ;
+  rdfs:range xsd:string .

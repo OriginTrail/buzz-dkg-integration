@@ -276,6 +276,12 @@ describe('query gateway request contract', () => {
       operation: 'trust_network',
       arguments: {},
     });
+    expect(
+      parseQueryGatewayRequest(body('reputation_summary', { pubkey: CONTRIBUTOR.toUpperCase() })),
+    ).toMatchObject({
+      operation: 'reputation_summary',
+      arguments: { pubkey: CONTRIBUTOR },
+    });
   });
 
   it('returns bounded trust relationships with contribution and source evidence', async () => {
@@ -297,7 +303,7 @@ describe('query gateway request contract', () => {
           },
         ];
       }
-      if (sparql.includes('COUNT(DISTINCT ?event)')) {
+      if (sparql.includes('COUNT(DISTINCT ?record)')) {
         return [
           {
             pk: binding(subject),
@@ -346,6 +352,110 @@ describe('query gateway request contract', () => {
       ],
     });
     expect(dkg.calls.filter((call) => call.kind === 'query')).toHaveLength(4);
+  });
+
+  it('scores a bounded two-hop reputation lens and keeps every component explainable', async () => {
+    const dkg = new GatewayDkg();
+    const subject = 'bb'.repeat(32);
+    const intermediary = 'cc'.repeat(32);
+    const communityIssuer = 'dd'.repeat(32);
+    const vouch = (id: number, issuer: string, target: string, proven = true) => ({
+      vouch: binding(`urn:buzz-dkg:vouch:${id}`),
+      issuer: binding(`urn:nostr:pubkey:${issuer}`),
+      subject: binding(`urn:nostr:pubkey:${target}`),
+      note: binding(`Evidence note ${id}`),
+      status: binding('active'),
+      at: binding(`2026-07-${20 + id}T13:00:00Z`),
+      ...(proven ? { source: binding(`urn:nostr:event:${String(id).repeat(64)}`) } : {}),
+    });
+    dkg.bindingResolver = ({ view, sparql }) => {
+      if (view === 'verifiable-memory') return [];
+      if (sparql.includes('trust/Vouch')) {
+        return [
+          vouch(1, REQUESTER, subject),
+          vouch(2, REQUESTER, intermediary),
+          vouch(3, intermediary, subject),
+          vouch(4, communityIssuer, subject),
+          // Active-looking graph data without a signed source is visible for
+          // diagnostics but must never affect the calculated reputation.
+          vouch(5, 'ee'.repeat(32), subject, false),
+        ];
+      }
+      if (sparql.includes('COUNT(DISTINCT ?record)')) {
+        return [
+          {
+            pk: binding(subject),
+            n: binding('4'),
+            latest: binding('2026-07-30T13:00:00Z'),
+          },
+        ];
+      }
+      return [];
+    };
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('reputation_summary', { pubkey: subject }));
+
+    expect(response.result).toMatchObject({
+      subject,
+      perspective: REQUESTER,
+      context: 'channel',
+      score: 74,
+      confidence: 'high',
+      breakdown: {
+        directTrust: 100,
+        networkTrust: 60,
+        demonstratedWork: 50,
+        evidenceDiversity: 92,
+      },
+      signals: {
+        directVouch: true,
+        twoHopVouchers: 1,
+        independentVouchers: 3,
+        evidenceRecords: 4,
+        verifiableEvidence: false,
+      },
+      methodology: 'dkg-reputation-v1',
+    });
+    expect(response.result).toHaveProperty('reasons', [
+      'You signed a direct vouch for this person.',
+      '3 independent contributors signed a vouch.',
+      '1 vouch arrived through a two-hop trust path.',
+      '4 attributed channel evidence records were found.',
+    ]);
+    expect(response.result).toHaveProperty('evidence');
+    const evidence = (response.result as { evidence: Array<{ uri: string }> }).evidence;
+    expect(new Set(evidence.map((item) => item.uri))).toEqual(
+      new Set([
+        'urn:buzz-dkg:vouch:1',
+        'urn:buzz-dkg:vouch:2',
+        'urn:buzz-dkg:vouch:3',
+        'urn:buzz-dkg:vouch:4',
+      ]),
+    );
+    expect(dkg.calls.filter((call) => call.kind === 'query')).toHaveLength(4);
+  });
+
+  it('returns zero reputation with no confidence when the channel has no evidence', async () => {
+    const dkg = new GatewayDkg();
+    dkg.bindingResolver = () => [];
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('reputation_summary', { pubkey: CONTRIBUTOR }));
+
+    expect(response.result).toMatchObject({
+      subject: CONTRIBUTOR,
+      score: 0,
+      confidence: 'none',
+      breakdown: {
+        directTrust: 0,
+        networkTrust: 0,
+        demonstratedWork: 0,
+        evidenceDiversity: 0,
+      },
+      reasons: ['No reputation evidence exists in this channel yet.'],
+      evidence: [],
+    });
   });
 
   it('rejects omitted requester identity and all client-supplied query controls', () => {

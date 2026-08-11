@@ -20,6 +20,8 @@ import type {
   QueryGatewayResult,
   QueryGatewaySuccess,
   QueryOperation,
+  ReputationConfidence,
+  ReputationSummaryResult,
   SoftwareContributorEntry,
   SoftwareContributorsResult,
   SubGraphSummary,
@@ -65,9 +67,12 @@ const SCHEMA = 'http://schema.org/';
 const CODE = 'http://dkg.io/ontology/code/';
 const GITHUB = 'http://dkg.io/ontology/github/';
 const DECISIONS = 'http://dkg.io/ontology/decisions/';
+const MEMORY = 'http://dkg.io/ontology/memory/';
+const TASKS = 'http://dkg.io/ontology/tasks/';
 const SOFTWARE = 'http://dkg.io/ontology/software/';
 const TRUST = 'http://dkg.io/ontology/trust/';
 const NOSTR_PUBKEY_URI = 'urn:nostr:pubkey:';
+const NOSTR_EVENT_URI = /^urn:nostr:event:[0-9a-f]{64}$/u;
 
 function invalid(message: string): never {
   throw new IntegrationApiError(400, 'invalid_request', message);
@@ -129,6 +134,7 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
     'software_contributors',
     'decision_trace',
     'trust_network',
+    'reputation_summary',
     'subgraph_graph',
     'subgraph_triples',
     'evidence',
@@ -150,7 +156,7 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
     exactKeys(value.arguments, [], 'arguments');
     return { ...base, operation, arguments: {} };
   }
-  if (operation === 'contributor_trail') {
+  if (operation === 'contributor_trail' || operation === 'reputation_summary') {
     exactKeys(value.arguments, ['pubkey'], 'arguments');
     return {
       ...base,
@@ -346,6 +352,8 @@ export class QueryGatewayService {
         );
       case 'trust_network':
         return this.trustNetwork(cg);
+      case 'reputation_summary':
+        return this.reputationSummary(cg, request.arguments.pubkey, request.requesterPubkey);
       case 'subgraph_graph':
         return this.subgraphGraph(cg, request.arguments.name);
       case 'subgraph_triples':
@@ -635,11 +643,21 @@ export class QueryGatewayService {
     const [contributionRows, vouchRows] = await Promise.all([
       this.layered(
         cg,
-        `SELECT ?pk (COUNT(DISTINCT ?event) AS ?n) (MAX(?at) AS ?latest)
+        `SELECT ?pk (COUNT(DISTINCT ?record) AS ?n) (MAX(?at) AS ?latest)
          WHERE { GRAPH ?g {
-           ?event <${PROV}wasAttributedTo> ?agent .
+           ?memory <${MEMORY}contains> ?record .
+           ?record a ?kind ;
+             <${PROV}wasAttributedTo> ?agent ;
+             <${PROV}wasDerivedFrom> ?source .
+           VALUES ?kind {
+             <${MEMORY}Claim> <${MEMORY}Question>
+             <${DECISIONS}Decision> <${TASKS}Task>
+             <${GITHUB}PullRequest> <${GITHUB}Issue> <${GITHUB}Commit> <${GITHUB}Review>
+             <${SOFTWARE}Build> <${SOFTWARE}TestCase> <${SOFTWARE}TestRun>
+             <${SOFTWARE}Deployment> <${SOFTWARE}Finding>
+           }
            ?agent <${NOSTR}pubkeyHex> ?pk .
-           OPTIONAL { ?event <${NOSTR}createdAt> ?at }
+           OPTIONAL { ?source <${NOSTR}createdAt> ?at }
          } } GROUP BY ?pk ORDER BY DESC(?n) LIMIT 200`,
       ),
       this.layered(
@@ -700,7 +718,7 @@ export class QueryGatewayService {
         issuer,
         subject,
         note: optionalTerm(row, 'note') ? bounded(optionalTerm(row, 'note')!, 1_000) : null,
-        status: optionalTerm(row, 'status') ? bounded(optionalTerm(row, 'status')!, 64) : 'active',
+        status: optionalTerm(row, 'status') ? bounded(optionalTerm(row, 'status')!, 64) : 'unknown',
         at: dateTimestamp(row.at),
         sourceEvent: optionalTerm(row, 'source')
           ? bounded(optionalTerm(row, 'source')!, 1_000)
@@ -728,6 +746,119 @@ export class QueryGatewayService {
       vouches: [...vouchesByUri.values()].sort(
         (a, b) => (b.at ?? 0) - (a.at ?? 0) || a.uri.localeCompare(b.uri),
       ),
+    };
+  }
+
+  /**
+   * Calculate one channel-contextual reputation lens from a bounded trust
+   * network snapshot. SPARQL discovers at most 200 people and 400 vouches;
+   * traversal and scoring happen here, never recursively inside the database.
+   */
+  private async reputationSummary(
+    cg: string,
+    subject: string,
+    perspective: string,
+  ): Promise<ReputationSummaryResult> {
+    const network = await this.trustNetwork(cg);
+    const active = network.vouches.filter(
+      (vouch) =>
+        vouch.status === 'active' &&
+        vouch.sourceEvent !== null &&
+        NOSTR_EVENT_URI.test(vouch.sourceEvent),
+    );
+    const inbound = active.filter((vouch) => vouch.subject === subject);
+    const requesterVouches = new Set(
+      active.filter((vouch) => vouch.issuer === perspective).map((vouch) => vouch.subject),
+    );
+    const inboundIssuers = new Set(inbound.map((vouch) => vouch.issuer));
+    const directVouch = inboundIssuers.has(perspective);
+    const twoHopIssuers = new Set(
+      [...inboundIssuers].filter(
+        (issuer) => issuer !== perspective && issuer !== subject && requesterVouches.has(issuer),
+      ),
+    );
+    const communityIssuers = [...inboundIssuers].filter(
+      (issuer) => issuer !== perspective && !twoHopIssuers.has(issuer),
+    );
+    const person = network.people.find((candidate) => candidate.pubkey === subject);
+    const evidenceRecords = person?.contributions ?? 0;
+    const verifiableEvidence = person?.layer === 'VM';
+
+    // Versioned, deliberately saturating weights. Activity volume cannot grow
+    // a dimension beyond 100, and independent humans matter more than repeats.
+    const directTrust = Math.min(
+      100,
+      (directVouch ? 60 : 0) + Math.min(2, inboundIssuers.size - (directVouch ? 1 : 0)) * 20,
+    );
+    const networkTrust = Math.min(100, twoHopIssuers.size * 45 + communityIssuers.length * 15);
+    const demonstratedWork = Math.min(100, Math.round(evidenceRecords * 12.5));
+    const evidenceDiversity = Math.min(
+      100,
+      inboundIssuers.size * 20 + Math.min(evidenceRecords, 5) * 8 + (verifiableEvidence ? 20 : 0),
+    );
+    const score = Math.round(
+      directTrust * 0.35 + networkTrust * 0.25 + demonstratedWork * 0.3 + evidenceDiversity * 0.1,
+    );
+    const confidenceEvidence =
+      inboundIssuers.size * 2 + Math.min(evidenceRecords, 8) + (verifiableEvidence ? 2 : 0);
+    const confidence: ReputationConfidence =
+      confidenceEvidence === 0
+        ? 'none'
+        : confidenceEvidence <= 3
+          ? 'low'
+          : confidenceEvidence <= 8
+            ? 'medium'
+            : 'high';
+
+    const reasons: string[] = [];
+    if (directVouch) reasons.push('You signed a direct vouch for this person.');
+    if (inboundIssuers.size > 0) {
+      reasons.push(
+        `${inboundIssuers.size} independent contributor${inboundIssuers.size === 1 ? '' : 's'} signed a vouch.`,
+      );
+    }
+    if (twoHopIssuers.size > 0) {
+      reasons.push(
+        `${twoHopIssuers.size} vouch${twoHopIssuers.size === 1 ? '' : 'es'} arrived through a two-hop trust path.`,
+      );
+    }
+    if (evidenceRecords > 0) {
+      reasons.push(
+        `${evidenceRecords} attributed channel evidence record${evidenceRecords === 1 ? '' : 's'} were found.`,
+      );
+    }
+    if (verifiableEvidence) reasons.push('Verifiable-memory evidence is available.');
+    if (reasons.length === 0) reasons.push('No reputation evidence exists in this channel yet.');
+
+    const pathSubjects = new Set([...twoHopIssuers]);
+    const evidenceByUri = new Map<string, TrustVouchSummary>();
+    for (const vouch of active) {
+      if (
+        vouch.subject === subject ||
+        (vouch.issuer === perspective && pathSubjects.has(vouch.subject))
+      ) {
+        evidenceByUri.set(vouch.uri, vouch);
+      }
+      if (evidenceByUri.size >= 25) break;
+    }
+
+    return {
+      subject,
+      perspective,
+      context: 'channel',
+      score,
+      confidence,
+      breakdown: { directTrust, networkTrust, demonstratedWork, evidenceDiversity },
+      signals: {
+        directVouch,
+        twoHopVouchers: twoHopIssuers.size,
+        independentVouchers: inboundIssuers.size,
+        evidenceRecords,
+        verifiableEvidence,
+      },
+      reasons,
+      evidence: [...evidenceByUri.values()],
+      methodology: 'dkg-reputation-v1',
     };
   }
 

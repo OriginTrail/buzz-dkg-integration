@@ -4,6 +4,7 @@ export type QueryOperation =
   | 'software_contributors'
   | 'decision_trace'
   | 'trust_network'
+  | 'reputation_summary'
   | 'subgraph_graph'
   | 'subgraph_triples'
   | 'evidence';
@@ -28,6 +29,7 @@ export type QueryGatewayRequest =
     >
   | RequestBase<'decision_trace', { repository: string; commitSha: string; componentName: string }>
   | RequestBase<'trust_network', Record<string, never>>
+  | RequestBase<'reputation_summary', { pubkey: string }>
   | RequestBase<'subgraph_graph', { name: string }>
   | RequestBase<'subgraph_triples', { name: string }>
   | RequestBase<'evidence', { uri: string }>;
@@ -151,6 +153,36 @@ export interface TrustNetworkResult {
   vouches: TrustVouchSummary[];
 }
 
+export type ReputationConfidence = 'none' | 'low' | 'medium' | 'high';
+
+export interface ReputationBreakdown {
+  directTrust: number;
+  networkTrust: number;
+  demonstratedWork: number;
+  evidenceDiversity: number;
+}
+
+export interface ReputationSignals {
+  directVouch: boolean;
+  twoHopVouchers: number;
+  independentVouchers: number;
+  evidenceRecords: number;
+  verifiableEvidence: boolean;
+}
+
+export interface ReputationSummaryResult {
+  subject: string;
+  perspective: string;
+  context: 'channel';
+  score: number;
+  confidence: ReputationConfidence;
+  breakdown: ReputationBreakdown;
+  signals: ReputationSignals;
+  reasons: string[];
+  evidence: TrustVouchSummary[];
+  methodology: 'dkg-reputation-v1';
+}
+
 export interface GraphNode {
   id: string;
   kind: 'claim' | 'commit' | 'decision';
@@ -221,6 +253,7 @@ export type QueryGatewayResult =
   | SoftwareContributorsResult
   | DecisionTraceResult
   | TrustNetworkResult
+  | ReputationSummaryResult
   | SubgraphGraphResult
   | SubgraphTriplesResult
   | EvidenceResult;
