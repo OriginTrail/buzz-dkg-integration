@@ -59,6 +59,10 @@ describe('agent-authored SPARQL policy', () => {
     expect(failure('SELECT ?s WHERE { GRAPH <urn:other> { ?s <urn:p> ?o } } LIMIT 10').code).toBe(
       'unsafe_query',
     );
+    expect(
+      failure('SELECT ?s WHERE { VALUES ?g { <urn:other> } GRAPH ?g { ?s <urn:p> ?o } } LIMIT 10')
+        .code,
+    ).toBe('unsafe_query');
   });
 
   it('blocks unbounded paths and unconstrained triple scans', () => {
@@ -105,6 +109,21 @@ describe('agent-authored SPARQL policy', () => {
     );
     expect(orderAggregate.code).toBe('query_too_expensive');
     expect(orderAggregate.details).toMatchObject({ metrics: { aggregates: 1 } });
+
+    const modifiers = enforceSemanticQueryPolicy(
+      'SELECT DISTINCT ?s WHERE { GRAPH ?g { ?s <urn:p> ?o } } GROUP BY ?s ORDER BY ?s LIMIT 25',
+      MAX_BYTES,
+    );
+    expect(modifiers.metrics).toMatchObject({
+      distinct: 1,
+      orderConditions: 1,
+      groupConditions: 1,
+    });
+    expect(
+      failure(`SELECT DISTINCT ?s WHERE {
+        GRAPH ?g { ?s <urn:p> ?o . OPTIONAL { ?s <urn:q> ?q } }
+      } GROUP BY ?s ORDER BY ?s LIMIT 25`).code,
+    ).toBe('query_too_expensive');
   });
 
   it('permits a fully variable pattern only when VALUES anchors one variable', () => {
@@ -147,5 +166,22 @@ describe('agent-authored SPARQL policy', () => {
     expect(error.status).toBe(422);
     expect(error.code).toBe('query_too_expensive');
     expect(error.details).toMatchObject({ templateTriples: 4, maximumQuads: 400, maxQuads: 300 });
+  });
+
+  it('counts CONSTRUCT templates in the structural and score model', () => {
+    const result = enforceSemanticQueryPolicy(
+      'CONSTRUCT { ?s <urn:q> ?o } WHERE { GRAPH ?g { ?s <urn:p> ?o } } LIMIT 10',
+      MAX_BYTES,
+    );
+    expect(result.metrics).toMatchObject({ triples: 1, constructTriples: 1 });
+
+    const template = Array.from({ length: 12 }, (_, index) => `?s <urn:out:${index}> ?o .`).join(
+      '\n',
+    );
+    expect(
+      failure(`CONSTRUCT { ${template} } WHERE {
+        GRAPH ?g { ?s <urn:p1> ?o ; <urn:p2> ?o2 ; <urn:p3> ?o3 ; <urn:p4> ?o4 ; <urn:p5> ?o5 . }
+      } LIMIT 1`).code,
+    ).toBe('query_too_expensive');
   });
 });

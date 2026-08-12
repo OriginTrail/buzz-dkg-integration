@@ -1,26 +1,11 @@
 import { Parser } from '@traqula/parser-sparql-1-1';
 import { IntegrationApiError } from '../errors.ts';
+import type { SemanticQueryMetrics } from './types.ts';
 
 export const SEMANTIC_QUERY_MAX_LIMIT = 100;
 export const SEMANTIC_QUERY_DEFAULT_LIMIT = 25;
 export const SEMANTIC_QUERY_COST_BUDGET = 40;
 export const SEMANTIC_QUERY_MAX_QUADS = 300;
-
-export interface SemanticQueryMetrics {
-  triples: number;
-  optionalPatterns: number;
-  unionBranches: number;
-  filters: number;
-  graphPatterns: number;
-  propertyPaths: number;
-  variablePredicates: number;
-  subqueries: number;
-  valuesRows: number;
-  aggregates: number;
-  orderConditions: number;
-  groupConditions: number;
-  distinct: number;
-}
 
 export interface SemanticQueryPolicyResult {
   queryType: 'select' | 'ask' | 'construct';
@@ -168,6 +153,86 @@ function constructTemplateTripleCount(ast: JsonObject): number {
   return count;
 }
 
+interface SemanticQueryAnalysis {
+  metrics: SemanticQueryMetrics;
+  violations: string[];
+}
+
+/** Adapt the parser AST once into the small, typed shape consumed by policy rules. */
+function analyzeSemanticQueryAst(ast: JsonObject): SemanticQueryAnalysis {
+  const modifiers = object(ast.solutionModifiers) ? ast.solutionModifiers : {};
+  const order = object(modifiers.order) ? modifiers.order : null;
+  const group = object(modifiers.group) ? modifiers.group : null;
+  const having = object(modifiers.having) ? modifiers.having : null;
+  const metrics: SemanticQueryMetrics = {
+    triples: 0,
+    constructTriples: constructTemplateTripleCount(ast),
+    optionalPatterns: 0,
+    unionBranches: 0,
+    filters: 0,
+    graphPatterns: 0,
+    propertyPaths: 0,
+    variablePredicates: 0,
+    subqueries: 0,
+    valuesRows: 0,
+    aggregates: 0,
+    orderConditions: order && Array.isArray(order.orderDefs) ? order.orderDefs.length : 0,
+    groupConditions: group && Array.isArray(group.groupings) ? group.groupings.length : 0,
+    distinct: ast.distinct === true ? 1 : 0,
+  };
+  const valuesBoundVariables = new Set<string>();
+  walk(ast.where, (node) => {
+    if (node.type !== 'pattern' || node.subType !== 'values') return;
+    const variables = Array.isArray(node.variables) ? node.variables : [];
+    const values = Array.isArray(node.values) ? node.values : [];
+    metrics.valuesRows += values.length;
+    for (const variable of variables) {
+      const name = variableName(variable);
+      if (name && values.some((row) => object(row) && row[name] !== undefined)) {
+        valuesBoundVariables.add(name);
+      }
+    }
+  });
+  walk([ast.variables, order, having], (node) => {
+    if (node.type === 'expression' && node.subType === 'aggregate') metrics.aggregates += 1;
+  });
+
+  const violations: string[] = [];
+  walk(ast.where, (node) => {
+    if (node.type === 'query') metrics.subqueries += 1;
+    if (node.type === 'path') {
+      metrics.propertyPaths += 1;
+      if (node.subType === '*' || node.subType === '+' || node.subType === '!') {
+        violations.push(`property path '${String(node.subType)}' is not bounded`);
+      }
+    }
+    if (node.type !== 'pattern') return;
+    if (node.subType === 'service') violations.push('SERVICE federation is not allowed');
+    if (node.subType === 'optional') metrics.optionalPatterns += 1;
+    if (node.subType === 'filter') metrics.filters += 1;
+    if (node.subType === 'union') {
+      metrics.unionBranches += Array.isArray(node.patterns) ? node.patterns.length : 0;
+    }
+    if (node.subType === 'graph') {
+      metrics.graphPatterns += 1;
+      const graphVariable = variableName(node.name);
+      if (graphVariable === null) {
+        violations.push('explicit GRAPH identifiers are not allowed');
+      } else if (valuesBoundVariables.has(graphVariable)) {
+        violations.push('GRAPH variables must not be bound to explicit identifiers');
+      }
+    }
+    if (node.subType !== 'bgp') return;
+    const triples = Array.isArray(node.triples) ? node.triples : [];
+    metrics.triples += triples.length;
+    for (const triple of triples) {
+      if (object(triple) && variableName(triple.predicate)) metrics.variablePredicates += 1;
+    }
+  });
+  validateBroadScans(ast.where, new Set(), violations);
+  return { metrics, violations };
+}
+
 /** Parse and statically bound one agent-authored, read-only SPARQL 1.1 query. */
 export function enforceSemanticQueryPolicy(
   sparql: string,
@@ -244,68 +309,7 @@ export function enforceSemanticQueryPolicy(
     });
   }
 
-  const metrics: SemanticQueryMetrics = {
-    triples: 0,
-    optionalPatterns: 0,
-    unionBranches: 0,
-    filters: 0,
-    graphPatterns: 0,
-    propertyPaths: 0,
-    variablePredicates: 0,
-    subqueries: 0,
-    valuesRows: 0,
-    aggregates: 0,
-    orderConditions: 0,
-    groupConditions: 0,
-    distinct: ast.distinct === true ? 1 : 0,
-  };
-  const modifiers = object(ast.solutionModifiers) ? ast.solutionModifiers : {};
-  const order = object(modifiers.order) ? modifiers.order : null;
-  const group = object(modifiers.group) ? modifiers.group : null;
-  const having = object(modifiers.having) ? modifiers.having : null;
-  walk([ast.variables, order, having], (node) => {
-    if (node.type === 'expression' && node.subType === 'aggregate') metrics.aggregates += 1;
-  });
-  metrics.orderConditions = order && Array.isArray(order.orderDefs) ? order.orderDefs.length : 0;
-  metrics.groupConditions = group && Array.isArray(group.groupings) ? group.groupings.length : 0;
-  walk(ast.where, (node) => {
-    if (node.type !== 'pattern' || node.subType !== 'values') return;
-    const values = Array.isArray(node.values) ? node.values : [];
-    metrics.valuesRows += values.length;
-  });
-
-  const violations: string[] = [];
-  walk(ast.where, (node) => {
-    if (node.type === 'query') metrics.subqueries += 1;
-    if (node.type === 'path') {
-      metrics.propertyPaths += 1;
-      if (node.subType === '*' || node.subType === '+' || node.subType === '!') {
-        violations.push(`property path '${String(node.subType)}' is not bounded`);
-      }
-    }
-    if (node.type !== 'pattern') return;
-    if (node.subType === 'service') violations.push('SERVICE federation is not allowed');
-    if (node.subType === 'optional') metrics.optionalPatterns += 1;
-    if (node.subType === 'filter') metrics.filters += 1;
-    if (node.subType === 'union') {
-      metrics.unionBranches += Array.isArray(node.patterns) ? node.patterns.length : 0;
-    }
-    if (node.subType === 'graph') {
-      metrics.graphPatterns += 1;
-      if (variableName(node.name) === null) {
-        violations.push('explicit GRAPH identifiers are not allowed');
-      }
-    }
-    if (node.subType !== 'bgp') return;
-    const triples = Array.isArray(node.triples) ? node.triples : [];
-    metrics.triples += triples.length;
-    for (const triple of triples) {
-      if (!object(triple)) continue;
-      const predicate = variableName(triple.predicate);
-      if (predicate) metrics.variablePredicates += 1;
-    }
-  });
-  validateBroadScans(ast.where, new Set(), violations);
+  const { metrics, violations } = analyzeSemanticQueryAst(ast);
 
   if (violations.length > 0) {
     unsafe(violations[0]!, [
@@ -315,7 +319,7 @@ export function enforceSemanticQueryPolicy(
     ]);
   }
   if (
-    metrics.triples > MAX_TRIPLES ||
+    metrics.triples + metrics.constructTriples > MAX_TRIPLES ||
     metrics.optionalPatterns > MAX_OPTIONALS ||
     metrics.unionBranches > MAX_UNION_BRANCHES ||
     metrics.subqueries > MAX_SUBQUERIES ||
@@ -341,7 +345,7 @@ export function enforceSemanticQueryPolicy(
   }
 
   if (queryType === 'construct') {
-    const templateTriples = constructTemplateTripleCount(ast);
+    const templateTriples = metrics.constructTriples;
     const maximumQuads = templateTriples * (limit ?? 0);
     if (templateTriples < 1 || maximumQuads > SEMANTIC_QUERY_MAX_QUADS) {
       policyError(422, 'query_too_expensive', 'CONSTRUCT result may exceed the allowed size', {
@@ -360,6 +364,7 @@ export function enforceSemanticQueryPolicy(
   const score =
     2 +
     metrics.triples * 2 +
+    metrics.constructTriples * 2 +
     metrics.optionalPatterns * 3 +
     metrics.unionBranches * 4 +
     metrics.subqueries * 8 +
