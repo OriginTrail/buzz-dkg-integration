@@ -157,6 +157,10 @@ export interface TrustVouchSummary {
 
 export type TrustVouchStatus = 'active' | 'revoked' | 'superseded' | 'unknown';
 
+export type TrustVouchLifecycleState =
+  | { status: 'revoked'; lifecycleEvent: string; replacementVouch: null }
+  | { status: 'superseded'; lifecycleEvent: string; replacementVouch: string };
+
 export interface TrustNetworkResult {
   /** Whether every visible row fit inside the fixed operation bounds. */
   completeness: 'complete' | 'partial';

@@ -687,6 +687,23 @@ describe('query gateway request contract', () => {
     };
     const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
 
+    const networkResponse = await service.execute(body('trust_network'));
+    const networkVouches = (
+      networkResponse.result as {
+        vouches: Array<{
+          uri: string;
+          status: string;
+          lifecycleEvent: string | null;
+          replacementVouch: string | null;
+        }>;
+      }
+    ).vouches;
+    expect(networkVouches.find(({ uri }) => uri === 'urn:buzz-dkg:vouch:4')).toMatchObject({
+      status: 'revoked',
+      lifecycleEvent: `urn:nostr:event:${'99'.repeat(32)}`,
+      replacementVouch: null,
+    });
+
     const response = await service.execute(body('reputation_summary', { pubkey: subject }));
 
     expect(response.result).toMatchObject({
