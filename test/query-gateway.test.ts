@@ -164,6 +164,22 @@ function binding(value: string): { value: string } {
   return { value };
 }
 
+function trustSourceBindings(eventId: string, issuer: string, subject: string) {
+  return {
+    source: binding(`urn:nostr:event:${eventId}`),
+    sourceKind: binding('1985'),
+    sourceAuthor: binding(`urn:nostr:pubkey:${issuer}`),
+    sourceTags: binding(
+      JSON.stringify([
+        ['h', CHANNEL],
+        ['L', 'buzz.wot'],
+        ['l', 'vouch', 'buzz.wot'],
+        ['p', subject],
+      ]),
+    ),
+  };
+}
+
 function fixtureQuery(sparql: string): Array<Record<string, { value: string }>> {
   const store = new oxigraph.Store();
   store.load(readFileSync(new URL('./fixtures/ontology/lifelike-project.trig', import.meta.url)), {
@@ -299,7 +315,7 @@ describe('query gateway request contract', () => {
             note: binding('Careful reviewer who found the rollback edge case.'),
             status: binding('active'),
             at: binding('2026-07-30T13:00:00Z'),
-            source: binding(`urn:nostr:event:${'44'.repeat(32)}`),
+            ...trustSourceBindings('44'.repeat(32), issuer, subject),
           },
         ];
       }
@@ -324,6 +340,7 @@ describe('query gateway request contract', () => {
         {
           pubkey: subject,
           contributions: 3,
+          contributionLayer: 'SWM',
           latest: Date.parse('2026-07-29T11:05:00Z') / 1_000,
           vouchesReceived: 1,
           vouchesGiven: 0,
@@ -332,6 +349,7 @@ describe('query gateway request contract', () => {
         {
           pubkey: issuer,
           contributions: 0,
+          contributionLayer: null,
           latest: null,
           vouchesReceived: 0,
           vouchesGiven: 1,
@@ -409,7 +427,9 @@ describe('query gateway request contract', () => {
       note: binding(`Evidence note ${id}`),
       status: binding('active'),
       at: binding(`2026-07-${20 + id}T13:00:00Z`),
-      ...(proven ? { source: binding(`urn:nostr:event:${String(id).repeat(64)}`) } : {}),
+      ...(proven
+        ? trustSourceBindings(String(id).repeat(64), issuer, target)
+        : trustSourceBindings(String(id).repeat(64), issuer, '00'.repeat(32))),
     });
     dkg.bindingResolver = ({ view, sparql }) => {
       if (view === 'verifiable-memory') return [];
@@ -419,8 +439,8 @@ describe('query gateway request contract', () => {
           vouch(2, REQUESTER, intermediary),
           vouch(3, intermediary, subject),
           vouch(4, communityIssuer, subject),
-          // Active-looking graph data without a signed source is visible for
-          // diagnostics but must never affect the calculated reputation.
+          // Active-looking graph data whose p-tag does not match the projected
+          // subject stays visible for diagnostics but must never be scored.
           vouch(5, 'ee'.repeat(32), subject, false),
           // Historical lifecycle records remain inspectable in trust_network,
           // but reputation must use active evidence only.
@@ -483,6 +503,38 @@ describe('query gateway request contract', () => {
     );
     expect(evidence.some((item) => item.uri.endsWith(':6') || item.uri.endsWith(':7'))).toBe(false);
     expect(dkg.calls.filter((call) => call.kind === 'query')).toHaveLength(4);
+  });
+
+  it('does not promote SWM work evidence when only a vouch reaches VM', async () => {
+    const dkg = new GatewayDkg();
+    const issuer = 'aa'.repeat(32);
+    const subject = 'bb'.repeat(32);
+    dkg.bindingResolver = ({ view, sparql }) => {
+      if (sparql.includes('trust/Vouch')) {
+        return view === 'verifiable-memory'
+          ? [
+              {
+                vouch: binding('urn:buzz-dkg:vouch:vm-only'),
+                issuer: binding(`urn:nostr:pubkey:${issuer}`),
+                subject: binding(`urn:nostr:pubkey:${subject}`),
+                status: binding('active'),
+                ...trustSourceBindings('99'.repeat(32), issuer, subject),
+              },
+            ]
+          : [];
+      }
+      if (sparql.includes('COUNT(DISTINCT ?record)')) {
+        return view === 'shared-working-memory' ? [{ pk: binding(subject), n: binding('1') }] : [];
+      }
+      return [];
+    };
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('reputation_summary', { pubkey: subject }));
+
+    expect(response.result).toMatchObject({
+      signals: { evidenceRecords: 1, verifiableEvidence: false },
+    });
   });
 
   it('returns zero reputation with no confidence when the channel has no evidence', async () => {

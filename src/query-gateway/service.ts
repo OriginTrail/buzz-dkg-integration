@@ -664,14 +664,20 @@ export class QueryGatewayService {
       ),
       this.layered(
         cg,
-        `SELECT DISTINCT ?vouch ?issuer ?subject ?note ?status ?at ?source WHERE { GRAPH ?g {
+        `SELECT DISTINCT ?vouch ?issuer ?subject ?note ?status ?at ?source
+          ?sourceKind ?sourceAuthor ?sourceTags WHERE { GRAPH ?g {
            ?vouch a <${TRUST}Vouch> ;
              <${TRUST}issuer> ?issuer ;
-             <${TRUST}subject> ?subject .
+             <${TRUST}subject> ?subject ;
+             <${TRUST}scope> "channel" .
            OPTIONAL { ?vouch <${SCHEMA}description> ?note }
            OPTIONAL { ?vouch <${TRUST}status> ?status }
            OPTIONAL {
              ?vouch <${PROV}wasDerivedFrom> ?source .
+             ?source a <${NOSTR}Event> ;
+               <${NOSTR}kind> ?sourceKind ;
+               <${NOSTR}tags> ?sourceTags ;
+               <${PROV}wasAttributedTo> ?sourceAuthor .
              OPTIONAL { ?source <${NOSTR}createdAt> ?at }
            }
          } } ORDER BY DESC(?at) LIMIT ${MAX_TRUST_VOUCHES + 1}`,
@@ -696,6 +702,7 @@ export class QueryGatewayService {
       const created: TrustPersonSummary = {
         pubkey,
         contributions: 0,
+        contributionLayer: null,
         latest: null,
         vouchesReceived: 0,
         vouchesGiven: 0,
@@ -709,6 +716,12 @@ export class QueryGatewayService {
       if (!HEX_PUBKEY.test(pubkey)) continue;
       const person = upsertPerson(pubkey, layer);
       person.contributions = Math.max(person.contributions, count(row.n));
+      if (
+        person.contributionLayer === null ||
+        LAYER_RANK[layer] > LAYER_RANK[person.contributionLayer]
+      ) {
+        person.contributionLayer = layer;
+      }
       person.latest = Math.max(person.latest ?? 0, dateTimestamp(row.latest) ?? 0) || null;
     }
 
@@ -723,6 +736,36 @@ export class QueryGatewayService {
       const issuer = pubkeyFromEntity(term(row, 'issuer'));
       const subject = pubkeyFromEntity(term(row, 'subject'));
       if (!uri || !issuer || !subject || issuer === subject) continue;
+      const source = optionalTerm(row, 'source');
+      const sourceAuthor = optionalTerm(row, 'sourceAuthor');
+      const sourceTags = optionalTerm(row, 'sourceTags');
+      const sourceKind = optionalTerm(row, 'sourceKind');
+      let sourceMatches = false;
+      if (
+        source &&
+        NOSTR_EVENT_URI.test(source) &&
+        sourceAuthor === `${NOSTR_PUBKEY_URI}${issuer}` &&
+        sourceKind === '1985' &&
+        sourceTags
+      ) {
+        try {
+          const tags = JSON.parse(sourceTags) as unknown;
+          if (Array.isArray(tags) && tags.every((tag) => Array.isArray(tag))) {
+            const normalized = tags as unknown[][];
+            const subjects = normalized.filter((tag) => tag[0] === 'p');
+            sourceMatches =
+              subjects.length === 1 &&
+              typeof subjects[0]?.[1] === 'string' &&
+              subjects[0][1].toLowerCase() === subject &&
+              normalized.some((tag) => tag[0] === 'L' && tag[1] === 'buzz.wot') &&
+              normalized.some(
+                (tag) => tag[0] === 'l' && tag[1] === 'vouch' && tag[2] === 'buzz.wot',
+              );
+          }
+        } catch {
+          sourceMatches = false;
+        }
+      }
       const candidate: TrustVouchSummary = {
         uri,
         issuer,
@@ -730,9 +773,7 @@ export class QueryGatewayService {
         note: optionalTerm(row, 'note') ? bounded(optionalTerm(row, 'note')!, 1_000) : null,
         status: optionalTerm(row, 'status') ? bounded(optionalTerm(row, 'status')!, 64) : 'unknown',
         at: dateTimestamp(row.at),
-        sourceEvent: optionalTerm(row, 'source')
-          ? bounded(optionalTerm(row, 'source')!, 1_000)
-          : null,
+        sourceEvent: sourceMatches ? bounded(source!, 1_000) : null,
         layer,
       };
       const current = vouchesByUri.get(uri);
@@ -798,7 +839,7 @@ export class QueryGatewayService {
     );
     const person = network.people.find((candidate) => candidate.pubkey === subject);
     const evidenceRecords = person?.contributions ?? 0;
-    const verifiableEvidence = person?.layer === 'VM';
+    const verifiableEvidence = person?.contributionLayer === 'VM';
 
     // Versioned, deliberately saturating weights. Activity volume cannot grow
     // a dimension beyond 100, and independent humans matter more than repeats.

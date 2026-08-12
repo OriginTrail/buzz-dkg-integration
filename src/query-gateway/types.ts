@@ -129,6 +129,8 @@ export interface DecisionTraceResult {
 export interface TrustPersonSummary {
   pubkey: string;
   contributions: number;
+  /** Highest layer containing an attributed work record, excluding vouches. */
+  contributionLayer: VisibleMemoryLayer | null;
   latest: number | null;
   vouchesReceived: number;
   vouchesGiven: number;
