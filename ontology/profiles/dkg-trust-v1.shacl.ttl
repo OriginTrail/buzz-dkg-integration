@@ -42,3 +42,62 @@ trust:VouchShape
     sh:minCount 1 ;
     sh:nodeKind sh:IRI
   ] .
+
+trust:EvidenceReferenceShape
+  a sh:NodeShape ;
+  sh:targetClass trust:EvidenceReference ;
+  sh:property [
+    sh:path trust:evidenceTarget ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:anyURI
+  ] ;
+  sh:property [
+    sh:path trust:evidenceSource ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:anyURI
+  ] .
+
+trust:VouchLifecycleShape
+  a sh:NodeShape ;
+  sh:targetClass trust:VouchLifecycle ;
+  sh:property [
+    sh:path trust:issuer ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:nodeKind sh:IRI
+  ] ;
+  sh:property [
+    sh:path trust:subject ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:nodeKind sh:IRI
+  ] ;
+  sh:property [
+    sh:path trust:status ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:in ("revoked" "superseded")
+  ] ;
+  sh:property [
+    sh:path trust:scope ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:in ("channel")
+  ] ;
+  sh:property [
+    sh:path trust:targetVouch ;
+    sh:minCount 1 ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:anyURI
+  ] ;
+  sh:property [
+    sh:path trust:replacementVouch ;
+    sh:maxCount 1 ;
+    sh:datatype xsd:anyURI
+  ] ;
+  sh:property [
+    sh:path prov:wasDerivedFrom ;
+    sh:minCount 1 ;
+    sh:nodeKind sh:IRI
+  ] .

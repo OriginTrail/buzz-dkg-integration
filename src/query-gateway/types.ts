@@ -145,6 +145,11 @@ export interface TrustVouchSummary {
   status: TrustVouchStatus;
   at: number | null;
   sourceEvent: string | null;
+  /** Explicit evidence roots selected and signed by the vouch issuer. */
+  evidence: string[];
+  /** Signed lifecycle source that most recently changed this vouch, when any. */
+  lifecycleEvent: string | null;
+  replacementVouch: string | null;
   layer: VisibleMemoryLayer;
 }
 
@@ -170,8 +175,19 @@ export interface ReputationSignals {
   directVouch: boolean;
   twoHopVouchers: number;
   independentVouchers: number;
+  /** Corroborating vouches after shared evidence roots are collapsed. */
+  independentLineages: number;
   evidenceRecords: number;
   verifiableEvidence: boolean;
+}
+
+export interface WorkEvidenceSummary {
+  uri: string;
+  kind: string;
+  name: string | null;
+  sourceEvent: string | null;
+  at: number | null;
+  layer: VisibleMemoryLayer;
 }
 
 export interface ReputationSummaryResult {
@@ -185,7 +201,9 @@ export interface ReputationSummaryResult {
   signals: ReputationSignals;
   reasons: string[];
   evidence: TrustVouchSummary[];
-  methodology: 'dkg-reputation-v1';
+  /** Candidate records the human may explicitly attach to a future vouch. */
+  workEvidence: WorkEvidenceSummary[];
+  methodology: 'dkg-reputation-v2';
 }
 
 export interface GraphNode {

@@ -38,6 +38,36 @@ trust:subject
   rdfs:range prov:Agent ;
   rdfs:subPropertyOf schema:about .
 
+trust:EvidenceReference
+  a owl:Class ;
+  rdfs:label "Vouch evidence reference" ;
+  rdfs:comment "A reference from a signed vouch to an independently attributed Context Graph record and, when available, its signed Nostr source event." ;
+  rdfs:subClassOf prov:Entity .
+
+trust:supportedBy
+  a owl:ObjectProperty ;
+  rdfs:label "supported by" ;
+  rdfs:domain trust:Vouch ;
+  rdfs:range trust:EvidenceReference .
+
+trust:evidenceTarget
+  a owl:DatatypeProperty ;
+  rdfs:label "evidence target" ;
+  rdfs:domain trust:EvidenceReference ;
+  rdfs:range xsd:anyURI .
+
+trust:evidenceSource
+  a owl:DatatypeProperty ;
+  rdfs:label "evidence source event" ;
+  rdfs:domain trust:EvidenceReference ;
+  rdfs:range xsd:anyURI .
+
+trust:VouchLifecycle
+  a owl:Class ;
+  rdfs:label "Vouch lifecycle action" ;
+  rdfs:comment "An append-only signed revocation or supersession of an earlier vouch." ;
+  rdfs:subClassOf prov:Entity .
+
 trust:status
   a owl:DatatypeProperty ;
   rdfs:label "attestation status" ;
@@ -50,6 +80,18 @@ trust:scope
   rdfs:comment "The context in which the attestation applies. Version 1 permits channel only." ;
   rdfs:domain trust:Vouch ;
   rdfs:range xsd:string .
+
+trust:targetVouch
+  a owl:DatatypeProperty ;
+  rdfs:label "target vouch" ;
+  rdfs:domain trust:VouchLifecycle ;
+  rdfs:range xsd:anyURI .
+
+trust:replacementVouch
+  a owl:DatatypeProperty ;
+  rdfs:label "replacement vouch" ;
+  rdfs:domain trust:VouchLifecycle ;
+  rdfs:range xsd:anyURI .
 
 # Reputation assessments are calculated views, not signed assertions. The beta
 # API returns this shape without persisting it back into the Context Graph.
