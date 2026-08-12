@@ -169,6 +169,7 @@ function trustSourceBindings(eventId: string, issuer: string, subject: string) {
     source: binding(`urn:nostr:event:${eventId}`),
     sourceKind: binding('1985'),
     sourceAuthor: binding(`urn:nostr:pubkey:${issuer}`),
+    sourceSig: binding('ab'.repeat(64)),
     sourceTags: binding(
       JSON.stringify([
         ['h', CHANNEL],
@@ -308,6 +309,14 @@ describe('query gateway request contract', () => {
       if (view === 'verifiable-memory') return [];
       if (sparql.includes('trust/Vouch')) {
         return [
+          {
+            vouch: binding('urn:buzz-dkg:vouch:1'),
+            issuer: binding(`urn:nostr:pubkey:${issuer}`),
+            subject: binding(`urn:nostr:pubkey:${subject}`),
+            status: binding('active'),
+            ...trustSourceBindings('33'.repeat(32), issuer, subject),
+            sourceSig: binding('not-a-signature'),
+          },
           {
             vouch: binding('urn:buzz-dkg:vouch:1'),
             issuer: binding(`urn:nostr:pubkey:${issuer}`),

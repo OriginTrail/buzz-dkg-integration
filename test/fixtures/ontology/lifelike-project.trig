@@ -156,6 +156,7 @@
     nostr:kind 1985 ;
     nostr:createdAt "2026-07-30T13:00:00Z"^^xsd:dateTime ;
     nostr:content "Bob reviewed the token changes carefully and caught the rollback edge case." ;
+    nostr:sig "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab" ;
     nostr:tags "[[\"h\",\"channel-one\"],[\"L\",\"buzz.wot\"],[\"l\",\"vouch\",\"buzz.wot\"],[\"p\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"]]" ;
     prov:wasAttributedTo <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> .
 }

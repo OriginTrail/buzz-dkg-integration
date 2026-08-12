@@ -44,6 +44,7 @@ const VIEWS: readonly [VisibleView, VisibleMemoryLayer][] = [
 ];
 const LAYER_RANK: Record<VisibleMemoryLayer, number> = { SWM: 0, VM: 1 };
 const HEX_PUBKEY = /^[0-9a-f]{64}$/iu;
+const HEX_SIGNATURE = /^[0-9a-f]{128}$/iu;
 const CHANNEL_ID = /^[A-Za-z0-9._:@/-]{1,256}$/u;
 const SUBGRAPH_NAME = /^[A-Za-z0-9_-]{1,128}$/u;
 const SAFE_IRI = /^[A-Za-z][A-Za-z0-9+.-]*:[^<>"{}|^`\\\s]{1,999}$/u;
@@ -665,7 +666,7 @@ export class QueryGatewayService {
       this.layered(
         cg,
         `SELECT DISTINCT ?vouch ?issuer ?subject ?note ?status ?at ?source
-          ?sourceKind ?sourceAuthor ?sourceTags WHERE { GRAPH ?g {
+          ?sourceKind ?sourceAuthor ?sourceTags ?sourceSig WHERE { GRAPH ?g {
            ?vouch a <${TRUST}Vouch> ;
              <${TRUST}issuer> ?issuer ;
              <${TRUST}subject> ?subject ;
@@ -677,6 +678,7 @@ export class QueryGatewayService {
              ?source a <${NOSTR}Event> ;
                <${NOSTR}kind> ?sourceKind ;
                <${NOSTR}tags> ?sourceTags ;
+               <${NOSTR}sig> ?sourceSig ;
                <${PROV}wasAttributedTo> ?sourceAuthor .
              OPTIONAL { ?source <${NOSTR}createdAt> ?at }
            }
@@ -740,12 +742,15 @@ export class QueryGatewayService {
       const sourceAuthor = optionalTerm(row, 'sourceAuthor');
       const sourceTags = optionalTerm(row, 'sourceTags');
       const sourceKind = optionalTerm(row, 'sourceKind');
+      const sourceSig = optionalTerm(row, 'sourceSig');
       let sourceMatches = false;
       if (
         source &&
         NOSTR_EVENT_URI.test(source) &&
         sourceAuthor === `${NOSTR_PUBKEY_URI}${issuer}` &&
         sourceKind === '1985' &&
+        sourceSig !== null &&
+        HEX_SIGNATURE.test(sourceSig) &&
         sourceTags
       ) {
         try {
@@ -777,7 +782,11 @@ export class QueryGatewayService {
         layer,
       };
       const current = vouchesByUri.get(uri);
-      if (!current || LAYER_RANK[layer] > LAYER_RANK[current.layer]) {
+      if (
+        !current ||
+        LAYER_RANK[layer] > LAYER_RANK[current.layer] ||
+        (layer === current.layer && current.sourceEvent === null && candidate.sourceEvent !== null)
+      ) {
         vouchesByUri.set(uri, candidate);
       }
     }
