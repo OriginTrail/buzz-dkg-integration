@@ -30,6 +30,7 @@ import type {
   TrustNetworkResult,
   TrustPersonSummary,
   TrustVouchSummary,
+  TrustVouchStatus,
   VisibleMemoryLayer,
 } from './types.ts';
 
@@ -76,6 +77,10 @@ const SOFTWARE = 'http://dkg.io/ontology/software/';
 const TRUST = 'http://dkg.io/ontology/trust/';
 const NOSTR_PUBKEY_URI = 'urn:nostr:pubkey:';
 const NOSTR_EVENT_URI = /^urn:nostr:event:[0-9a-f]{64}$/u;
+
+function trustVouchStatus(value: string | null): TrustVouchStatus {
+  return value === 'active' || value === 'revoked' || value === 'superseded' ? value : 'unknown';
+}
 
 function invalid(message: string): never {
   throw new IntegrationApiError(400, 'invalid_request', message);
@@ -776,7 +781,7 @@ export class QueryGatewayService {
         issuer,
         subject,
         note: optionalTerm(row, 'note') ? bounded(optionalTerm(row, 'note')!, 1_000) : null,
-        status: optionalTerm(row, 'status') ? bounded(optionalTerm(row, 'status')!, 64) : 'unknown',
+        status: trustVouchStatus(optionalTerm(row, 'status')),
         at: dateTimestamp(row.at),
         sourceEvent: sourceMatches ? bounded(source!, 1_000) : null,
         layer,

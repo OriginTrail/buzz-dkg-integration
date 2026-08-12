@@ -142,11 +142,13 @@ export interface TrustVouchSummary {
   issuer: string;
   subject: string;
   note: string | null;
-  status: string;
+  status: TrustVouchStatus;
   at: number | null;
   sourceEvent: string | null;
   layer: VisibleMemoryLayer;
 }
+
+export type TrustVouchStatus = 'active' | 'revoked' | 'superseded' | 'unknown';
 
 export interface TrustNetworkResult {
   /** Whether every visible row fit inside the fixed operation bounds. */
