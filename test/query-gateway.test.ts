@@ -504,7 +504,7 @@ describe('query gateway HTTP boundary', () => {
       return {
         ok: true,
         outcome: 'accepted',
-        operationId: 42,
+        operationId: '11'.repeat(32),
         proposalEventId: '11'.repeat(32),
         channelId: 'c69311ba-a5a2-4b2a-a27f-99f7669af643',
         requesterPubkey: REQUESTER,
@@ -529,7 +529,7 @@ describe('query gateway HTTP boundary', () => {
     expect(poll.status).toBe(200);
     await expect(poll.json()).resolves.toMatchObject({
       ok: true,
-      operationId: 42,
+      operationId: '11'.repeat(32),
       state: 'stored',
     });
 

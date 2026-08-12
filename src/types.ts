@@ -124,8 +124,8 @@ export interface AgentMemoryIngestResult {
   ok: true;
   /** `accepted` is durably queued; `duplicate` reuses the existing operation. */
   outcome: 'accepted' | 'duplicate';
-  /** Stable operation id returned on every idempotent status poll. */
-  operationId: number;
+  /** Opaque stable poll handle; currently the signed proposal event id. */
+  operationId: string;
   proposalEventId: string;
   channelId: string;
   requesterPubkey: string;

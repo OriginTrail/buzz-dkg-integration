@@ -721,7 +721,7 @@ describe('automatic channel memory lifecycle', () => {
       channelId: CHANNEL,
       requesterPubkey: PUBKEY,
       contextGraphId: expectedGraph,
-      operationId: expect.any(Number),
+      operationId: request.proposalEvent.id,
       state: 'processing',
     });
     await daemon.drain();
@@ -875,11 +875,19 @@ describe('automatic channel memory lifecycle', () => {
   it('recovers a proposal interrupted after finalize without repeating completed steps', async () => {
     const { daemon, dkg } = setup();
     dkg.failShareOnce = new Error('transient share failure');
-    const accepted = await daemon.submitAgentMemory(envelope());
+    const request = envelope();
+    const accepted = await daemon.submitAgentMemory(request);
     await daemon.drain();
     expect(daemon.registry.opByTrigger(accepted.proposalEventId)?.state).toBe('finalized');
 
-    await daemon.recover();
+    const pendingPoll = daemon.submitAgentMemory(request);
+    expect(pendingPoll).toMatchObject({
+      outcome: 'duplicate',
+      operationId: accepted.proposalEventId,
+      state: 'processing',
+    });
+
+    await daemon.drain();
     expect(daemon.registry.opByTrigger(accepted.proposalEventId)?.state).toBe('receipted');
     expect(dkg.kas.get(accepted.kaName)).toMatchObject({
       writes: 1,

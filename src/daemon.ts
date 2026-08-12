@@ -21,10 +21,12 @@ import { logger } from './log.ts';
 import { IntegrationApiError } from './errors.ts';
 import {
   DKG_MEMORY_PROPOSAL_KIND,
+  type AgentMemoryEnvelope,
   type AgentMemoryIngestResult,
   type DaemonConfig,
   type NostrEvent,
   type OpRecord,
+  type OpState,
 } from './types.ts';
 import {
   compileAgentMemory,
@@ -39,6 +41,44 @@ const MAINNET_CHAIN = 'base:8453';
 /** Per-pubkey `@dkg ask` ceiling — defence-in-depth against one member fanning
  * out expensive scoped SPARQL. Generous for humans; caps a runaway loop. */
 const ASK_RATE_LIMIT_PER_MIN = 12;
+
+function publicAgentMemoryState(state: OpState): AgentMemoryIngestResult['state'] {
+  switch (state) {
+    case 'distilled':
+    case 'wm_written':
+    case 'finalized':
+    case 'shared':
+      return 'processing';
+    case 'receipted':
+    case 'publishing':
+    case 'published':
+    case 'vm_receipted':
+    case 'publish_unconfirmed':
+      return 'stored';
+    case 'failed':
+      throw new Error('failed agent memory operations do not have a success response');
+  }
+}
+
+function toAgentMemoryIngestResult(
+  op: OpRecord,
+  envelope: AgentMemoryEnvelope,
+  contextGraphId: string,
+  duplicate: boolean,
+): AgentMemoryIngestResult {
+  return {
+    ok: true,
+    outcome: duplicate ? 'duplicate' : 'accepted',
+    operationId: envelope.proposalEvent.id,
+    proposalEventId: envelope.proposalEvent.id,
+    channelId: envelope.channelId,
+    requesterPubkey: envelope.requesterPubkey,
+    contextGraphId,
+    kaName: op.kaName,
+    digest: op.digest,
+    state: publicAgentMemoryState(op.state),
+  };
+}
 
 export class Daemon {
   readonly config: DaemonConfig;
@@ -438,18 +478,7 @@ export class Daemon {
     }
     return {
       op,
-      result: {
-        ok: true,
-        outcome: duplicate ? 'duplicate' : 'accepted',
-        operationId: op.id,
-        proposalEventId: envelope.proposalEvent.id,
-        channelId: envelope.channelId,
-        requesterPubkey: envelope.requesterPubkey,
-        contextGraphId,
-        kaName: op.kaName,
-        digest: op.digest,
-        state: op.state === 'receipted' ? 'stored' : 'processing',
-      },
+      result: toAgentMemoryIngestResult(op, envelope, contextGraphId, duplicate),
     };
   }
 
