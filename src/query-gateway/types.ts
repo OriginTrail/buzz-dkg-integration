@@ -1,5 +1,3 @@
-import type { SemanticQueryMetrics } from './sparql-policy.ts';
-
 export type QueryOperation =
   | 'channel_memory'
   | 'contributor_trail'
@@ -199,10 +197,35 @@ export interface EvidenceResult {
   graph: string | null;
 }
 
+export interface SemanticQueryMetrics {
+  triples: number;
+  constructTriples: number;
+  optionalPatterns: number;
+  unionBranches: number;
+  filters: number;
+  graphPatterns: number;
+  propertyPaths: number;
+  variablePredicates: number;
+  subqueries: number;
+  valuesRows: number;
+  aggregates: number;
+  orderConditions: number;
+  groupConditions: number;
+  distinct: number;
+}
+
+export type SparqlJsonValue =
+  null | boolean | number | string | SparqlJsonValue[] | { [key: string]: SparqlJsonValue };
+
+/** Stable public boundary for SPARQL JSON binding terms returned by DKG. */
+export type SparqlBindingValue = string | { [key: string]: SparqlJsonValue };
+export type SparqlBindingRow = Record<string, SparqlBindingValue>;
+export type SparqlQuad = { [key: string]: SparqlJsonValue };
+
 export interface SemanticQueryLayerResult {
   layer: VisibleMemoryLayer;
-  bindings: Record<string, unknown>[];
-  quads?: unknown[];
+  bindings: SparqlBindingRow[];
+  quads?: SparqlQuad[];
 }
 
 export interface SemanticQueryResult {

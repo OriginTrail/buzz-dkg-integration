@@ -378,6 +378,46 @@ describe('semantic query execution', () => {
     ]);
   });
 
+  it('defaults to both visible layers and maps verified queries to VM', async () => {
+    const dkg = new GatewayDkg();
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+    const sparql = 'SELECT ?o WHERE { GRAPH ?g { <urn:s> <urn:p> ?o } } LIMIT 25';
+    const omittedView = semanticBody(sparql) as {
+      arguments: { sparql: string; view?: string };
+    };
+    delete omittedView.arguments.view;
+
+    const both = await service.execute(omittedView);
+    expect((both.result as { layers: Array<{ layer: string }> }).layers).toEqual([
+      expect.objectContaining({ layer: 'SWM' }),
+      expect.objectContaining({ layer: 'VM' }),
+    ]);
+    expect(dkg.calls.map((call) => call.view)).toEqual([
+      'shared-working-memory',
+      'verifiable-memory',
+    ]);
+
+    dkg.calls.length = 0;
+    const verified = await service.execute(semanticBody(sparql, 'verified'));
+    expect((verified.result as { layers: Array<{ layer: string }> }).layers).toEqual([
+      expect.objectContaining({ layer: 'VM' }),
+    ]);
+    expect(dkg.calls.map((call) => call.view)).toEqual(['verifiable-memory']);
+  });
+
+  it('caps semantic DKG reads at ten seconds', async () => {
+    const dkg = new GatewayDkg();
+    const service = new QueryGatewayService(
+      () => CONTEXT_GRAPH,
+      dkg.asDkg(),
+      gatewayConfig({ dkgTimeoutMs: 30_000, operationTimeoutMs: 30_000 }),
+    );
+    await service.execute(
+      semanticBody('SELECT ?o WHERE { GRAPH ?g { <urn:s> <urn:p> ?o } } LIMIT 25', 'shared'),
+    );
+    expect(dkg.calls).toEqual([expect.objectContaining({ timeoutMs: 10_000 })]);
+  });
+
   it('answers a lifelike agent-authored decision trace with the ontology fixture', async () => {
     const dkg = new GatewayDkg();
     dkg.bindingResolver = ({ sparql }) => fixtureQuery(sparql);

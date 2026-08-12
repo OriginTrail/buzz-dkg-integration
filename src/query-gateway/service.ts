@@ -2,7 +2,11 @@ import type { DkgClient } from '../dkg/client.ts';
 import { IntegrationApiError } from '../errors.ts';
 import { canonicalRepositoryIdentityUrl } from '../memory/identity.ts';
 import type { QueryGatewayConfig } from '../types.ts';
-import { enforceSemanticQueryPolicy, SEMANTIC_QUERY_MAX_QUADS } from './sparql-policy.ts';
+import {
+  executeSemanticQuery,
+  normalizeSparqlResult,
+  requiredSemanticSparql,
+} from './semantic-query.ts';
 import type {
   ChannelMemoryResult,
   ContributorSummary,
@@ -21,8 +25,8 @@ import type {
   QueryGatewayResult,
   QueryGatewaySuccess,
   QueryOperation,
-  SemanticQueryResult,
-  SemanticQueryView,
+  SparqlBindingRow,
+  SparqlQuad,
   SoftwareContributorEntry,
   SoftwareContributorsResult,
   SubGraphSummary,
@@ -32,7 +36,7 @@ import type {
 } from './types.ts';
 
 type EnabledGatewayConfig = Extract<QueryGatewayConfig, { enabled: true }>;
-type BindingRow = Record<string, unknown>;
+type BindingRow = SparqlBindingRow;
 type LayeredRow = { row: BindingRow; layer: VisibleMemoryLayer };
 type VisibleView = 'shared-working-memory' | 'verifiable-memory';
 
@@ -57,8 +61,6 @@ const MAX_DKG_ROWS = 2_500;
 const MAX_GRAPH_NODES = 1_200;
 const MAX_GRAPH_EDGES = 2_400;
 const MAX_TRIPLES = 1_000;
-const MAX_SEMANTIC_ROWS = 100;
-const MAX_SEMANTIC_QUERY_TIMEOUT_MS = 10_000;
 
 const BUZZ = 'https://w3id.org/buzz-dkg/buzz#';
 const NOSTR = 'https://w3id.org/buzz-dkg/nostr#';
@@ -100,18 +102,6 @@ function requiredText(value: unknown, name: string, max: number): string {
     /\p{Cc}/u.test(value)
   ) {
     invalid(`${name} is invalid`);
-  }
-  return value.trim();
-}
-
-function requiredSparql(value: unknown): string {
-  if (
-    typeof value !== 'string' ||
-    !value.trim() ||
-    Buffer.byteLength(value, 'utf8') > 64 * 1024 ||
-    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)
-  ) {
-    invalid('arguments.sparql is invalid');
   }
   return value.trim();
 }
@@ -171,7 +161,7 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
       ...base,
       operation,
       scope: { type: 'current_channel' },
-      arguments: { sparql: requiredSparql(value.arguments.sparql), view },
+      arguments: { sparql: requiredSemanticSparql(value.arguments.sparql), view },
     };
   }
   if (value.scope !== undefined) invalid('scope is only accepted for semantic_query');
@@ -380,7 +370,14 @@ export class QueryGatewayService {
       case 'evidence':
         return this.evidence(cg, request.arguments.uri);
       case 'semantic_query':
-        return this.semanticQuery(cg, request.arguments.sparql, request.arguments.view);
+        return executeSemanticQuery({
+          sparql: request.arguments.sparql,
+          selectedView: request.arguments.view,
+          maxQueryBytes: this.config.maxQueryBytes,
+          dkgTimeoutMs: this.config.dkgTimeoutMs,
+          query: async (view, sparql, timeoutMs) =>
+            this.queryResult(cg, view, sparql, undefined, timeoutMs),
+        });
     }
   }
 
@@ -390,18 +387,12 @@ export class QueryGatewayService {
     sparql: string,
     subGraphName?: string,
     timeoutMs = this.config.dkgTimeoutMs,
-  ): Promise<{ bindings: BindingRow[]; quads?: unknown[] }> {
+  ): Promise<{ bindings: BindingRow[]; quads?: SparqlQuad[] }> {
     const response = await this.dkg.query(
       { contextGraphId: cg, view, sparql, ...(subGraphName ? { subGraphName } : {}) },
       timeoutMs,
     );
-    const rows = response?.result?.bindings;
-    if (!Array.isArray(rows)) throw new Error('DKG query returned an invalid bindings shape');
-    const quads = response.result.quads;
-    return {
-      bindings: rows as BindingRow[],
-      ...(Array.isArray(quads) ? { quads } : {}),
-    };
+    return normalizeSparqlResult(response);
   }
 
   private async query(
@@ -419,48 +410,6 @@ export class QueryGatewayService {
     }
     const result = await this.queryResult(cg, view, sparql, subGraphName);
     return result.bindings.slice(0, MAX_DKG_ROWS);
-  }
-
-  private async semanticQuery(
-    cg: string,
-    sparql: string,
-    selectedView: SemanticQueryView,
-  ): Promise<SemanticQueryResult> {
-    const policy = enforceSemanticQueryPolicy(sparql, this.config.maxQueryBytes);
-    const views = VIEWS.filter(([, layer]) => {
-      if (selectedView === 'both') return true;
-      return selectedView === 'shared' ? layer === 'SWM' : layer === 'VM';
-    });
-    const layers = await Promise.all(
-      views.map(async ([view, layer]) => {
-        const result = await this.queryResult(
-          cg,
-          view,
-          sparql,
-          undefined,
-          Math.min(this.config.dkgTimeoutMs, MAX_SEMANTIC_QUERY_TIMEOUT_MS),
-        );
-        if (result.quads && result.quads.length > SEMANTIC_QUERY_MAX_QUADS) {
-          throw new IntegrationApiError(
-            502,
-            'result_bound_exceeded',
-            'DKG returned more CONSTRUCT quads than the verified query bound',
-            { maxQuads: SEMANTIC_QUERY_MAX_QUADS, receivedQuads: result.quads.length },
-          );
-        }
-        return {
-          layer,
-          bindings: result.bindings.slice(0, MAX_SEMANTIC_ROWS),
-          ...(result.quads ? { quads: result.quads } : {}),
-        };
-      }),
-    );
-    return {
-      queryType: policy.queryType,
-      scope: { type: 'current_channel' },
-      cost: { score: policy.score, budget: policy.budget, metrics: policy.metrics },
-      layers,
-    };
   }
 
   private async layered(cg: string, sparql: string, subGraphName?: string): Promise<LayeredRow[]> {
