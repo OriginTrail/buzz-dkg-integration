@@ -103,8 +103,8 @@ function vouchLineageGroups(vouches: readonly TrustVouchSummary[]): TrustVouchSu
   const rootOwner = new Map<string, number>();
   for (const [index, vouch] of vouches.entries()) {
     const evidenceRoots =
-      vouch.evidence.length > 0
-        ? vouch.evidence
+      vouch.evidence.length > 0 || vouch.evidenceSources.length > 0
+        ? [...vouch.evidence, ...vouch.evidenceSources]
         : [vouch.sourceEvent ?? `urn:buzz-dkg:lineage:${vouch.uri}`];
     // Repeated statements by one signer are one corroborating source even
     // when they cite different artifacts. Shared artifacts likewise connect
@@ -745,7 +745,9 @@ export class QueryGatewayService {
         cg,
         `SELECT DISTINCT ?action ?issuer ?subject ?status ?target ?replacement ?at ?source
          WHERE { GRAPH ?g {
-           ?action <${TRUST}targetVouch> ?target ;
+           ?action a <${TRUST}VouchLifecycle> ;
+             <${TRUST}scope> "channel" ;
+             <${TRUST}targetVouch> ?target ;
              <${TRUST}issuer> ?issuer ;
              <${TRUST}subject> ?subject ;
              <${TRUST}status> ?status .
@@ -854,6 +856,7 @@ export class QueryGatewayService {
         at: dateTimestamp(row.at),
         sourceEvent: sourceMatches ? bounded(source!, 1_000) : null,
         evidence: [],
+        evidenceSources: [],
         lifecycleEvent: null,
         replacementVouch: null,
         layer,
@@ -871,8 +874,16 @@ export class QueryGatewayService {
     for (const { row } of supportRows) {
       const vouch = vouchesByUri.get(bounded(term(row, 'vouch'), 1_000));
       const target = bounded(term(row, 'target'), 1_000);
-      if (!vouch || !SAFE_IRI.test(target) || vouch.evidence.includes(target)) continue;
-      vouch.evidence.push(target);
+      if (!vouch || !SAFE_IRI.test(target)) continue;
+      if (!vouch.evidence.includes(target)) vouch.evidence.push(target);
+      const evidenceSource = optionalTerm(row, 'evidenceSource');
+      if (
+        evidenceSource &&
+        NOSTR_EVENT_URI.test(evidenceSource) &&
+        !vouch.evidenceSources.includes(evidenceSource)
+      ) {
+        vouch.evidenceSources.push(evidenceSource);
+      }
     }
 
     type LifecycleAction = {

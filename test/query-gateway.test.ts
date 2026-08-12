@@ -308,7 +308,7 @@ describe('query gateway request contract', () => {
     const subject = 'bb'.repeat(32);
     dkg.bindingResolver = ({ view, sparql }) => {
       if (view === 'verifiable-memory') return [];
-      if (sparql.includes('trust/Vouch')) {
+      if (sparql.includes('trust/Vouch>')) {
         return [
           {
             vouch: binding('urn:buzz-dkg:vouch:1'),
@@ -381,6 +381,7 @@ describe('query gateway request contract', () => {
           at: Date.parse('2026-07-30T13:00:00Z') / 1_000,
           sourceEvent: `urn:nostr:event:${'44'.repeat(32)}`,
           evidence: [],
+          evidenceSources: [],
           lifecycleEvent: null,
           replacementVouch: null,
           layer: 'SWM',
@@ -519,7 +520,7 @@ describe('query gateway request contract', () => {
     });
     dkg.bindingResolver = ({ view, sparql }) => {
       if (view === 'verifiable-memory') return [];
-      if (sparql.includes('trust/Vouch')) {
+      if (sparql.includes('trust/Vouch>')) {
         return [
           vouch(1, REQUESTER, subject),
           vouch(2, REQUESTER, intermediary),
@@ -605,13 +606,15 @@ describe('query gateway request contract', () => {
       note: binding(`Evidence note ${id}`),
       status: binding('active'),
       at: binding(`2026-07-${20 + id}T13:00:00Z`),
-      source: binding(`urn:nostr:event:${String(id).repeat(64)}`),
+      ...trustSourceBindings(String(id).repeat(64), issuer, target),
     });
     const sharedEvidence = 'urn:dkg:github:commit:github.com/acme/api/abc1234';
+    const relatedEvidence = 'urn:dkg:github:issue:github.com/acme/api/17';
     const independentEvidence = 'urn:dkg:github:review:github.com/acme/api/42';
+    const sharedEvidenceSource = `urn:nostr:event:${'ee'.repeat(32)}`;
     dkg.bindingResolver = ({ view, sparql }) => {
       if (view === 'verifiable-memory') return [];
-      if (sparql.includes('trust/Vouch')) {
+      if (sparql.includes('trust/Vouch>')) {
         return [
           vouch(1, REQUESTER, subject),
           vouch(2, REQUESTER, intermediary),
@@ -625,16 +628,19 @@ describe('query gateway request contract', () => {
             vouch: binding('urn:buzz-dkg:vouch:1'),
             reference: binding('urn:buzz-dkg:reference:1'),
             target: binding(sharedEvidence),
+            evidenceSource: binding(sharedEvidenceSource),
           },
           {
             vouch: binding('urn:buzz-dkg:vouch:3'),
             reference: binding('urn:buzz-dkg:reference:3'),
-            target: binding(sharedEvidence),
+            target: binding(relatedEvidence),
+            evidenceSource: binding(sharedEvidenceSource),
           },
           {
             vouch: binding('urn:buzz-dkg:vouch:4'),
             reference: binding('urn:buzz-dkg:reference:4'),
             target: binding(independentEvidence),
+            evidenceSource: binding(`urn:nostr:event:${'ff'.repeat(32)}`),
           },
         ];
       }
@@ -720,6 +726,9 @@ describe('query gateway request contract', () => {
     const evidence = (response.result as { evidence: Array<{ uri: string; status: string }> })
       .evidence;
     expect(evidence.map(({ uri }) => uri)).not.toContain('urn:buzz-dkg:vouch:4');
+    const lifecycleQuery = dkg.calls.find((call) => call.sparql?.includes('trust/targetVouch'));
+    expect(lifecycleQuery?.sparql).toContain(`a <http://dkg.io/ontology/trust/VouchLifecycle>`);
+    expect(lifecycleQuery?.sparql).toContain(`<http://dkg.io/ontology/trust/scope> "channel"`);
   });
 
   it('does not promote SWM work evidence when only a vouch reaches VM', async () => {
@@ -727,7 +736,7 @@ describe('query gateway request contract', () => {
     const issuer = 'aa'.repeat(32);
     const subject = 'bb'.repeat(32);
     dkg.bindingResolver = ({ view, sparql }) => {
-      if (sparql.includes('trust/Vouch')) {
+      if (sparql.includes('trust/Vouch>')) {
         return view === 'verifiable-memory'
           ? [
               {

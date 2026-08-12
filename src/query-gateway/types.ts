@@ -147,6 +147,8 @@ export interface TrustVouchSummary {
   sourceEvent: string | null;
   /** Explicit evidence roots selected and signed by the vouch issuer. */
   evidence: string[];
+  /** Signed Nostr records from which the evidence targets were projected. */
+  evidenceSources: string[];
   /** Signed lifecycle source that most recently changed this vouch, when any. */
   lifecycleEvent: string | null;
   replacementVouch: string | null;
