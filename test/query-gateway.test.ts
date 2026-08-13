@@ -294,6 +294,14 @@ describe('query gateway configuration', () => {
       loadQueryGatewayConfig({
         BDI_QUERY_GATEWAY_ENABLED: 'true',
         BDI_QUERY_GATEWAY_TOKEN: TOKEN,
+        BDI_QUERY_GATEWAY_TIMEOUT_MS: '120000',
+        BDI_QUERY_GATEWAY_DKG_TIMEOUT_MS: '60000',
+      }),
+    ).toMatchObject({ operationTimeoutMs: 120_000, dkgTimeoutMs: 60_000 });
+    expect(
+      loadQueryGatewayConfig({
+        BDI_QUERY_GATEWAY_ENABLED: 'true',
+        BDI_QUERY_GATEWAY_TOKEN: TOKEN,
       }),
     ).toMatchObject({
       maxDkgConcurrent: 1,
