@@ -854,6 +854,33 @@ describe('automatic channel memory lifecycle', () => {
     expect(dkg.kas.get(first.kaName)?.writes).toBe(1);
   });
 
+  it('deduplicates a newly signed proposal over the same canonical evidence set', async () => {
+    const { daemon, dkg } = setup();
+    const request = envelope();
+    const first = await daemon.submitAgentMemory(request);
+    await daemon.drain();
+
+    const retry = {
+      ...request,
+      proposalEvent: signed({
+        kind: DKG_MEMORY_PROPOSAL_KIND,
+        created_at: request.proposalEvent.created_at + 30,
+        tags: request.proposalEvent.tags,
+        content: request.proposalEvent.content,
+      }),
+    };
+    expect(retry.proposalEvent.id).not.toBe(request.proposalEvent.id);
+
+    const duplicate = await daemon.submitAgentMemory(retry);
+    expect(duplicate).toMatchObject({
+      outcome: 'duplicate',
+      proposalEventId: request.proposalEvent.id,
+      kaName: first.kaName,
+      digest: first.digest,
+    });
+    expect(dkg.kas.get(first.kaName)?.writes).toBe(1);
+  });
+
   it('recovers a proposal interrupted after finalize without repeating completed steps', async () => {
     const { daemon, dkg } = setup();
     dkg.failShareOnce = new Error('transient share failure');

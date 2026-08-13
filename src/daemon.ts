@@ -6,6 +6,7 @@ import {
   deterministicDistiller,
   kaNameForDigest,
   snapshotSourceSet,
+  sourceSetDigest,
   type Distiller,
 } from './distill/deterministic.ts';
 import { answerGrounded } from './ask/grounded.ts';
@@ -399,29 +400,49 @@ export class Daemon {
         'channel is not configured and automatic Context Graph provisioning is disabled',
       );
     }
-    this.registry.saveAgentMemoryEnvelope(envelope.proposalEvent.id, envelope);
+    const evidenceDigest = sourceSetDigest(envelope.sourceEvents);
+    const reservation = this.registry.reserveAgentMemoryEnvelope(
+      envelope.proposalEvent.id,
+      envelope.channelId,
+      evidenceDigest,
+      envelope,
+    );
+    const acceptedProposalEventId = reservation.proposalEventId;
+    const accepted =
+      acceptedProposalEventId === envelope.proposalEvent.id
+        ? { envelope, compiled }
+        : (() => {
+            const stored = this.registry.agentMemoryEnvelope(acceptedProposalEventId);
+            if (!stored)
+              throw new Error(`agent memory envelope ${acceptedProposalEventId} is missing`);
+            const original = parseAgentMemoryEnvelope(stored);
+            return {
+              envelope: original.envelope,
+              compiled: compileAgentMemory(original.envelope, original.proposal),
+            };
+          })();
     this.registry.bindChannel(envelope.channelId, contextGraphId);
-    let op = this.registry.opByTrigger(envelope.proposalEvent.id);
-    const duplicate = !!op;
+    let op = this.registry.opByTrigger(acceptedProposalEventId);
+    const duplicate = reservation.duplicate || !!op;
     if (!op) {
       op = this.registry.claimTrigger({
-        triggerEventId: envelope.proposalEvent.id,
+        triggerEventId: acceptedProposalEventId,
         triggerKind: DKG_MEMORY_PROPOSAL_KIND,
         channelId: envelope.channelId,
         contextGraphId,
-        rootEventId: envelope.sourceEvents[0]!.id,
-        digest: compiled.digest,
-        kaName: kaNameForDigest(compiled.digest),
-        rootUri: compiled.rootUri,
-        title: compiled.title,
+        rootEventId: accepted.envelope.sourceEvents[0]!.id,
+        digest: accepted.compiled.digest,
+        kaName: kaNameForDigest(accepted.compiled.digest),
+        rootUri: accepted.compiled.rootUri,
+        title: accepted.compiled.title,
       });
-      if (!op) op = this.registry.opByTrigger(envelope.proposalEvent.id);
+      if (!op) op = this.registry.opByTrigger(acceptedProposalEventId);
     }
     if (!op) throw new Error('could not claim agent memory proposal');
     if (
       op.channelId !== envelope.channelId ||
       op.contextGraphId !== contextGraphId ||
-      op.digest !== compiled.digest
+      op.digest !== accepted.compiled.digest
     ) {
       throw new IntegrationApiError(
         409,
@@ -441,7 +462,7 @@ export class Daemon {
       result: {
         ok: true,
         outcome: duplicate ? 'duplicate' : 'accepted',
-        proposalEventId: envelope.proposalEvent.id,
+        proposalEventId: acceptedProposalEventId,
         channelId: envelope.channelId,
         requesterPubkey: envelope.requesterPubkey,
         contextGraphId,

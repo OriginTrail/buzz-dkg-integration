@@ -44,6 +44,22 @@ describe('registry', () => {
     expect(r.claimTrigger(opFields(hexId('t1')))).toBeNull();
   });
 
+  it('reserves a channel evidence set across newly signed proposal events', () => {
+    const r = new Registry(':memory:');
+    const first = r.reserveAgentMemoryEnvelope('proposal-a', 'chan-a', 'evidence-a', {
+      proposal: 'a',
+    });
+    const retry = r.reserveAgentMemoryEnvelope('proposal-b', 'chan-a', 'evidence-a', {
+      proposal: 'b',
+    });
+    const otherChannel = r.reserveAgentMemoryEnvelope('proposal-c', 'chan-b', 'evidence-a', {
+      proposal: 'c',
+    });
+    expect(first).toEqual({ proposalEventId: 'proposal-a', duplicate: false });
+    expect(retry).toEqual({ proposalEventId: 'proposal-a', duplicate: true });
+    expect(otherChannel).toEqual({ proposalEventId: 'proposal-c', duplicate: false });
+  });
+
   it('enforces forward-only state transitions', () => {
     const r = new Registry(':memory:');
     const op = r.claimTrigger(opFields(hexId('t2')))!;
