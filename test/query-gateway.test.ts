@@ -164,12 +164,13 @@ function binding(value: string): { value: string } {
   return { value };
 }
 
-function trustSourceBindings(eventId: string, issuer: string, subject: string) {
+function trustSourceBindings(eventId: string, issuer: string, subject: string, content = '') {
   return {
     source: binding(`urn:nostr:event:${eventId}`),
     sourceKind: binding('1985'),
     sourceAuthor: binding(`urn:nostr:pubkey:${issuer}`),
     sourceSig: binding('ab'.repeat(64)),
+    sourceContent: binding(content),
     sourceTags: binding(
       JSON.stringify([
         ['h', CHANNEL],
@@ -324,7 +325,12 @@ describe('query gateway request contract', () => {
             note: binding('Careful reviewer who found the rollback edge case.'),
             status: binding('active'),
             at: binding('2026-07-30T13:00:00Z'),
-            ...trustSourceBindings('44'.repeat(32), issuer, subject),
+            ...trustSourceBindings(
+              '44'.repeat(32),
+              issuer,
+              subject,
+              'Careful reviewer who found the rollback edge case.',
+            ),
           },
         ];
       }
@@ -406,6 +412,42 @@ describe('query gateway request contract', () => {
     });
   });
 
+  it('does not score a projection whose explanation differs from signed source content', async () => {
+    const dkg = new GatewayDkg();
+    const issuer = 'aa'.repeat(32);
+    const subject = 'bb'.repeat(32);
+    dkg.bindingResolver = ({ view, sparql }) =>
+      view === 'shared-working-memory' && sparql.includes('trust/Vouch')
+        ? [
+            {
+              vouch: binding('urn:buzz-dkg:vouch:tampered-note'),
+              issuer: binding(`urn:nostr:pubkey:${issuer}`),
+              subject: binding(`urn:nostr:pubkey:${subject}`),
+              note: binding('Altered graph explanation.'),
+              status: binding('active'),
+              ...trustSourceBindings(
+                '55'.repeat(32),
+                issuer,
+                subject,
+                'The explanation that was actually signed.',
+              ),
+            },
+          ]
+        : [];
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const network = await service.execute(body('trust_network'));
+    expect(network.result).toMatchObject({
+      vouches: [{ uri: 'urn:buzz-dkg:vouch:tampered-note', sourceEvent: null }],
+    });
+    const reputation = await service.execute(body('reputation_summary', { pubkey: subject }));
+    expect(reputation.result).toMatchObject({
+      score: 0,
+      signals: { independentVouchers: 0 },
+      evidence: [],
+    });
+  });
+
   it('reports partial evidence instead of hiding fixed query truncation', async () => {
     const dkg = new GatewayDkg();
     const rows = Array.from({ length: 201 }, (_, index) => ({
@@ -464,8 +506,13 @@ describe('query gateway request contract', () => {
       status: binding('active'),
       at: binding(`2026-07-${20 + id}T13:00:00Z`),
       ...(proven
-        ? trustSourceBindings(String(id).repeat(64), issuer, target)
-        : trustSourceBindings(String(id).repeat(64), issuer, '00'.repeat(32))),
+        ? trustSourceBindings(String(id).repeat(64), issuer, target, `Evidence note ${id}`)
+        : trustSourceBindings(
+            String(id).repeat(64),
+            issuer,
+            '00'.repeat(32),
+            `Evidence note ${id}`,
+          )),
     });
     dkg.bindingResolver = ({ view, sparql }) => {
       if (view === 'verifiable-memory') return [];

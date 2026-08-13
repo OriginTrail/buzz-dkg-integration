@@ -84,12 +84,18 @@ function trustVouchStatus(value: string | null): TrustVouchStatus {
   return value === 'active' || value === 'revoked' || value === 'superseded' ? value : 'unknown';
 }
 
-function sourceMatchesVouch(row: BindingRow, issuer: string, subject: string): boolean {
+function sourceMatchesVouch(
+  row: BindingRow,
+  issuer: string,
+  subject: string,
+  note: string | null,
+): boolean {
   const source = optionalTerm(row, 'source');
   const sourceAuthor = optionalTerm(row, 'sourceAuthor');
   const sourceTags = optionalTerm(row, 'sourceTags');
   const sourceKind = optionalTerm(row, 'sourceKind');
   const sourceSig = optionalTerm(row, 'sourceSig');
+  const sourceContent = optionalTerm(row, 'sourceContent');
   if (
     !source ||
     !NOSTR_EVENT_URI.test(source) ||
@@ -97,7 +103,9 @@ function sourceMatchesVouch(row: BindingRow, issuer: string, subject: string): b
     sourceKind !== '1985' ||
     sourceSig === null ||
     !HEX_SIGNATURE.test(sourceSig) ||
-    !sourceTags
+    !sourceTags ||
+    note === null ||
+    sourceContent !== note
   ) {
     return false;
   }
@@ -119,7 +127,8 @@ export async function queryTrustNetwork(
       `SELECT ?pk (COUNT(DISTINCT ?record) AS ?n) (MAX(?at) AS ?latest)
        WHERE { GRAPH ?g {
          ?memory <${MEMORY}contains> ?record .
-         ?record a ?kind ; <${PROV}wasAttributedTo> ?agent ; <${PROV}wasDerivedFrom> ?source .
+         ?record a ?kind ; <${PROV}wasDerivedFrom> ?source .
+         ?source <${PROV}wasAttributedTo> ?agent .
          VALUES ?kind {
            <${MEMORY}Claim> <${MEMORY}Question> <${DECISIONS}Decision> <${TASKS}Task>
            <${GITHUB}PullRequest> <${GITHUB}Issue> <${GITHUB}Commit> <${GITHUB}Review>
@@ -132,7 +141,7 @@ export async function queryTrustNetwork(
     ),
     layered(
       `SELECT DISTINCT ?vouch ?issuer ?subject ?note ?status ?at ?source
-        ?sourceKind ?sourceAuthor ?sourceTags ?sourceSig WHERE { GRAPH ?g {
+        ?sourceKind ?sourceAuthor ?sourceTags ?sourceSig ?sourceContent WHERE { GRAPH ?g {
          ?vouch a <${TRUST}Vouch> ; <${TRUST}issuer> ?issuer ;
            <${TRUST}subject> ?subject ; <${TRUST}scope> "channel" .
          OPTIONAL { ?vouch <${SCHEMA}description> ?note }
@@ -140,7 +149,7 @@ export async function queryTrustNetwork(
          OPTIONAL {
            ?vouch <${PROV}wasDerivedFrom> ?source .
            ?source a <${NOSTR}Event> ; <${NOSTR}kind> ?sourceKind ;
-             <${NOSTR}tags> ?sourceTags ; <${NOSTR}sig> ?sourceSig ;
+             <${NOSTR}tags> ?sourceTags ; <${NOSTR}sig> ?sourceSig ; <${NOSTR}content> ?sourceContent ;
              <${PROV}wasAttributedTo> ?sourceAuthor .
            OPTIONAL { ?source <${NOSTR}createdAt> ?at }
          }
@@ -198,14 +207,15 @@ export async function queryTrustNetwork(
     const subject = pubkeyFromEntity(term(row, 'subject'));
     if (!uri || !issuer || !subject || issuer === subject) continue;
     const source = optionalTerm(row, 'source');
+    const note = optionalTerm(row, 'note');
     const candidate: TrustVouchSummary = {
       uri,
       issuer,
       subject,
-      note: optionalTerm(row, 'note') ? bounded(optionalTerm(row, 'note')!, 1_000) : null,
+      note: note ? bounded(note, 1_000) : null,
       status: trustVouchStatus(optionalTerm(row, 'status')),
       at: dateTimestamp(row.at),
-      sourceEvent: sourceMatchesVouch(row, issuer, subject) ? bounded(source!, 1_000) : null,
+      sourceEvent: sourceMatchesVouch(row, issuer, subject, note) ? bounded(source!, 1_000) : null,
       layer,
     };
     const current = vouchesByUri.get(uri);
