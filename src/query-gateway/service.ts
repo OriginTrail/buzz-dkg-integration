@@ -30,6 +30,13 @@ import type {
   SubgraphTriplesResult,
   VisibleMemoryLayer,
 } from './types.ts';
+import { QueryExecutionPolicy, type QueryCacheStatus } from './query-execution-policy.ts';
+import {
+  summarizeChannelMemoryLayer,
+  type ChannelMemoryLayerSummary,
+} from './channel-memory-summary.ts';
+
+export type { QueryCacheStatus } from './query-execution-policy.ts';
 
 type EnabledGatewayConfig = Extract<QueryGatewayConfig, { enabled: true }>;
 type BindingRow = SparqlBindingRow;
@@ -57,7 +64,6 @@ const MAX_DKG_ROWS = 2_500;
 const MAX_GRAPH_NODES = 1_200;
 const MAX_GRAPH_EDGES = 2_400;
 const MAX_TRIPLES = 1_000;
-
 const BUZZ = 'https://w3id.org/buzz-dkg/buzz#';
 const NOSTR = 'https://w3id.org/buzz-dkg/nostr#';
 const PROV = 'http://www.w3.org/ns/prov#';
@@ -273,11 +279,6 @@ function bounded(value: string, max: number): string {
   return value.length <= max ? value : value.slice(0, max);
 }
 
-function count(value: unknown): number {
-  const parsed = Number(bindingTerm(value));
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
-}
-
 function dateTimestamp(value: unknown): number | null {
   if (value === undefined) return null;
   const parsed = Date.parse(bindingTerm(value));
@@ -288,21 +289,11 @@ function safeDerivedIri(value: string): boolean {
   return SAFE_IRI.test(value);
 }
 
-export function withGatewayTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new IntegrationApiError(504, 'gateway_timeout', 'operation timed out')),
-      timeoutMs,
-    );
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer) clearTimeout(timer);
-  });
-}
+type QueryExecutionObserver = (status: QueryCacheStatus) => void;
 
 export class QueryGatewayService {
   readonly #resolveContextGraph: (channelId: string) => string | null | Promise<string | null>;
+  readonly #executionPolicy: QueryExecutionPolicy<QueryGatewaySuccess>;
   readonly dkg: DkgClient;
   readonly config: EnabledGatewayConfig;
 
@@ -314,9 +305,18 @@ export class QueryGatewayService {
     this.dkg = dkg;
     this.config = config;
     this.#resolveContextGraph = resolveContextGraph;
+    this.#executionPolicy = new QueryExecutionPolicy(config);
   }
 
-  async execute(input: unknown): Promise<QueryGatewaySuccess> {
+  loadSnapshot(): ReturnType<QueryExecutionPolicy<QueryGatewaySuccess>['snapshot']> {
+    return this.#executionPolicy.snapshot();
+  }
+
+  invalidateChannel(channelId: string): void {
+    this.#executionPolicy.invalidateChannel(channelId);
+  }
+
+  async execute(input: unknown, observe?: QueryExecutionObserver): Promise<QueryGatewaySuccess> {
     const request = parseQueryGatewayRequest(input);
     const cg = await this.#resolveContextGraph(request.channelId);
     if (!cg) {
@@ -326,17 +326,30 @@ export class QueryGatewayService {
         'channel is not configured for DKG queries',
       );
     }
-    const result = await withGatewayTimeout(
-      this.dispatch(cg, request),
-      this.config.operationTimeoutMs,
-    );
-    return {
-      ok: true,
+    return this.#executionPolicy.execute({
       channelId: request.channelId,
-      cg,
-      operation: request.operation,
-      result,
-    };
+      keyParts: [
+        cg,
+        request.operation,
+        'scope' in request ? request.scope : null,
+        request.arguments,
+      ],
+      observe,
+      work: async () => {
+        const result = await this.dispatch(cg, request);
+        const value: QueryGatewaySuccess = {
+          ok: true,
+          channelId: request.channelId,
+          cg,
+          operation: request.operation,
+          result,
+        };
+        if (Buffer.byteLength(JSON.stringify(value), 'utf8') > this.config.maxResultBytes) {
+          throw new IntegrationApiError(502, 'result_too_large', 'query result exceeds the limit');
+        }
+        return value;
+      },
+    });
   }
 
   private async dispatch(cg: string, request: QueryGatewayRequest): Promise<QueryGatewayResult> {
@@ -372,7 +385,9 @@ export class QueryGatewayService {
           maxQueryBytes: this.config.maxQueryBytes,
           dkgTimeoutMs: this.config.dkgTimeoutMs,
           query: async (view, sparql, timeoutMs) =>
-            this.dkg.query({ contextGraphId: cg, view, sparql }, timeoutMs),
+            this.#executionPolicy.read(() =>
+              this.dkg.query({ contextGraphId: cg, view, sparql }, timeoutMs),
+            ),
         });
     }
   }
@@ -384,9 +399,11 @@ export class QueryGatewayService {
     subGraphName?: string,
     timeoutMs = this.config.dkgTimeoutMs,
   ): Promise<{ bindings: BindingRow[] }> {
-    const response = await this.dkg.query(
-      { contextGraphId: cg, view, sparql, ...(subGraphName ? { subGraphName } : {}) },
-      timeoutMs,
+    const response = await this.#executionPolicy.read(() =>
+      this.dkg.query(
+        { contextGraphId: cg, view, sparql, ...(subGraphName ? { subGraphName } : {}) },
+        timeoutMs,
+      ),
     );
     return { bindings: normalizeBindingQueryResult(response) };
   }
@@ -417,80 +434,87 @@ export class QueryGatewayService {
     return batches.flat();
   }
 
-  private async layerOverview(
+  private async channelMemoryLayer(
     cg: string,
     view: VisibleView,
-  ): Promise<{ graph: string; label: string }[]> {
+    layer: VisibleMemoryLayer,
+  ): Promise<ChannelMemoryLayerSummary> {
     const rows = await this.query(
       cg,
       view,
-      `SELECT ?g (SAMPLE(?n) AS ?name) WHERE {
-         GRAPH ?g { ?s ?p ?o . OPTIONAL { ?s <${SCHEMA}name> ?n } }
-       } GROUP BY ?g LIMIT 200`,
+      `SELECT DISTINCT ?rowType ?g ?name ?s ?digest ?t ?pk ?n ?latest WHERE {
+        {
+          {
+            SELECT DISTINCT ?g WHERE {
+              GRAPH ?g { ?graphSubject ?graphPredicate ?graphObject }
+            } LIMIT 201
+          }
+          BIND("graph" AS ?rowType)
+        }
+        UNION
+        {
+          {
+            SELECT DISTINCT ?g ?s ?name ?digest ?t WHERE {
+              GRAPH ?g {
+                ?s a <${BUZZ}DecisionCluster> .
+                OPTIONAL { ?s <${SCHEMA}name> ?name }
+                OPTIONAL { ?s <${BUZZ}sourceSetDigest> ?digest }
+                OPTIONAL { ?s <${PROV}endedAtTime> ?t }
+              }
+            } LIMIT 201
+          }
+          BIND("decision" AS ?rowType)
+        }
+        UNION
+        {
+          {
+            SELECT ?g ?pk (COUNT(DISTINCT ?event) AS ?n) (MAX(?eventAt) AS ?latest) WHERE {
+              GRAPH ?g {
+                ?event <${PROV}wasAttributedTo> ?agent .
+                ?agent <${NOSTR}pubkeyHex> ?pk .
+                OPTIONAL { ?event <${NOSTR}createdAt> ?eventAt }
+              }
+            } GROUP BY ?g ?pk LIMIT 201
+          }
+          BIND("contributor" AS ?rowType)
+        }
+      } LIMIT 1000`,
     );
-    const seen = new Set<string>();
-    const out: { graph: string; label: string }[] = [];
-    for (const row of rows) {
-      const graph = bounded(term(row, 'g'), 1_000);
-      if (!graph || seen.has(graph)) continue;
-      seen.add(graph);
-      const label = optionalTerm(row, 'name') ?? graph.split('/').slice(-2).join('/');
-      out.push({ graph, label: bounded(label, 200) });
-    }
-    return out;
+    return summarizeChannelMemoryLayer(layer, rows);
   }
 
   private async channelMemory(cg: string): Promise<ChannelMemoryResult> {
-    const decisionsQuery = `SELECT ?s ?name ?digest ?t WHERE { GRAPH ?g {
-      ?s a <${BUZZ}DecisionCluster> .
-      OPTIONAL { ?s <${SCHEMA}name> ?name }
-      OPTIONAL { ?s <${BUZZ}sourceSetDigest> ?digest }
-      OPTIONAL { ?s <${PROV}endedAtTime> ?t }
-    } } LIMIT 200`;
-    const contributorsQuery = `SELECT ?pk (COUNT(DISTINCT ?event) AS ?n) (MAX(?at) AS ?latest)
-      WHERE { GRAPH ?g {
-        ?event <${PROV}wasAttributedTo> ?agent .
-        ?agent <${NOSTR}pubkeyHex> ?pk .
-        OPTIONAL { ?event <${NOSTR}createdAt> ?at }
-      } } GROUP BY ?pk ORDER BY DESC(?n) LIMIT 50`;
-    const [swm, vm, decisionRows, contributorRows, subGraphResponse] = await Promise.all([
-      this.layerOverview(cg, 'shared-working-memory'),
-      this.layerOverview(cg, 'verifiable-memory'),
-      this.layered(cg, decisionsQuery),
-      this.layered(cg, contributorsQuery),
-      this.dkg.listSubGraphs(cg, this.config.dkgTimeoutMs),
+    const [summaries, subGraphResponse] = await Promise.all([
+      Promise.all(VIEWS.map(([view, layer]) => this.channelMemoryLayer(cg, view, layer))),
+      this.#executionPolicy.read(() => this.dkg.listSubGraphs(cg, this.config.dkgTimeoutMs)),
     ]);
 
-    const decisionsByUri = new Map<string, DecisionSummary>();
-    for (const { row, layer } of decisionRows) {
-      const uri = bounded(term(row, 's'), 1_000);
-      if (!uri) continue;
-      const current = decisionsByUri.get(uri);
-      const candidate: DecisionSummary = {
-        uri,
-        name: optionalTerm(row, 'name') ? bounded(optionalTerm(row, 'name')!, 200) : null,
-        digest: optionalTerm(row, 'digest') ? bounded(optionalTerm(row, 'digest')!, 256) : null,
-        at: optionalTerm(row, 't') ? bounded(optionalTerm(row, 't')!, 128) : null,
-        layer,
-      };
-      if (!current || LAYER_RANK[layer] > LAYER_RANK[current.layer]) {
-        decisionsByUri.set(uri, candidate);
-      }
-    }
+    const layerGraphs: Record<VisibleMemoryLayer, { graph: string; label: string }[]> = {
+      SWM: [],
+      VM: [],
+    };
 
+    const decisionsByUri = new Map<string, DecisionSummary>();
     const contributorsByPubkey = new Map<string, ContributorSummary>();
-    for (const { row, layer } of contributorRows) {
-      const pubkey = term(row, 'pk').toLowerCase();
-      if (!HEX_PUBKEY.test(pubkey)) continue;
-      const events = count(row.n);
-      const latest = dateTimestamp(row.latest);
-      const current = contributorsByPubkey.get(pubkey);
-      if (!current) {
-        contributorsByPubkey.set(pubkey, { pubkey, events, latest, layer });
-      } else {
-        current.events = Math.max(current.events, events);
-        current.latest = Math.max(current.latest ?? 0, latest ?? 0) || null;
-        if (LAYER_RANK[layer] > LAYER_RANK[current.layer]) current.layer = layer;
+    for (const summary of summaries) {
+      layerGraphs[summary.layer] = summary.graphs;
+      for (const candidate of summary.contributors) {
+        const current = contributorsByPubkey.get(candidate.pubkey);
+        if (!current) {
+          contributorsByPubkey.set(candidate.pubkey, candidate);
+        } else {
+          current.events = Math.max(current.events, candidate.events);
+          current.latest = Math.max(current.latest ?? 0, candidate.latest ?? 0) || null;
+          if (LAYER_RANK[candidate.layer] > LAYER_RANK[current.layer]) {
+            current.layer = candidate.layer;
+          }
+        }
+      }
+      for (const candidate of summary.decisions) {
+        const current = decisionsByUri.get(candidate.uri);
+        if (!current || LAYER_RANK[candidate.layer] > LAYER_RANK[current.layer]) {
+          decisionsByUri.set(candidate.uri, candidate);
+        }
       }
     }
 
@@ -512,7 +536,7 @@ export class QueryGatewayService {
       }));
 
     return {
-      layers: { WM: null, SWM: swm, VM: vm },
+      layers: { WM: null, SWM: layerGraphs.SWM, VM: layerGraphs.VM },
       decisions: [...decisionsByUri.values()],
       contributors: [...contributorsByPubkey.values()].sort(
         (a, b) => b.events - a.events || a.pubkey.localeCompare(b.pubkey),

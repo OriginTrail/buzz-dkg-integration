@@ -124,13 +124,16 @@ export interface AgentMemoryIngestResult {
   ok: true;
   /** `accepted` is durably queued; `duplicate` reuses the existing operation. */
   outcome: 'accepted' | 'duplicate';
+  /** Opaque stable poll handle; currently the signed proposal event id. */
+  operationId: string;
   proposalEventId: string;
   channelId: string;
   requesterPubkey: string;
   contextGraphId: string;
   kaName: string;
   digest: string;
-  state: OpState;
+  /** Public readiness state; internal lifecycle phases never leak to clients. */
+  state: 'processing' | 'stored';
 }
 
 /** Operation lifecycle for one trigger → one KA → one receipt. Forward-only. */
@@ -199,6 +202,14 @@ export type QueryGatewayConfig =
       operationTimeoutMs: number;
       dkgTimeoutMs: number;
       maxConcurrent: number;
+      /** Global ceiling for reads admitted to the DKG API/triple store. */
+      maxDkgConcurrent: number;
+      /** Bounded wait queue behind the global DKG read ceiling. */
+      maxDkgQueue: number;
+      /** Successful query result lifetime; zero keeps only single-flight deduplication. */
+      cacheTtlMs: number;
+      /** Hard bound on community-scoped cached results. */
+      maxCacheEntries: number;
     };
 
 /** Normalized, non-empty labels Buzz may render for a service mention. */

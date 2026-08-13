@@ -5,7 +5,7 @@ import type { DkgClient } from '../dkg/client.ts';
 import { IntegrationApiError } from '../errors.ts';
 import { logger } from '../log.ts';
 import type { AgentMemoryIngestResult, ChannelBinding, QueryGatewayConfig } from '../types.ts';
-import { parseQueryGatewayRequest, QueryGatewayService } from './service.ts';
+import { parseQueryGatewayRequest, type QueryCacheStatus, QueryGatewayService } from './service.ts';
 
 type EnabledGatewayConfig = Extract<QueryGatewayConfig, { enabled: true }>;
 type GatewayLogger = Pick<typeof logger, 'info' | 'warn'>;
@@ -118,6 +118,7 @@ export class QueryGateway {
       log?: GatewayLogger;
       resolveContextGraph?: (channelId: string) => string | null | Promise<string | null>;
       submitAgentMemory?: (raw: unknown) => AgentMemoryIngestResult;
+      subscribeAgentMemoryStored?: (listener: (channelId: string) => void) => () => void;
     } = {},
   ) {
     this.config = config;
@@ -132,6 +133,9 @@ export class QueryGateway {
       dependencies.resolveContextGraph ?? ((channelId: string) => mapped.get(channelId) ?? null);
     this.#service = new QueryGatewayService(resolveContextGraph, dkg, config);
     this.#submitAgentMemory = dependencies.submitAgentMemory;
+    this.#unsubscribeAgentMemoryStored = dependencies.subscribeAgentMemoryStored?.((channelId) =>
+      this.#service.invalidateChannel(channelId),
+    );
     this.#log = dependencies.log ?? logger;
     this.#server = createServer((req, res) => void this.handle(req, res));
     this.#server.maxHeadersCount = 32;
@@ -142,6 +146,7 @@ export class QueryGateway {
   }
 
   readonly #submitAgentMemory: ((raw: unknown) => AgentMemoryIngestResult) | undefined;
+  readonly #unsubscribeAgentMemoryStored: (() => void) | undefined;
 
   get address(): AddressInfo | null {
     const address = this.#server.address();
@@ -165,6 +170,7 @@ export class QueryGateway {
   }
 
   async stop(): Promise<void> {
+    this.#unsubscribeAgentMemoryStored?.();
     if (!this.#server.listening) return;
     await new Promise<void>((resolve, reject) => {
       this.#server.close((error) => (error ? reject(error) : resolve()));
@@ -174,7 +180,9 @@ export class QueryGateway {
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     let audit: { channelId: string; operation: string; requesterPubkey: string } | null = null;
+    let cacheStatus: QueryCacheStatus | undefined;
     let counted = false;
+    const startedAt = performance.now();
     try {
       if (!isLoopback(req.socket.remoteAddress)) {
         throw new IntegrationApiError(403, 'loopback_required', 'loopback client required');
@@ -206,7 +214,9 @@ export class QueryGateway {
         throw new IntegrationApiError(415, 'unsupported_media_type', 'application/json required');
       }
       if (this.#inFlight >= this.config.maxConcurrent) {
-        throw new IntegrationApiError(429, 'busy', 'query gateway concurrency limit reached');
+        throw new IntegrationApiError(429, 'busy', 'query gateway concurrency limit reached', {
+          retryAfterSeconds: 2,
+        });
       }
       this.#inFlight += 1;
       counted = true;
@@ -222,8 +232,11 @@ export class QueryGateway {
           );
         }
         const memory = this.#submitAgentMemory(raw);
+        // A duplicate may already be confirmed. New processing writes invalidate
+        // through subscribeAgentMemoryStored only after SWM read-back succeeds.
+        if (memory.state === 'stored') this.#service.invalidateChannel(memory.channelId);
         output = memory;
-        responseStatus = memory.state === 'receipted' ? 200 : 202;
+        responseStatus = memory.state === 'stored' ? 200 : 202;
         audit = {
           channelId: memory.channelId,
           operation: 'agent_memory',
@@ -236,7 +249,9 @@ export class QueryGateway {
           operation: parsed.operation,
           requesterPubkey: parsed.requesterPubkey,
         };
-        output = await this.#service.execute(parsed);
+        output = await this.#service.execute(parsed, (status) => {
+          cacheStatus = status;
+        });
       }
       const body = JSON.stringify(output);
       const resultBytes = Buffer.byteLength(body, 'utf8');
@@ -248,23 +263,40 @@ export class QueryGateway {
         'content-length': String(resultBytes),
       });
       res.end(body);
-      this.#log.info('query gateway request served', { ...audit, resultBytes });
+      this.#log.info('query gateway request served', {
+        ...audit,
+        resultBytes,
+        durationMs: Math.round(performance.now() - startedAt),
+        ...(cacheStatus ? { cacheStatus } : {}),
+        ...this.#service.loadSnapshot(),
+      });
     } catch (error) {
       const failure = gatewayFailure(error);
       this.#log.warn('query gateway request rejected', {
         status: failure.status,
         code: failure.code,
+        durationMs: Math.round(performance.now() - startedAt),
+        ...(cacheStatus ? { cacheStatus } : {}),
+        ...this.#service.loadSnapshot(),
         ...(audit ?? {}),
       });
       if (!res.headersSent) {
-        responseJson(res, failure.status, {
-          ok: false,
-          error: {
-            code: failure.code,
-            message: failure.message,
-            ...(failure.details ? { details: failure.details } : {}),
+        const retryAfterSeconds = failure.details?.retryAfterSeconds;
+        responseJson(
+          res,
+          failure.status,
+          {
+            ok: false,
+            error: {
+              code: failure.code,
+              message: failure.message,
+              ...(failure.details ? { details: failure.details } : {}),
+            },
           },
-        });
+          typeof retryAfterSeconds === 'number'
+            ? { 'retry-after': String(Math.max(1, Math.ceil(retryAfterSeconds))) }
+            : {},
+        );
       } else {
         res.destroy();
       }

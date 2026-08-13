@@ -22,10 +22,12 @@ import { logger } from './log.ts';
 import { IntegrationApiError } from './errors.ts';
 import {
   DKG_MEMORY_PROPOSAL_KIND,
+  type AgentMemoryEnvelope,
   type AgentMemoryIngestResult,
   type DaemonConfig,
   type NostrEvent,
   type OpRecord,
+  type OpState,
 } from './types.ts';
 import {
   compileAgentMemory,
@@ -41,6 +43,45 @@ const MAINNET_CHAIN = 'base:8453';
  * out expensive scoped SPARQL. Generous for humans; caps a runaway loop. */
 const ASK_RATE_LIMIT_PER_MIN = 12;
 
+function publicAgentMemoryState(state: OpState): AgentMemoryIngestResult['state'] {
+  switch (state) {
+    case 'distilled':
+    case 'wm_written':
+    case 'finalized':
+    case 'shared':
+      return 'processing';
+    case 'receipted':
+    case 'publishing':
+    case 'published':
+    case 'vm_receipted':
+    case 'publish_unconfirmed':
+      return 'stored';
+    case 'failed':
+      throw new Error('failed agent memory operations do not have a success response');
+  }
+}
+
+function toAgentMemoryIngestResult(
+  op: OpRecord,
+  envelope: AgentMemoryEnvelope,
+  contextGraphId: string,
+  duplicate: boolean,
+  proposalEventId: string,
+): AgentMemoryIngestResult {
+  return {
+    ok: true,
+    outcome: duplicate ? 'duplicate' : 'accepted',
+    operationId: proposalEventId,
+    proposalEventId,
+    channelId: envelope.channelId,
+    requesterPubkey: envelope.requesterPubkey,
+    contextGraphId,
+    kaName: op.kaName,
+    digest: op.digest,
+    state: publicAgentMemoryState(op.state),
+  };
+}
+
 export class Daemon {
   readonly config: DaemonConfig;
   readonly registry: Registry;
@@ -51,6 +92,7 @@ export class Daemon {
   #chainId: string | undefined;
   readonly #graphProvisioning = new Map<string, Promise<string>>();
   readonly #scheduledAgentMemory = new Set<string>();
+  readonly #agentMemoryStoredListeners = new Set<(channelId: string) => void>();
 
   constructor(
     config: DaemonConfig,
@@ -85,6 +127,12 @@ export class Daemon {
   /** Wait for all queued events to be processed (tests + shutdown). */
   drain(): Promise<void> {
     return this.#queue;
+  }
+
+  /** Subscribe to SWM-confirmed memory writes so read caches can invalidate after commit. */
+  onAgentMemoryStored(listener: (channelId: string) => void): () => void {
+    this.#agentMemoryStoredListeners.add(listener);
+    return () => this.#agentMemoryStoredListeners.delete(listener);
   }
 
   /**
@@ -459,17 +507,13 @@ export class Daemon {
     }
     return {
       op,
-      result: {
-        ok: true,
-        outcome: duplicate ? 'duplicate' : 'accepted',
-        proposalEventId: acceptedProposalEventId,
-        channelId: envelope.channelId,
-        requesterPubkey: envelope.requesterPubkey,
+      result: toAgentMemoryIngestResult(
+        op,
+        envelope,
         contextGraphId,
-        kaName: op.kaName,
-        digest: op.digest,
-        state: op.state,
-      },
+        duplicate,
+        acceptedProposalEventId,
+      ),
     };
   }
 
@@ -530,6 +574,7 @@ export class Daemon {
         );
         if (!confirmed) throw new Error('SWM read-back did not confirm the agent memory digest');
         this.registry.transition(op.id, 'receipted', { receipt_event_id: null });
+        for (const listener of this.#agentMemoryStoredListeners) listener(op.channelId);
         logger.info('agent memory stored', {
           opId: op.id,
           proposalEventId: op.triggerEventId,

@@ -25,6 +25,10 @@ function gatewayConfig(overrides: Partial<EnabledConfig> = {}): EnabledConfig {
     operationTimeoutMs: 1_000,
     dkgTimeoutMs: 500,
     maxConcurrent: 4,
+    maxDkgConcurrent: 2,
+    maxDkgQueue: 32,
+    cacheTtlMs: 30_000,
+    maxCacheEntries: 256,
     ...overrides,
   };
 }
@@ -319,6 +323,7 @@ describe('semantic query execution', () => {
     });
 
     dkg.quads = null;
+    service.invalidateChannel(CHANNEL);
     await expect(service.execute(semanticBody(query, 'shared'))).rejects.toThrow(
       /invalid quads shape/,
     );

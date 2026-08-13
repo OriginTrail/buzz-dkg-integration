@@ -672,6 +672,10 @@ describe('automatic channel memory lifecycle', () => {
         operationTimeoutMs: 1_000,
         dkgTimeoutMs: 500,
         maxConcurrent: 4,
+        maxDkgConcurrent: 2,
+        maxDkgQueue: 32,
+        cacheTtlMs: 30_000,
+        maxCacheEntries: 256,
       },
     );
     await expect(
@@ -721,7 +725,8 @@ describe('automatic channel memory lifecycle', () => {
       channelId: CHANNEL,
       requesterPubkey: PUBKEY,
       contextGraphId: expectedGraph,
-      state: 'distilled',
+      operationId: request.proposalEvent.id,
+      state: 'processing',
     });
     await daemon.drain();
     expect(dkg.createdContextGraphs).toEqual([
@@ -751,7 +756,8 @@ describe('automatic channel memory lifecycle', () => {
 
     const replay = await daemon.submitAgentMemory(request);
     expect(replay.outcome).toBe('duplicate');
-    expect(replay.state).toBe('receipted');
+    expect(replay.operationId).toBe(result.operationId);
+    expect(replay.state).toBe('stored');
     expect(dkg.createdContextGraphs).toHaveLength(1);
     expect(dkg.kas.get(result.kaName)?.writes).toBe(1);
   });
@@ -784,15 +790,26 @@ describe('automatic channel memory lifecycle', () => {
 
   it('accepts durably before slow first-use graph provisioning starts', async () => {
     const { daemon, dkg } = setup();
+    const request = envelope();
+    const storedChannels: string[] = [];
+    daemon.onAgentMemoryStored((channelId) => storedChannels.push(channelId));
     let release!: () => void;
     dkg.createContextGraphGate = new Promise<void>((resolve) => {
       release = resolve;
     });
 
-    const accepted = daemon.submitAgentMemory(envelope());
-    expect(accepted).toMatchObject({ outcome: 'accepted', state: 'distilled' });
+    const accepted = daemon.submitAgentMemory(request);
+    expect(accepted).toMatchObject({ outcome: 'accepted', state: 'processing' });
+    expect(storedChannels).toEqual([]);
     expect(dkg.createContextGraphStarted).toBe(0);
     expect(dkg.lifecycleLog).toHaveLength(0);
+
+    const pendingPoll = daemon.submitAgentMemory(request);
+    expect(pendingPoll).toMatchObject({
+      outcome: 'duplicate',
+      operationId: accepted.operationId,
+      state: 'processing',
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(dkg.createContextGraphStarted).toBe(1);
@@ -800,6 +817,15 @@ describe('automatic channel memory lifecycle', () => {
     release();
     await daemon.drain();
     expect(daemon.registry.opByTrigger(accepted.proposalEventId)?.state).toBe('receipted');
+    expect(storedChannels).toEqual([CHANNEL]);
+
+    const storedPoll = daemon.submitAgentMemory(request);
+    expect(storedPoll).toMatchObject({
+      outcome: 'duplicate',
+      operationId: accepted.operationId,
+      state: 'stored',
+    });
+    expect(dkg.createdContextGraphs).toHaveLength(1);
   });
 
   it('treats reordered source events and JSON object keys as an idempotent retry', async () => {
@@ -884,7 +910,8 @@ describe('automatic channel memory lifecycle', () => {
   it('recovers a proposal interrupted after finalize without repeating completed steps', async () => {
     const { daemon, dkg } = setup();
     dkg.failShareOnce = new Error('transient share failure');
-    const accepted = await daemon.submitAgentMemory(envelope());
+    const request = envelope();
+    const accepted = await daemon.submitAgentMemory(request);
     await daemon.drain();
     expect(daemon.registry.opByTrigger(accepted.proposalEventId)?.state).toBe('finalized');
 
