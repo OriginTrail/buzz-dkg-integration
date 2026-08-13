@@ -1,4 +1,16 @@
 import { Parser } from '@traqula/parser-sparql-1-1';
+import type {
+  Expression,
+  Path,
+  Pattern,
+  Query,
+  QueryAsk,
+  QueryConstruct,
+  QuerySelect,
+  SparqlQuery,
+  SolutionModifierGroupBind,
+  TermVariable,
+} from '@traqula/rules-sparql-1-1';
 import { IntegrationApiError } from '../errors.ts';
 import type { SemanticQueryMetrics } from './types.ts';
 
@@ -16,8 +28,6 @@ export interface SemanticQueryPolicyResult {
   metrics: SemanticQueryMetrics;
 }
 
-type JsonObject = Record<string, unknown>;
-
 const parser = new Parser();
 const MAX_TRIPLES = 16;
 const MAX_OPTIONALS = 6;
@@ -25,10 +35,6 @@ const MAX_UNION_BRANCHES = 4;
 const MAX_SUBQUERIES = 0;
 const MAX_VALUES_ROWS = 50;
 const MAX_GRAPH_PATTERNS = 4;
-
-function object(value: unknown): value is JsonObject {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
 
 function policyError(
   status: number,
@@ -43,54 +49,30 @@ function unsafe(message: string, suggestions: string[]): never {
   policyError(400, 'unsafe_query', message, { suggestions });
 }
 
-function variableName(value: unknown): string | null {
-  return object(value) && value.type === 'term' && value.subType === 'variable'
-    ? String(value.value ?? '')
-    : null;
+function variableName(value: { type: string; subType: string; value?: string }): string | null {
+  return value.type === 'term' && value.subType === 'variable' ? (value.value ?? '') : null;
 }
 
-function children(value: JsonObject): unknown[] {
-  return Object.entries(value)
-    .filter(([key]) => key !== 'loc' && key !== 'context')
-    .flatMap(([, child]) => (Array.isArray(child) ? child : [child]));
+function queryLimit(ast: Query): number | null {
+  return ast.solutionModifiers.limitOffset?.limit ?? null;
 }
 
-function walk(value: unknown, visit: (node: JsonObject) => void): void {
-  if (Array.isArray(value)) {
-    for (const child of value) walk(child, visit);
-    return;
-  }
-  if (!object(value)) return;
-  visit(value);
-  for (const child of children(value)) walk(child, visit);
+function queryOffset(ast: Query): number {
+  return ast.solutionModifiers.limitOffset?.offset ?? 0;
 }
 
-function queryLimit(ast: JsonObject): number | null {
-  const modifiers = object(ast.solutionModifiers) ? ast.solutionModifiers : null;
-  const limitOffset = modifiers && object(modifiers.limitOffset) ? modifiers.limitOffset : null;
-  return typeof limitOffset?.limit === 'number' ? limitOffset.limit : null;
-}
-
-function queryOffset(ast: JsonObject): number {
-  const modifiers = object(ast.solutionModifiers) ? ast.solutionModifiers : null;
-  const limitOffset = modifiers && object(modifiers.limitOffset) ? modifiers.limitOffset : null;
-  return typeof limitOffset?.offset === 'number' ? limitOffset.offset : 0;
-}
-
-function valuesAnchors(value: unknown): Set<string> {
+function valuesAnchors(value: Pattern): Set<string> {
   const anchors = new Set<string>();
-  if (!object(value) || value.type !== 'pattern' || value.subType !== 'values') return anchors;
-  const variables = Array.isArray(value.variables) ? value.variables : [];
-  const values = Array.isArray(value.values) ? value.values : [];
-  for (const variable of variables) {
+  if (value.type !== 'pattern' || value.subType !== 'values') return anchors;
+  for (const variable of value.variables) {
     const name = variableName(variable);
-    if (name && values.some((row) => object(row) && object(row[name]))) anchors.add(name);
+    if (name && value.values.some((row) => row[name] !== undefined)) anchors.add(name);
   }
   return anchors;
 }
 
 function validatePatternList(
-  patterns: unknown[],
+  patterns: Pattern[],
   inheritedAnchors: ReadonlySet<string>,
   violations: string[],
 ): void {
@@ -104,25 +86,22 @@ function validatePatternList(
 }
 
 function validateBroadScans(
-  value: unknown,
+  value: Pattern,
   inheritedAnchors: ReadonlySet<string>,
   violations: string[],
 ): void {
-  if (Array.isArray(value)) {
-    validatePatternList(value, inheritedAnchors, violations);
+  if (value.type === 'query') {
+    validatePatternList(value.where.patterns, inheritedAnchors, violations);
     return;
   }
-  if (!object(value) || value.type !== 'pattern') return;
   if (value.subType === 'values') return;
   if (value.subType === 'union') {
-    const branches = Array.isArray(value.patterns) ? value.patterns : [];
-    for (const branch of branches) validateBroadScans(branch, inheritedAnchors, violations);
+    for (const branch of value.patterns) validateBroadScans(branch, inheritedAnchors, violations);
     return;
   }
   if (value.subType === 'bgp') {
-    const triples = Array.isArray(value.triples) ? value.triples : [];
-    for (const triple of triples) {
-      if (!object(triple)) continue;
+    for (const triple of value.triples) {
+      if (triple.type !== 'triple') continue;
       const subject = variableName(triple.subject);
       const predicate = variableName(triple.predicate);
       const objectName = variableName(triple.object);
@@ -139,18 +118,15 @@ function validateBroadScans(
     }
     return;
   }
-  const patterns = Array.isArray(value.patterns) ? value.patterns : [];
-  validatePatternList(patterns, inheritedAnchors, violations);
-}
-
-function constructTemplateTripleCount(ast: JsonObject): number {
-  let count = 0;
-  walk(ast.template, (node) => {
-    if (node.type === 'pattern' && node.subType === 'bgp' && Array.isArray(node.triples)) {
-      count += node.triples.length;
-    }
-  });
-  return count;
+  if (
+    value.subType === 'group' ||
+    value.subType === 'optional' ||
+    value.subType === 'minus' ||
+    value.subType === 'graph' ||
+    value.subType === 'service'
+  ) {
+    validatePatternList(value.patterns, inheritedAnchors, violations);
+  }
 }
 
 interface SemanticQueryAnalysis {
@@ -158,15 +134,140 @@ interface SemanticQueryAnalysis {
   violations: string[];
 }
 
+type AllowedQuery = QuerySelect | QueryAsk | QueryConstruct;
+
+interface AnalysisState extends SemanticQueryAnalysis {
+  valuesBoundVariables: Set<string>;
+}
+
+function collectValueBindings(pattern: Pattern, bindings: Set<string>): void {
+  if (pattern.type === 'query') {
+    if (pattern.values) collectValueBindings(pattern.values, bindings);
+    collectValueBindings(pattern.where, bindings);
+    return;
+  }
+  if (pattern.subType === 'values') {
+    for (const variable of pattern.variables) {
+      const name = variableName(variable);
+      if (name && pattern.values.some((row) => row[name] !== undefined)) bindings.add(name);
+    }
+    return;
+  }
+  if (
+    pattern.subType === 'group' ||
+    pattern.subType === 'union' ||
+    pattern.subType === 'optional' ||
+    pattern.subType === 'minus' ||
+    pattern.subType === 'graph' ||
+    pattern.subType === 'service'
+  ) {
+    for (const child of pattern.patterns) collectValueBindings(child, bindings);
+  }
+}
+
+function analyzePath(path: Path | TermVariable, state: AnalysisState): void {
+  if (path.type !== 'path') return;
+  state.metrics.propertyPaths += 1;
+  if (path.subType === '*' || path.subType === '+' || path.subType === '!') {
+    state.violations.push(`property path '${path.subType}' is not bounded`);
+  }
+  for (const item of path.items) analyzePath(item, state);
+}
+
+function analyzeExpression(expression: Expression, state: AnalysisState): void {
+  if (expression.type !== 'expression') return;
+  if (expression.subType === 'aggregate') {
+    state.metrics.aggregates += 1;
+    for (const child of expression.expression) {
+      if (child.type !== 'wildcard') analyzeExpression(child, state);
+    }
+    return;
+  }
+  if (expression.subType === 'patternOperation') {
+    analyzePattern(expression.args, state);
+    return;
+  }
+  for (const child of expression.args) analyzeExpression(child, state);
+}
+
+function analyzePattern(pattern: Pattern, state: AnalysisState): void {
+  if (pattern.type === 'query') {
+    state.metrics.subqueries += 1;
+    analyzeQueryExpressions(pattern, state);
+    analyzePattern(pattern.where, state);
+    return;
+  }
+  switch (pattern.subType) {
+    case 'bgp':
+      state.metrics.triples += pattern.triples.length;
+      for (const triple of pattern.triples) {
+        if (triple.type !== 'triple') continue;
+        if (variableName(triple.predicate)) state.metrics.variablePredicates += 1;
+        analyzePath(triple.predicate, state);
+      }
+      return;
+    case 'values':
+      state.metrics.valuesRows += pattern.values.length;
+      return;
+    case 'optional':
+      state.metrics.optionalPatterns += 1;
+      break;
+    case 'union':
+      state.metrics.unionBranches += pattern.patterns.length;
+      break;
+    case 'filter':
+      state.metrics.filters += 1;
+      analyzeExpression(pattern.expression, state);
+      return;
+    case 'graph': {
+      state.metrics.graphPatterns += 1;
+      const graphVariable = variableName(pattern.name);
+      if (graphVariable === null) {
+        state.violations.push('explicit GRAPH identifiers are not allowed');
+      } else if (state.valuesBoundVariables.has(graphVariable)) {
+        state.violations.push('GRAPH variables must not be bound to explicit identifiers');
+      }
+      break;
+    }
+    case 'service':
+      state.violations.push('SERVICE federation is not allowed');
+      break;
+    case 'bind':
+      analyzeExpression(pattern.expression, state);
+      return;
+  }
+  if ('patterns' in pattern) {
+    for (const child of pattern.patterns) analyzePattern(child, state);
+  }
+}
+
+function isGroupBind(
+  grouping: Expression | SolutionModifierGroupBind,
+): grouping is SolutionModifierGroupBind {
+  return 'variable' in grouping;
+}
+
+function analyzeQueryExpressions(ast: QuerySelect, state: AnalysisState): void {
+  for (const variable of ast.variables) {
+    if (variable.type === 'pattern') analyzeExpression(variable.expression, state);
+  }
+  for (const grouping of ast.solutionModifiers.group?.groupings ?? []) {
+    analyzeExpression(isGroupBind(grouping) ? grouping.value : grouping, state);
+  }
+  for (const ordering of ast.solutionModifiers.order?.orderDefs ?? []) {
+    analyzeExpression(ordering.expression, state);
+  }
+  for (const expression of ast.solutionModifiers.having?.having ?? []) {
+    analyzeExpression(expression, state);
+  }
+}
+
 /** Adapt the parser AST once into the small, typed shape consumed by policy rules. */
-function analyzeSemanticQueryAst(ast: JsonObject): SemanticQueryAnalysis {
-  const modifiers = object(ast.solutionModifiers) ? ast.solutionModifiers : {};
-  const order = object(modifiers.order) ? modifiers.order : null;
-  const group = object(modifiers.group) ? modifiers.group : null;
-  const having = object(modifiers.having) ? modifiers.having : null;
+function analyzeSemanticQueryAst(ast: AllowedQuery): SemanticQueryAnalysis {
+  const modifiers = ast.solutionModifiers;
   const metrics: SemanticQueryMetrics = {
     triples: 0,
-    constructTriples: constructTemplateTripleCount(ast),
+    constructTriples: ast.subType === 'construct' ? ast.template.triples.length : 0,
     optionalPatterns: 0,
     unionBranches: 0,
     filters: 0,
@@ -176,60 +277,19 @@ function analyzeSemanticQueryAst(ast: JsonObject): SemanticQueryAnalysis {
     subqueries: 0,
     valuesRows: 0,
     aggregates: 0,
-    orderConditions: order && Array.isArray(order.orderDefs) ? order.orderDefs.length : 0,
-    groupConditions: group && Array.isArray(group.groupings) ? group.groupings.length : 0,
-    distinct: ast.distinct === true ? 1 : 0,
+    orderConditions: modifiers.order?.orderDefs.length ?? 0,
+    groupConditions: modifiers.group?.groupings.length ?? 0,
+    distinct: ast.subType === 'select' && ast.distinct === true ? 1 : 0,
   };
   const valuesBoundVariables = new Set<string>();
-  walk(ast.where, (node) => {
-    if (node.type !== 'pattern' || node.subType !== 'values') return;
-    const variables = Array.isArray(node.variables) ? node.variables : [];
-    const values = Array.isArray(node.values) ? node.values : [];
-    metrics.valuesRows += values.length;
-    for (const variable of variables) {
-      const name = variableName(variable);
-      if (name && values.some((row) => object(row) && row[name] !== undefined)) {
-        valuesBoundVariables.add(name);
-      }
-    }
-  });
-  walk([ast.variables, order, having], (node) => {
-    if (node.type === 'expression' && node.subType === 'aggregate') metrics.aggregates += 1;
-  });
-
   const violations: string[] = [];
-  walk(ast.where, (node) => {
-    if (node.type === 'query') metrics.subqueries += 1;
-    if (node.type === 'path') {
-      metrics.propertyPaths += 1;
-      if (node.subType === '*' || node.subType === '+' || node.subType === '!') {
-        violations.push(`property path '${String(node.subType)}' is not bounded`);
-      }
-    }
-    if (node.type !== 'pattern') return;
-    if (node.subType === 'service') violations.push('SERVICE federation is not allowed');
-    if (node.subType === 'optional') metrics.optionalPatterns += 1;
-    if (node.subType === 'filter') metrics.filters += 1;
-    if (node.subType === 'union') {
-      metrics.unionBranches += Array.isArray(node.patterns) ? node.patterns.length : 0;
-    }
-    if (node.subType === 'graph') {
-      metrics.graphPatterns += 1;
-      const graphVariable = variableName(node.name);
-      if (graphVariable === null) {
-        violations.push('explicit GRAPH identifiers are not allowed');
-      } else if (valuesBoundVariables.has(graphVariable)) {
-        violations.push('GRAPH variables must not be bound to explicit identifiers');
-      }
-    }
-    if (node.subType !== 'bgp') return;
-    const triples = Array.isArray(node.triples) ? node.triples : [];
-    metrics.triples += triples.length;
-    for (const triple of triples) {
-      if (object(triple) && variableName(triple.predicate)) metrics.variablePredicates += 1;
-    }
-  });
-  validateBroadScans(ast.where, new Set(), violations);
+  const state: AnalysisState = { metrics, violations, valuesBoundVariables };
+  if (ast.values) collectValueBindings(ast.values, valuesBoundVariables);
+  collectValueBindings(ast.where, valuesBoundVariables);
+  if (ast.subType === 'select') analyzeQueryExpressions(ast, state);
+  if (ast.values) analyzePattern(ast.values, state);
+  analyzePattern(ast.where, state);
+  validatePatternList(ast.where.patterns, new Set(), violations);
   return { metrics, violations };
 }
 
@@ -247,7 +307,7 @@ export function enforceSemanticQueryPolicy(
     });
   }
 
-  let ast: unknown;
+  let ast: SparqlQuery;
   try {
     ast = parser.parse(sparql);
   } catch {
@@ -258,7 +318,7 @@ export function enforceSemanticQueryPolicy(
       ],
     });
   }
-  if (!object(ast) || ast.type !== 'query') {
+  if (ast.type !== 'query') {
     unsafe('only read-only SPARQL queries are allowed', [
       'Use SELECT, ASK, or CONSTRUCT. INSERT, DELETE, LOAD, CLEAR, and other updates are blocked.',
     ]);
@@ -269,8 +329,7 @@ export function enforceSemanticQueryPolicy(
     ]);
   }
   const queryType = ast.subType;
-  const datasets =
-    object(ast.datasets) && Array.isArray(ast.datasets.clauses) ? ast.datasets.clauses : [];
+  const datasets = ast.datasets.clauses;
   if (datasets.length > 0) {
     unsafe('FROM and FROM NAMED clauses are not allowed', [
       'Remove dataset clauses; the relay selects the current channel Context Graph server-side.',
