@@ -6,7 +6,7 @@ import type {
   AgentMemoryProposalV2,
   NostrEvent,
 } from '../types.ts';
-import { parseTrustVouchTags } from './trust-source.ts';
+import { parseTrustActionTags } from './trust-source.ts';
 
 const HEX_64 = /^[0-9a-f]{64}$/u;
 const SAFE_EXTERNAL_IRI = /^(?:https:\/\/[^<>"{}|^`\\\s]{1,990}|urn:[^<>"{}|^`\\\s]{1,995})$/u;
@@ -281,34 +281,16 @@ export function validateTrustProposal(
   if (source.kind !== 1985 || source.pubkey !== envelope.requesterPubkey) {
     invalid('dkg-trust@1 source must be a kind 1985 event signed by the requester');
   }
-  const namespaces = source.tags.filter((tag) => tag[0] === 'L');
-  const labels = source.tags.filter((tag) => tag[0] === 'l');
-  const action = labels[0]?.[1];
-  if (
-    namespaces.length !== 1 ||
-    namespaces[0]!.length !== 2 ||
-    namespaces[0]![1] !== 'buzz.wot' ||
-    labels.length !== 1 ||
-    labels[0]!.length !== 3 ||
-    !new Set(['vouch', 'revoke', 'supersede']).has(action ?? '') ||
-    labels[0]![2] !== 'buzz.wot'
-  ) {
+  const tags = parseTrustActionTags(source.tags);
+  if (!tags.ok && tags.reason === 'label') {
     invalid('dkg-trust@1 source must use a supported buzz.wot action label');
   }
-  const subjectTags = source.tags.filter((tag) => tag[0] === 'p');
-  const subjectPubkey = subjectTags[0]?.[1];
-  if (subjectTags.length !== 1 || !subjectPubkey || !HEX_64.test(subjectPubkey)) {
+  if (!tags.ok) {
     invalid('dkg-trust@1 source must identify exactly one p-tag subject');
   }
   const issuerUri = `urn:nostr:pubkey:${source.pubkey}`;
-  const subjectUri = `urn:nostr:pubkey:${subjectPubkey.toLowerCase()}`;
+  const subjectUri = `urn:nostr:pubkey:${tags.subjectPubkey}`;
   if (issuerUri === subjectUri) invalid('dkg-trust@1 does not allow self-vouches');
-  if (action === 'vouch') validateActiveVouch(source, subjectPubkey.toLowerCase(), proposal);
-  else
-    validateVouchLifecycle(
-      source,
-      subjectPubkey.toLowerCase(),
-      action as 'revoke' | 'supersede',
-      proposal,
-    );
+  if (tags.action === 'vouch') validateActiveVouch(source, tags.subjectPubkey, proposal);
+  else validateVouchLifecycle(source, tags.subjectPubkey, tags.action, proposal);
 }

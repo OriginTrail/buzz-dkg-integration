@@ -659,6 +659,7 @@ describe('query gateway request contract', () => {
           vouch(2, REQUESTER, intermediary),
           vouch(3, intermediary, subject),
           vouch(4, communityIssuer, subject),
+          vouch(5, communityIssuer, 'aa'.repeat(32)),
         ];
       }
       if (sparql.includes('trust/supportedBy')) {
@@ -711,6 +712,23 @@ describe('query gateway request contract', () => {
             at: binding('2026-08-01T13:00:00Z'),
             source: binding(`urn:nostr:event:${'aa'.repeat(32)}`),
           },
+          {
+            action: binding('urn:buzz-dkg:vouch-lifecycle:valid-supersede'),
+            issuer: binding(`urn:nostr:pubkey:${communityIssuer}`),
+            subject: binding(`urn:nostr:pubkey:${'aa'.repeat(32)}`),
+            status: binding('superseded'),
+            target: binding(vouchUri(5)),
+            replacement: binding(`urn:buzz-dkg:vouch:${'8'.repeat(64)}`),
+            at: binding('2026-08-02T13:00:00Z'),
+            ...trustLifecycleSourceBindings(
+              '77'.repeat(32),
+              communityIssuer,
+              'aa'.repeat(32),
+              'supersede',
+              '5'.repeat(64),
+              '8'.repeat(64),
+            ),
+          },
         ];
         return lifecycleRows;
       }
@@ -747,6 +765,11 @@ describe('query gateway request contract', () => {
       status: 'revoked',
       lifecycleEvent: `urn:nostr:event:${'99'.repeat(32)}`,
       replacementVouch: null,
+    });
+    expect(networkVouches.find(({ uri }) => uri === vouchUri(5))).toMatchObject({
+      status: 'superseded',
+      lifecycleEvent: `urn:nostr:event:${'77'.repeat(32)}`,
+      replacementVouch: `urn:buzz-dkg:vouch:${'8'.repeat(64)}`,
     });
 
     const response = await service.execute(body('reputation_summary', { pubkey: subject }));
