@@ -126,6 +126,25 @@ describe('agent-authored SPARQL policy', () => {
     ).toBe('query_too_expensive');
   });
 
+  it('enforces the configured UTF-8 byte limit before parsing', () => {
+    const query = 'SELECT ?s WHERE { ?s <urn:p> "éééé" } LIMIT 1';
+    expect(new TextEncoder().encode(query).byteLength).toBeGreaterThan(query.length);
+    try {
+      enforceSemanticQueryPolicy(query, query.length);
+      throw new Error('expected the byte limit to reject the query');
+    } catch (error) {
+      expect(error).toMatchObject({ status: 413, code: 'query_too_large' });
+    }
+  });
+
+  it('rejects nested subqueries even when the outer query is bounded', () => {
+    const error = failure(`SELECT ?s WHERE {
+      { SELECT ?s WHERE { GRAPH ?g { ?s <urn:p> ?o } } LIMIT 1 }
+    } LIMIT 1`);
+    expect(error.code).toBe('query_too_expensive');
+    expect(error.details).toMatchObject({ metrics: { subqueries: 1 } });
+  });
+
   it('permits a fully variable pattern only when VALUES anchors one variable', () => {
     expect(
       enforceSemanticQueryPolicy(
