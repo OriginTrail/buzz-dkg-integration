@@ -3,6 +3,7 @@ import { IntegrationApiError } from '../errors.ts';
 import { canonicalRepositoryIdentityUrl } from '../memory/identity.ts';
 import type { QueryGatewayConfig } from '../types.ts';
 import { scoreReputation } from './reputation-score.ts';
+import { queryTrustNetwork, type TrustLayeredRow } from './trust-query.ts';
 import type {
   ChannelMemoryResult,
   ContributorSummary,
@@ -27,11 +28,6 @@ import type {
   SubGraphSummary,
   SubgraphGraphResult,
   SubgraphTriplesResult,
-  TrustNetworkResult,
-  TrustPersonSummary,
-  TrustVouchSummary,
-  TrustVouchLifecycleState,
-  TrustVouchStatus,
   VisibleMemoryLayer,
   WorkEvidenceSummary,
 } from './types.ts';
@@ -47,7 +43,6 @@ const VIEWS: readonly [VisibleView, VisibleMemoryLayer][] = [
 ];
 const LAYER_RANK: Record<VisibleMemoryLayer, number> = { SWM: 0, VM: 1 };
 const HEX_PUBKEY = /^[0-9a-f]{64}$/iu;
-const HEX_SIGNATURE = /^[0-9a-f]{128}$/iu;
 const CHANNEL_ID = /^[A-Za-z0-9._:@/-]{1,256}$/u;
 const SUBGRAPH_NAME = /^[A-Za-z0-9_-]{1,128}$/u;
 const SAFE_IRI = /^[A-Za-z][A-Za-z0-9+.-]*:[^<>"{}|^`\\\s]{1,999}$/u;
@@ -63,10 +58,6 @@ const MAX_DKG_ROWS = 2_500;
 const MAX_GRAPH_NODES = 1_200;
 const MAX_GRAPH_EDGES = 2_400;
 const MAX_TRIPLES = 1_000;
-const MAX_TRUST_PEOPLE = 200;
-const MAX_TRUST_VOUCHES = 400;
-const MAX_TRUST_SUPPORTS = 2_400;
-const MAX_TRUST_LIFECYCLE = 400;
 const MAX_WORK_EVIDENCE = 24;
 
 const BUZZ = 'https://w3id.org/buzz-dkg/buzz#';
@@ -79,13 +70,8 @@ const DECISIONS = 'http://dkg.io/ontology/decisions/';
 const MEMORY = 'http://dkg.io/ontology/memory/';
 const TASKS = 'http://dkg.io/ontology/tasks/';
 const SOFTWARE = 'http://dkg.io/ontology/software/';
-const TRUST = 'http://dkg.io/ontology/trust/';
 const NOSTR_PUBKEY_URI = 'urn:nostr:pubkey:';
 const NOSTR_EVENT_URI = /^urn:nostr:event:[0-9a-f]{64}$/u;
-
-function trustVouchStatus(value: string | null): TrustVouchStatus {
-  return value === 'active' || value === 'revoked' || value === 'superseded' ? value : 'unknown';
-}
 
 function invalid(message: string): never {
   throw new IntegrationApiError(400, 'invalid_request', message);
@@ -652,295 +638,8 @@ export class QueryGatewayService {
     return { repository, commitSha, componentName, decisions: [...byKey.values()] };
   }
 
-  private async trustNetwork(cg: string): Promise<TrustNetworkResult> {
-    const [contributionRows, vouchRows, supportRows, lifecycleRows] = await Promise.all([
-      this.layered(
-        cg,
-        `SELECT ?pk (COUNT(DISTINCT ?record) AS ?n) (MAX(?at) AS ?latest)
-         WHERE { GRAPH ?g {
-           ?memory <${MEMORY}contains> ?record .
-           ?record a ?kind ;
-             <${PROV}wasAttributedTo> ?agent ;
-             <${PROV}wasDerivedFrom> ?source .
-           VALUES ?kind {
-             <${MEMORY}Claim> <${MEMORY}Question>
-             <${DECISIONS}Decision> <${TASKS}Task>
-             <${GITHUB}PullRequest> <${GITHUB}Issue> <${GITHUB}Commit> <${GITHUB}Review>
-             <${SOFTWARE}Build> <${SOFTWARE}TestCase> <${SOFTWARE}TestRun>
-             <${SOFTWARE}Deployment> <${SOFTWARE}Finding>
-           }
-           ?agent <${NOSTR}pubkeyHex> ?pk .
-           OPTIONAL { ?source <${NOSTR}createdAt> ?at }
-         } } GROUP BY ?pk ORDER BY DESC(?n) LIMIT ${MAX_TRUST_PEOPLE + 1}`,
-      ),
-      this.layered(
-        cg,
-        `SELECT DISTINCT ?vouch ?issuer ?subject ?note ?status ?at ?source
-          ?sourceKind ?sourceAuthor ?sourceTags ?sourceSig WHERE { GRAPH ?g {
-           ?vouch a <${TRUST}Vouch> ;
-             <${TRUST}issuer> ?issuer ;
-             <${TRUST}subject> ?subject ;
-             <${TRUST}scope> "channel" .
-           OPTIONAL { ?vouch <${SCHEMA}description> ?note }
-           OPTIONAL { ?vouch <${TRUST}status> ?status }
-           OPTIONAL {
-             ?vouch <${PROV}wasDerivedFrom> ?source .
-             ?source a <${NOSTR}Event> ;
-               <${NOSTR}kind> ?sourceKind ;
-               <${NOSTR}tags> ?sourceTags ;
-               <${NOSTR}sig> ?sourceSig ;
-               <${PROV}wasAttributedTo> ?sourceAuthor .
-             OPTIONAL { ?source <${NOSTR}createdAt> ?at }
-           }
-         } } ORDER BY DESC(?at) LIMIT ${MAX_TRUST_VOUCHES + 1}`,
-      ),
-      this.layered(
-        cg,
-        `SELECT DISTINCT ?vouch ?reference ?target ?evidenceSource WHERE { GRAPH ?g {
-           ?vouch <${TRUST}supportedBy> ?reference .
-           ?reference <${TRUST}evidenceTarget> ?target .
-           OPTIONAL { ?reference <${TRUST}evidenceSource> ?evidenceSource }
-         } } LIMIT ${MAX_TRUST_SUPPORTS + 1}`,
-      ),
-      this.layered(
-        cg,
-        `SELECT DISTINCT ?action ?issuer ?subject ?status ?target ?replacement ?at ?source
-         WHERE { GRAPH ?g {
-           ?action a <${TRUST}VouchLifecycle> ;
-             <${TRUST}scope> "channel" ;
-             <${TRUST}targetVouch> ?target ;
-             <${TRUST}issuer> ?issuer ;
-             <${TRUST}subject> ?subject ;
-             <${TRUST}status> ?status .
-           OPTIONAL { ?action <${TRUST}replacementVouch> ?replacement }
-           OPTIONAL {
-             ?action <${PROV}wasDerivedFrom> ?source .
-             OPTIONAL { ?source <${NOSTR}createdAt> ?at }
-           }
-         } } ORDER BY DESC(?at) LIMIT ${MAX_TRUST_LIFECYCLE + 1}`,
-      ),
-    ]);
-
-    const queryHitBound = (rows: LayeredRow[], maximum: number): boolean =>
-      VIEWS.some(
-        ([, layer]) => rows.filter((candidate) => candidate.layer === layer).length > maximum,
-      );
-    let partial =
-      queryHitBound(contributionRows, MAX_TRUST_PEOPLE) ||
-      queryHitBound(vouchRows, MAX_TRUST_VOUCHES) ||
-      queryHitBound(supportRows, MAX_TRUST_SUPPORTS) ||
-      queryHitBound(lifecycleRows, MAX_TRUST_LIFECYCLE);
-
-    const people = new Map<string, TrustPersonSummary>();
-    const upsertPerson = (pubkey: string, layer: VisibleMemoryLayer): TrustPersonSummary => {
-      const current = people.get(pubkey);
-      if (current) {
-        if (LAYER_RANK[layer] > LAYER_RANK[current.layer]) current.layer = layer;
-        return current;
-      }
-      const created: TrustPersonSummary = {
-        pubkey,
-        contributions: 0,
-        contributionLayer: null,
-        latest: null,
-        vouchesReceived: 0,
-        vouchesGiven: 0,
-        layer,
-      };
-      people.set(pubkey, created);
-      return created;
-    };
-    for (const { row, layer } of contributionRows) {
-      const pubkey = term(row, 'pk').toLowerCase();
-      if (!HEX_PUBKEY.test(pubkey)) continue;
-      const person = upsertPerson(pubkey, layer);
-      person.contributions = Math.max(person.contributions, count(row.n));
-      if (
-        person.contributionLayer === null ||
-        LAYER_RANK[layer] > LAYER_RANK[person.contributionLayer]
-      ) {
-        person.contributionLayer = layer;
-      }
-      person.latest = Math.max(person.latest ?? 0, dateTimestamp(row.latest) ?? 0) || null;
-    }
-
-    const pubkeyFromEntity = (value: string): string | null => {
-      if (!value.startsWith(NOSTR_PUBKEY_URI)) return null;
-      const pubkey = value.slice(NOSTR_PUBKEY_URI.length).toLowerCase();
-      return HEX_PUBKEY.test(pubkey) ? pubkey : null;
-    };
-    const vouchesByUri = new Map<string, TrustVouchSummary>();
-    for (const { row, layer } of vouchRows) {
-      const uri = bounded(term(row, 'vouch'), 1_000);
-      const issuer = pubkeyFromEntity(term(row, 'issuer'));
-      const subject = pubkeyFromEntity(term(row, 'subject'));
-      if (!uri || !issuer || !subject || issuer === subject) continue;
-      const source = optionalTerm(row, 'source');
-      const sourceAuthor = optionalTerm(row, 'sourceAuthor');
-      const sourceTags = optionalTerm(row, 'sourceTags');
-      const sourceKind = optionalTerm(row, 'sourceKind');
-      const sourceSig = optionalTerm(row, 'sourceSig');
-      let sourceMatches = false;
-      if (
-        source &&
-        NOSTR_EVENT_URI.test(source) &&
-        sourceAuthor === `${NOSTR_PUBKEY_URI}${issuer}` &&
-        sourceKind === '1985' &&
-        sourceSig !== null &&
-        HEX_SIGNATURE.test(sourceSig) &&
-        sourceTags
-      ) {
-        try {
-          const tags = JSON.parse(sourceTags) as unknown;
-          if (Array.isArray(tags) && tags.every((tag) => Array.isArray(tag))) {
-            const normalized = tags as unknown[][];
-            const subjects = normalized.filter((tag) => tag[0] === 'p');
-            sourceMatches =
-              subjects.length === 1 &&
-              typeof subjects[0]?.[1] === 'string' &&
-              subjects[0][1].toLowerCase() === subject &&
-              normalized.some((tag) => tag[0] === 'L' && tag[1] === 'buzz.wot') &&
-              normalized.some(
-                (tag) => tag[0] === 'l' && tag[1] === 'vouch' && tag[2] === 'buzz.wot',
-              );
-          }
-        } catch {
-          sourceMatches = false;
-        }
-      }
-      const candidate: TrustVouchSummary = {
-        uri,
-        issuer,
-        subject,
-        note: optionalTerm(row, 'note') ? bounded(optionalTerm(row, 'note')!, 1_000) : null,
-        status: trustVouchStatus(optionalTerm(row, 'status')),
-        at: dateTimestamp(row.at),
-        sourceEvent: sourceMatches ? bounded(source!, 1_000) : null,
-        evidence: [],
-        evidenceSources: [],
-        lifecycleEvent: null,
-        replacementVouch: null,
-        layer,
-      };
-      const current = vouchesByUri.get(uri);
-      if (
-        !current ||
-        LAYER_RANK[layer] > LAYER_RANK[current.layer] ||
-        (layer === current.layer && current.sourceEvent === null && candidate.sourceEvent !== null)
-      ) {
-        vouchesByUri.set(uri, candidate);
-      }
-    }
-
-    for (const { row } of supportRows) {
-      const vouch = vouchesByUri.get(bounded(term(row, 'vouch'), 1_000));
-      const target = bounded(term(row, 'target'), 1_000);
-      if (!vouch || !SAFE_IRI.test(target)) continue;
-      if (!vouch.evidence.includes(target)) vouch.evidence.push(target);
-      const evidenceSource = optionalTerm(row, 'evidenceSource');
-      if (
-        evidenceSource &&
-        NOSTR_EVENT_URI.test(evidenceSource) &&
-        !vouch.evidenceSources.includes(evidenceSource)
-      ) {
-        vouch.evidenceSources.push(evidenceSource);
-      }
-    }
-
-    type LifecycleAction = TrustVouchLifecycleState & {
-      issuer: string;
-      subject: string;
-      at: number | null;
-      layer: VisibleMemoryLayer;
-    };
-    const lifecycleByTarget = new Map<string, LifecycleAction>();
-    for (const { row, layer } of lifecycleRows) {
-      const target = bounded(term(row, 'target'), 1_000);
-      const targetVouch = vouchesByUri.get(target);
-      const issuer = pubkeyFromEntity(term(row, 'issuer'));
-      const subject = pubkeyFromEntity(term(row, 'subject'));
-      const status = term(row, 'status');
-      const source = optionalTerm(row, 'source')
-        ? bounded(optionalTerm(row, 'source')!, 1_000)
-        : null;
-      const replacement = optionalTerm(row, 'replacement')
-        ? bounded(optionalTerm(row, 'replacement')!, 1_000)
-        : null;
-      if (
-        !targetVouch ||
-        !issuer ||
-        !subject ||
-        issuer !== targetVouch.issuer ||
-        subject !== targetVouch.subject ||
-        !new Set(['revoked', 'superseded']).has(status) ||
-        !source ||
-        !NOSTR_EVENT_URI.test(source) ||
-        (status === 'superseded' && (!replacement || !SAFE_IRI.test(replacement))) ||
-        (status === 'revoked' && replacement)
-      ) {
-        continue;
-      }
-      const candidate: LifecycleAction =
-        status === 'revoked'
-          ? {
-              issuer,
-              subject,
-              status,
-              at: dateTimestamp(row.at),
-              lifecycleEvent: source,
-              replacementVouch: null,
-              layer,
-            }
-          : {
-              issuer,
-              subject,
-              status: 'superseded',
-              at: dateTimestamp(row.at),
-              lifecycleEvent: source,
-              replacementVouch: replacement!,
-              layer,
-            };
-      const current = lifecycleByTarget.get(target);
-      if (
-        !current ||
-        (candidate.at ?? 0) > (current.at ?? 0) ||
-        ((candidate.at ?? 0) === (current.at ?? 0) &&
-          candidate.lifecycleEvent.localeCompare(current.lifecycleEvent) > 0)
-      ) {
-        lifecycleByTarget.set(target, candidate);
-      }
-    }
-    for (const [target, lifecycle] of lifecycleByTarget) {
-      const vouch = vouchesByUri.get(target)!;
-      vouch.status = lifecycle.status;
-      vouch.lifecycleEvent = lifecycle.lifecycleEvent;
-      vouch.replacementVouch = lifecycle.replacementVouch;
-      if (LAYER_RANK[lifecycle.layer] > LAYER_RANK[vouch.layer]) vouch.layer = lifecycle.layer;
-    }
-    const sortedVouches = [...vouchesByUri.values()].sort(
-      (a, b) => (b.at ?? 0) - (a.at ?? 0) || a.uri.localeCompare(b.uri),
-    );
-    if (sortedVouches.length > MAX_TRUST_VOUCHES) partial = true;
-    const vouches = sortedVouches.slice(0, MAX_TRUST_VOUCHES);
-    for (const vouch of vouches) {
-      if (vouch.status !== 'active') continue;
-      upsertPerson(vouch.issuer, vouch.layer).vouchesGiven += 1;
-      upsertPerson(vouch.subject, vouch.layer).vouchesReceived += 1;
-    }
-
-    const sortedPeople = [...people.values()].sort(
-      (a, b) =>
-        b.vouchesReceived - a.vouchesReceived ||
-        b.contributions - a.contributions ||
-        a.pubkey.localeCompare(b.pubkey),
-    );
-    if (sortedPeople.length > MAX_TRUST_PEOPLE) partial = true;
-
-    return {
-      completeness: partial ? 'partial' : 'complete',
-      people: sortedPeople.slice(0, MAX_TRUST_PEOPLE),
-      vouches,
-    };
+  private trustNetwork(cg: string) {
+    return queryTrustNetwork((sparql) => this.layered(cg, sparql) as Promise<TrustLayeredRow[]>);
   }
 
   /**
