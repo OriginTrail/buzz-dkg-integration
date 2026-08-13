@@ -173,7 +173,7 @@
     trust:subject <urn:nostr:pubkey:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> ;
     trust:status "revoked" ;
     trust:scope "channel" ;
-    trust:targetVouch <urn:buzz-dkg:vouch:5555555555555555555555555555555555555555555555555555555555555555> ;
+    trust:targetVouch "urn:buzz-dkg:vouch:5555555555555555555555555555555555555555555555555555555555555555"^^xsd:anyURI ;
     prov:wasDerivedFrom <urn:nostr:event:6666666666666666666666666666666666666666666666666666666666666666> .
 
   <urn:nostr:event:4444444444444444444444444444444444444444444444444444444444444444>

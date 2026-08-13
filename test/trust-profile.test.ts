@@ -370,6 +370,24 @@ describe('signed trust proposal profile', () => {
       }),
     ).toThrow(/unsupported projection entities/);
 
+    const missingTarget = JSON.parse(proposal.content) as typeof mixed;
+    missingTarget.relations.find((relation) => relation.predicate === 'trust:issuer')!.object =
+      'missing-issuer';
+    const missingTargetProposal = signed({
+      kind: DKG_MEMORY_PROPOSAL_KIND,
+      created_at: proposal.created_at,
+      tags: proposal.tags,
+      content: JSON.stringify(missingTarget),
+    });
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: missingTargetProposal,
+        sourceEvents: [source],
+      }),
+    ).toThrow(/endpoints must reference proposal entities|trust:issuer target is missing/);
+
     const revoked = JSON.parse(proposal.content) as typeof mixed;
     const status = revoked.entities
       .find((entity) => entity.id === 'vouch')!

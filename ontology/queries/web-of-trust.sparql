@@ -13,9 +13,10 @@ SELECT ?vouch ?issuer ?subject ?note ?source ?at WHERE {
     OPTIONAL { ?source nostr:createdAt ?at }
     FILTER NOT EXISTS {
       ?lifecycle a trust:VouchLifecycle ;
-        trust:targetVouch ?vouch ;
+        trust:targetVouch ?targetVouch ;
         trust:status ?lifecycleStatus .
       VALUES ?lifecycleStatus { "revoked" "superseded" }
+      FILTER(STR(?targetVouch) = STR(?vouch))
     }
   }
 }

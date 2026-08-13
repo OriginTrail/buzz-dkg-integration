@@ -35,7 +35,9 @@ function trustRelationTarget(
   if (matches.length !== 1) {
     invalid(`dkg-trust@1 action must have exactly one ${predicate}`);
   }
-  return proposal.entities.find((entity) => entity.id === matches[0]!.object)!;
+  const target = proposal.entities.find((entity) => entity.id === matches[0]!.object);
+  if (!target) invalid(`dkg-trust@1 ${predicate} target is missing`);
+  return target;
 }
 
 function validateTrustPerson(

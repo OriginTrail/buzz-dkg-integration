@@ -645,7 +645,7 @@ describe('query gateway request contract', () => {
       note: binding(`Evidence note ${id}`),
       status: binding('active'),
       at: binding(`2026-07-${20 + id}T13:00:00Z`),
-      ...trustSourceBindings(String(id).repeat(64), issuer, target),
+      ...trustSourceBindings(String(id).repeat(64), issuer, target, `Evidence note ${id}`),
     });
     const sharedEvidence = 'urn:dkg:github:commit:github.com/acme/api/abc1234';
     const relatedEvidence = 'urn:dkg:github:issue:github.com/acme/api/17';
