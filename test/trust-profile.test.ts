@@ -150,7 +150,78 @@ function queryRows(store: InstanceType<typeof oxigraph.Store>, sparql: string) {
 describe('signed trust proposal profile', () => {
   it('compiles a signed human vouch into queryable trust edges with source provenance', () => {
     const subject = 'ab'.repeat(32);
-    const { proposal, source } = signedVouchFixture(subject);
+    const evidenceEventId = '55'.repeat(32);
+    const evidenceTarget = 'urn:dkg:code:file:github.com%2Facme%2Fapi/src%2Fauth.ts';
+    const source = signed({
+      kind: 1985,
+      created_at: 1_788_000_030,
+      tags: [
+        ['h', CHANNEL],
+        ['L', 'buzz.wot'],
+        ['l', 'vouch', 'buzz.wot'],
+        ['p', subject],
+        ['r', evidenceTarget],
+        ['e', evidenceEventId, '', 'evidence'],
+      ],
+      content: 'Reviewed two releases carefully and caught a rollback edge case.',
+    });
+    const proposal = signed({
+      kind: DKG_MEMORY_PROPOSAL_KIND,
+      created_at: source.created_at + 1,
+      tags: [
+        ['h', CHANNEL],
+        ['e', source.id, '', 'source'],
+        ['t', 'dkg-memory-proposal'],
+      ],
+      content: JSON.stringify({
+        schemaVersion: 2,
+        profiles: ['dkg-memory@1', 'dkg-trust@1'],
+        summary: 'Vouch for Alice',
+        entities: [
+          {
+            id: 'vouch',
+            type: 'trust:Vouch',
+            name: 'Vouch for Alice',
+            description: source.content,
+            locator: { kind: 'uri', uri: `urn:buzz-dkg:vouch:${source.id}` },
+            attributes: [
+              { predicate: 'trust:status', value: 'active' },
+              { predicate: 'trust:scope', value: 'channel' },
+            ],
+          },
+          {
+            id: 'issuer',
+            type: 'schema:Person',
+            name: 'Vouch issuer',
+            locator: { kind: 'uri', uri: `urn:nostr:pubkey:${PUBKEY}` },
+          },
+          {
+            id: 'subject',
+            type: 'schema:Person',
+            name: 'Alice',
+            locator: { kind: 'uri', uri: `urn:nostr:pubkey:${subject}` },
+          },
+          {
+            id: 'evidence-1',
+            type: 'trust:EvidenceReference',
+            name: 'Evidence reference',
+            attributes: [
+              { predicate: 'trust:evidenceTarget', value: evidenceTarget },
+              {
+                predicate: 'trust:evidenceSource',
+                value: `urn:nostr:event:${evidenceEventId}`,
+              },
+            ],
+          },
+        ],
+        relations: [
+          { subject: 'vouch', predicate: 'trust:issuer', object: 'issuer' },
+          { subject: 'vouch', predicate: 'trust:subject', object: 'subject' },
+          { subject: 'vouch', predicate: 'trust:supportedBy', object: 'evidence-1' },
+        ],
+        promptVersion: 'human-vouch-v1',
+      }),
+    });
     const parsed = parseAgentMemoryEnvelope({
       channelId: CHANNEL,
       requesterPubkey: PUBKEY,
@@ -163,9 +234,11 @@ describe('signed trust proposal profile', () => {
       `PREFIX trust: <http://dkg.io/ontology/trust/>
        PREFIX schema: <http://schema.org/>
        PREFIX prov: <http://www.w3.org/ns/prov#>
-       SELECT ?issuer ?subject ?note ?source WHERE { GRAPH ?g {
+       SELECT ?issuer ?subject ?note ?source ?target ?evidenceSource WHERE { GRAPH ?g {
          ?vouch a trust:Vouch ; trust:issuer ?issuer ; trust:subject ?subject ;
            schema:description ?note ; prov:wasDerivedFrom ?source .
+         ?vouch trust:supportedBy ?reference .
+         ?reference trust:evidenceTarget ?target ; trust:evidenceSource ?evidenceSource .
        } }`,
     );
     expect(rows).toHaveLength(1);
@@ -173,6 +246,8 @@ describe('signed trust proposal profile', () => {
     expect(rows[0]!.get('subject')?.value).toBe(`urn:nostr:pubkey:${subject}`);
     expect(rows[0]!.get('note')?.value).toBe(source.content);
     expect(rows[0]!.get('source')?.value).toBe(`urn:nostr:event:${source.id}`);
+    expect(rows[0]!.get('target')?.value).toBe(evidenceTarget);
+    expect(rows[0]!.get('evidenceSource')?.value).toBe(`urn:nostr:event:${evidenceEventId}`);
 
     const tampered = JSON.parse(proposal.content) as {
       entities: Array<{ id: string; locator?: { uri: string } }>;
@@ -207,6 +282,115 @@ describe('signed trust proposal profile', () => {
         sourceEvents: [source],
       }),
     ).toThrow(/explanation must match the signed source content/);
+
+    const tamperedEvidence = JSON.parse(proposal.content) as {
+      entities: Array<{
+        id: string;
+        attributes?: Array<{ predicate: string; value: string }>;
+      }>;
+    };
+    tamperedEvidence.entities
+      .find((entity) => entity.id === 'evidence-1')!
+      .attributes!.find((attribute) => attribute.predicate === 'trust:evidenceTarget')!.value =
+      'urn:dkg:code:file:github.com%2Facme%2Fapi/src%2Fbilling.ts';
+    const tamperedEvidenceProposal = signed({
+      kind: proposal.kind,
+      created_at: proposal.created_at,
+      tags: proposal.tags,
+      content: JSON.stringify(tamperedEvidence),
+    });
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: tamperedEvidenceProposal,
+        sourceEvents: [source],
+      }),
+    ).toThrow(/projected evidence.*match/);
+
+    const secondEvidenceTarget = 'urn:dkg:github:review:github.com/acme/api/42';
+    const secondEvidenceEventId = '66'.repeat(32);
+    const pairedSource = signed({
+      kind: source.kind,
+      created_at: source.created_at,
+      tags: [
+        ...source.tags,
+        ['r', secondEvidenceTarget],
+        ['e', secondEvidenceEventId, '', 'evidence'],
+      ],
+      content: source.content,
+    });
+    const pairedContent = JSON.parse(proposal.content) as {
+      entities: Array<{
+        id: string;
+        type: string;
+        name?: string;
+        description?: string;
+        locator?: { uri: string };
+        attributes?: Array<{ predicate: string; value: string }>;
+      }>;
+      relations: Array<{ subject: string; predicate: string; object: string }>;
+    };
+    pairedContent.entities.find((entity) => entity.id === 'vouch')!.locator!.uri =
+      `urn:buzz-dkg:vouch:${pairedSource.id}`;
+    pairedContent.entities.push({
+      id: 'evidence-2',
+      type: 'trust:EvidenceReference',
+      name: 'Second evidence reference',
+      attributes: [
+        { predicate: 'trust:evidenceTarget', value: secondEvidenceTarget },
+        {
+          predicate: 'trust:evidenceSource',
+          value: `urn:nostr:event:${secondEvidenceEventId}`,
+        },
+      ],
+    });
+    pairedContent.relations.push({
+      subject: 'vouch',
+      predicate: 'trust:supportedBy',
+      object: 'evidence-2',
+    });
+    const pairedProposal = signed({
+      kind: proposal.kind,
+      created_at: proposal.created_at,
+      tags: [
+        ['h', CHANNEL],
+        ['e', pairedSource.id, '', 'source'],
+        ['t', 'dkg-memory-proposal'],
+      ],
+      content: JSON.stringify(pairedContent),
+    });
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: pairedProposal,
+        sourceEvents: [pairedSource],
+      }),
+    ).not.toThrow();
+
+    const swappedPairs = structuredClone(pairedContent);
+    const firstSource = swappedPairs.entities
+      .find((entity) => entity.id === 'evidence-1')!
+      .attributes!.find((attribute) => attribute.predicate === 'trust:evidenceSource')!;
+    const secondSource = swappedPairs.entities
+      .find((entity) => entity.id === 'evidence-2')!
+      .attributes!.find((attribute) => attribute.predicate === 'trust:evidenceSource')!;
+    [firstSource.value, secondSource.value] = [secondSource.value, firstSource.value];
+    const swappedProposal = signed({
+      kind: proposal.kind,
+      created_at: proposal.created_at,
+      tags: pairedProposal.tags,
+      content: JSON.stringify(swappedPairs),
+    });
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: swappedProposal,
+        sourceEvents: [pairedSource],
+      }),
+    ).toThrow(/target\/source pairing must match signed tag order/);
 
     const ambiguousSource = signed({
       kind: 1985,
@@ -256,7 +440,7 @@ describe('signed trust proposal profile', () => {
         proposalEvent: mixedProposal,
         sourceEvents: [source],
       }),
-    ).toThrow(/only the vouch, issuer, and subject entities/);
+    ).toThrow(/unsupported projection entities/);
 
     const revoked = JSON.parse(proposal.content) as typeof mixed;
     const status = revoked.entities
@@ -276,10 +460,19 @@ describe('signed trust proposal profile', () => {
         proposalEvent: revokedProposal,
         sourceEvents: [source],
       }),
-    ).toThrow(/active and channel-scoped/);
+    ).toThrow(/active status and channel scope/);
 
     const proposalFor = (trustSource: NostrEvent, content = proposal.content) =>
-      proposalForTrustSource(trustSource, content);
+      signed({
+        kind: DKG_MEMORY_PROPOSAL_KIND,
+        created_at: proposal.created_at,
+        tags: [
+          ['h', CHANNEL],
+          ['e', trustSource.id, '', 'source'],
+          ['t', 'dkg-memory-proposal'],
+        ],
+        content,
+      });
     const wrongKind = signed({ ...source, kind: 1 });
     expect(() =>
       parseAgentMemoryEnvelope({
@@ -324,7 +517,7 @@ describe('signed trust proposal profile', () => {
         proposalEvent: proposalFor(unlabeled),
         sourceEvents: [unlabeled],
       }),
-    ).toThrow(/buzz.wot vouch label/);
+    ).toThrow(/supported buzz.wot action label/);
 
     const selfVouch = signed({
       kind: source.kind,
@@ -345,6 +538,182 @@ describe('signed trust proposal profile', () => {
         sourceEvents: [selfVouch],
       }),
     ).toThrow(/does not allow self-vouches/);
+  });
+
+  it('compiles signed revoke and supersede actions as append-only lifecycle evidence', () => {
+    const subject = 'ab'.repeat(32);
+    const targetEventId = '66'.repeat(32);
+    const replacementEventId = '77'.repeat(32);
+    const source = signed({
+      kind: 1985,
+      created_at: 1_788_000_040,
+      tags: [
+        ['h', CHANNEL],
+        ['L', 'buzz.wot'],
+        ['l', 'supersede', 'buzz.wot'],
+        ['p', subject],
+        ['e', targetEventId, '', 'target'],
+        ['e', replacementEventId, '', 'replacement'],
+      ],
+      content: 'Replaced after gathering newer review evidence.',
+    });
+    const proposal = signed({
+      kind: DKG_MEMORY_PROPOSAL_KIND,
+      created_at: source.created_at + 1,
+      tags: [
+        ['h', CHANNEL],
+        ['e', source.id, '', 'source'],
+        ['t', 'dkg-memory-proposal'],
+      ],
+      content: JSON.stringify({
+        schemaVersion: 2,
+        profiles: ['dkg-memory@1', 'dkg-trust@1'],
+        summary: 'Supersede vouch',
+        entities: [
+          {
+            id: 'lifecycle',
+            type: 'trust:VouchLifecycle',
+            name: 'Supersede vouch',
+            description: source.content,
+            locator: {
+              kind: 'uri',
+              uri: `urn:buzz-dkg:vouch-lifecycle:${source.id}`,
+            },
+            attributes: [
+              { predicate: 'trust:status', value: 'superseded' },
+              { predicate: 'trust:scope', value: 'channel' },
+              {
+                predicate: 'trust:targetVouch',
+                value: `urn:buzz-dkg:vouch:${targetEventId}`,
+              },
+              {
+                predicate: 'trust:replacementVouch',
+                value: `urn:buzz-dkg:vouch:${replacementEventId}`,
+              },
+            ],
+          },
+          {
+            id: 'issuer',
+            type: 'schema:Person',
+            name: 'Vouch issuer',
+            locator: { kind: 'uri', uri: `urn:nostr:pubkey:${PUBKEY}` },
+          },
+          {
+            id: 'subject',
+            type: 'schema:Person',
+            name: 'Vouch subject',
+            locator: { kind: 'uri', uri: `urn:nostr:pubkey:${subject}` },
+          },
+        ],
+        relations: [
+          { subject: 'lifecycle', predicate: 'trust:issuer', object: 'issuer' },
+          { subject: 'lifecycle', predicate: 'trust:subject', object: 'subject' },
+        ],
+        promptVersion: 'human-vouch-lifecycle-v1',
+      }),
+    });
+    const parsed = parseAgentMemoryEnvelope({
+      channelId: CHANNEL,
+      requesterPubkey: PUBKEY,
+      proposalEvent: proposal,
+      sourceEvents: [source],
+    });
+    const store = generatedStore(compileAgentMemory(parsed.envelope, parsed.proposal).quads);
+    const rows = queryRows(
+      store,
+      `PREFIX trust: <http://dkg.io/ontology/trust/>
+       SELECT ?status ?target ?replacement WHERE { GRAPH ?g {
+         ?action a trust:VouchLifecycle ; trust:status ?status ;
+           trust:targetVouch ?target ; trust:replacementVouch ?replacement .
+       } }`,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.get('status')?.value).toBe('superseded');
+    expect(rows[0]!.get('target')?.value).toBe(`urn:buzz-dkg:vouch:${targetEventId}`);
+    expect(rows[0]!.get('replacement')?.value).toBe(`urn:buzz-dkg:vouch:${replacementEventId}`);
+
+    const revokeSource = signed({
+      kind: 1985,
+      created_at: source.created_at + 2,
+      tags: [
+        ['h', CHANNEL],
+        ['L', 'buzz.wot'],
+        ['l', 'revoke', 'buzz.wot'],
+        ['p', subject],
+        ['e', targetEventId, '', 'target'],
+      ],
+      content: 'Revoked after the underlying evidence was withdrawn.',
+    });
+    const revokeContent = JSON.parse(proposal.content) as {
+      summary: string;
+      entities: Array<{
+        id: string;
+        description?: string;
+        locator?: { kind: string; uri: string };
+        attributes?: Array<{ predicate: string; value: string }>;
+      }>;
+    };
+    revokeContent.summary = 'Revoke vouch';
+    const revokeLifecycle = revokeContent.entities.find((entity) => entity.id === 'lifecycle')!;
+    revokeLifecycle.description = revokeSource.content;
+    revokeLifecycle.locator!.uri = `urn:buzz-dkg:vouch-lifecycle:${revokeSource.id}`;
+    revokeLifecycle.attributes = revokeLifecycle
+      .attributes!.filter((attribute) => attribute.predicate !== 'trust:replacementVouch')
+      .map((attribute) =>
+        attribute.predicate === 'trust:status' ? { ...attribute, value: 'revoked' } : attribute,
+      );
+    const revokeProposal = signed({
+      kind: DKG_MEMORY_PROPOSAL_KIND,
+      created_at: revokeSource.created_at + 1,
+      tags: [
+        ['h', CHANNEL],
+        ['e', revokeSource.id, '', 'source'],
+        ['t', 'dkg-memory-proposal'],
+      ],
+      content: JSON.stringify(revokeContent),
+    });
+    const parsedRevoke = parseAgentMemoryEnvelope({
+      channelId: CHANNEL,
+      requesterPubkey: PUBKEY,
+      proposalEvent: revokeProposal,
+      sourceEvents: [revokeSource],
+    });
+    const revokeStore = generatedStore(
+      compileAgentMemory(parsedRevoke.envelope, parsedRevoke.proposal).quads,
+    );
+    const revokeRows = queryRows(
+      revokeStore,
+      `PREFIX trust: <http://dkg.io/ontology/trust/>
+       SELECT ?status ?target WHERE { GRAPH ?g {
+         ?action a trust:VouchLifecycle ; trust:status ?status ; trust:targetVouch ?target .
+         FILTER NOT EXISTS { ?action trust:replacementVouch ?replacement }
+       } }`,
+    );
+    expect(revokeRows).toHaveLength(1);
+    expect(revokeRows[0]!.get('status')?.value).toBe('revoked');
+    expect(revokeRows[0]!.get('target')?.value).toBe(`urn:buzz-dkg:vouch:${targetEventId}`);
+
+    const tampered = JSON.parse(proposal.content) as {
+      entities: Array<{ id: string; attributes?: Array<{ predicate: string; value: string }> }>;
+    };
+    tampered.entities
+      .find((entity) => entity.id === 'lifecycle')!
+      .attributes!.find((attribute) => attribute.predicate === 'trust:targetVouch')!.value =
+      `urn:buzz-dkg:vouch:${'88'.repeat(32)}`;
+    const tamperedProposal = signed({
+      kind: proposal.kind,
+      created_at: proposal.created_at,
+      tags: proposal.tags,
+      content: JSON.stringify(tampered),
+    });
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: tamperedProposal,
+        sourceEvents: [source],
+      }),
+    ).toThrow(/attributes must exactly match the signed action/);
   });
 
   it('rejects unsupported trust lifecycle states and non-channel scopes', () => {
