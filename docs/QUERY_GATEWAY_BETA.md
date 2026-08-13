@@ -122,6 +122,7 @@ The operation and its exact arguments are:
 | `decision_trace`        | `{ repository, commitSha, componentName }`      | `{ repository, commitSha, componentName, decisions }`                                                                         |
 | `subgraph_graph`        | `{ name }`                                      | `{ subgraph, nodes, edges }`                                                                                                  |
 | `subgraph_triples`      | `{ name }`                                      | `{ subgraph, triples }`                                                                                                       |
+| `channel_triples`       | `{}`                                            | `{ triples, limit: 10000, truncated }` (also truncates at the configured response-byte ceiling)                              |
 | `evidence`              | `{ uri }`                                       | `{ found, claimId, name, status, trustState, memoryLayer, attribution, digest, asOf, sources, relations, receiptUal, graph }` |
 | `semantic_query`        | `{ sparql, view? }`                             | `{ queryType, scope, cost, layers }`                                                                                          |
 

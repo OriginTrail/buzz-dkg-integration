@@ -100,7 +100,7 @@ export function loadQueryGatewayConfig(env: NodeJS.ProcessEnv): QueryGatewayConf
     env.BDI_QUERY_GATEWAY_DKG_TIMEOUT_MS,
     5_000,
     500,
-    30_000,
+    60_000,
   );
   if (dkgTimeoutMs > operationTimeoutMs) {
     throw new Error('BDI_QUERY_GATEWAY_DKG_TIMEOUT_MS must not exceed the operation timeout');
@@ -120,7 +120,7 @@ export function loadQueryGatewayConfig(env: NodeJS.ProcessEnv): QueryGatewayConf
     maxResultBytes: envInteger(
       'BDI_QUERY_GATEWAY_MAX_RESULT_BYTES',
       env.BDI_QUERY_GATEWAY_MAX_RESULT_BYTES,
-      1024 * 1024,
+      8 * 1024 * 1024,
       64 * 1024,
       8 * 1024 * 1024,
     ),

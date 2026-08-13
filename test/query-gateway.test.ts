@@ -8,6 +8,7 @@ import type { DkgClient } from '../src/dkg/client.ts';
 import { QueryGateway } from '../src/query-gateway/server.ts';
 import { DkgReadLimiter } from '../src/query-gateway/read-limiter.ts';
 import { parseQueryGatewayRequest, QueryGatewayService } from '../src/query-gateway/service.ts';
+import type { ChannelTriplesResult } from '../src/query-gateway/types.ts';
 import type { QueryGatewayConfig } from '../src/types.ts';
 
 const TOKEN = 'gateway-token-'.padEnd(32, 'x');
@@ -294,8 +295,17 @@ describe('query gateway configuration', () => {
       loadQueryGatewayConfig({
         BDI_QUERY_GATEWAY_ENABLED: 'true',
         BDI_QUERY_GATEWAY_TOKEN: TOKEN,
+        BDI_QUERY_GATEWAY_TIMEOUT_MS: '120000',
+        BDI_QUERY_GATEWAY_DKG_TIMEOUT_MS: '60000',
+      }),
+    ).toMatchObject({ operationTimeoutMs: 120_000, dkgTimeoutMs: 60_000 });
+    expect(
+      loadQueryGatewayConfig({
+        BDI_QUERY_GATEWAY_ENABLED: 'true',
+        BDI_QUERY_GATEWAY_TOKEN: TOKEN,
       }),
     ).toMatchObject({
+      maxResultBytes: 8 * 1024 * 1024,
       maxDkgConcurrent: 1,
       maxDkgQueue: 32,
       cacheTtlMs: 120_000,
@@ -353,6 +363,10 @@ describe('query gateway request contract', () => {
     });
     expect(parseQueryGatewayRequest(body('subgraph_triples', { name: 'core_1' }))).toMatchObject({
       operation: 'subgraph_triples',
+    });
+    expect(parseQueryGatewayRequest(body('channel_triples'))).toMatchObject({
+      operation: 'channel_triples',
+      arguments: {},
     });
     expect(parseQueryGatewayRequest(body('evidence', { uri: 'urn:buzz:claim:1' }))).toMatchObject({
       operation: 'evidence',
@@ -530,7 +544,19 @@ describe('query gateway HTTP boundary', () => {
   });
 
   it('resolves the Context Graph server-side and queries only SWM and VM', async () => {
-    const { dkg, url } = await startGateway();
+    const dkg = new GatewayDkg();
+    dkg.bindingResolver = ({ view, sparql }) =>
+      sparql.includes('SELECT ?s ?p ?o ?g')
+        ? [
+            {
+              s: binding(`urn:test:${view}:subject`),
+              p: binding('urn:test:predicate'),
+              o: binding('value'),
+              g: binding(`https://example.test/${view}/graph`),
+            },
+          ]
+        : null;
+    const { url } = await startGateway(dkg);
     const response = await request(url, body('channel_memory'));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
@@ -544,13 +570,13 @@ describe('query gateway HTTP boundary', () => {
           SWM: [
             {
               graph: 'https://example.test/shared-working-memory/graph',
-              label: 'shared-working-memory graph',
+              label: 'shared-working-memory/graph',
             },
           ],
           VM: [
             {
               graph: 'https://example.test/verifiable-memory/graph',
-              label: 'verifiable-memory graph',
+              label: 'verifiable-memory/graph',
             },
           ],
         },
@@ -589,13 +615,17 @@ describe('query gateway HTTP boundary', () => {
     expect(dkg.calls).toHaveLength(3);
   });
 
-  it('keeps the combined channel summary valid SPARQL', async () => {
+  it('uses a bounded plain triple scan for the channel summary', async () => {
     const dkg = new GatewayDkg();
     dkg.bindingResolver = ({ sparql }) => fixtureQuery(sparql);
     const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
     const response = await service.execute(body('channel_memory'));
     expect(response.operation).toBe('channel_memory');
-    expect(dkg.calls.filter((call) => call.kind === 'query')).toHaveLength(2);
+    const calls = dkg.calls.filter((call) => call.kind === 'query');
+    expect(calls).toHaveLength(2);
+    expect(calls.map((call) => call.view)).toEqual(['verifiable-memory', 'shared-working-memory']);
+    expect(calls.every((call) => call.sparql?.includes('LIMIT 10001'))).toBe(true);
+    expect(calls.every((call) => !call.sparql?.includes('GROUP BY'))).toBe(true);
   });
 
   it('caches and coalesces identical channel summaries', async () => {
@@ -610,10 +640,10 @@ describe('query gateway HTTP boundary', () => {
     const gatedDkg = new GatedDkg();
     const coalesced = await startGateway(gatedDkg);
     const firstPending = request(coalesced.url, body('channel_memory'));
-    await waitFor(() => gatedDkg.started === 2);
+    await waitFor(() => gatedDkg.started === 1);
     const secondPending = request(coalesced.url, body('channel_memory'));
     await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(gatedDkg.started).toBe(2);
+    expect(gatedDkg.started).toBe(1);
     gatedDkg.release();
     const responses = await Promise.all([firstPending, secondPending]);
     expect(responses.map((response) => response.status)).toEqual([200, 200]);
@@ -641,10 +671,12 @@ describe('query gateway HTTP boundary', () => {
   it('keeps generic graph-only channel layers discoverable', async () => {
     const dkg = new GatewayDkg();
     dkg.bindingResolver = ({ view, sparql }) =>
-      sparql.includes('SELECT DISTINCT ?rowType')
+      sparql.includes('SELECT ?s ?p ?o ?g')
         ? [
             {
-              rowType: binding('graph'),
+              s: binding(`urn:test:${view}:subject`),
+              p: binding('urn:test:predicate'),
+              o: binding('value'),
               g: binding(`urn:test:${view}:generic-only`),
             },
           ]
@@ -662,30 +694,45 @@ describe('query gateway HTTP boundary', () => {
       decisions: [],
       contributors: [],
     });
-    const combined = dkg.calls.find((call) => call.sparql?.includes('SELECT DISTINCT ?rowType'));
-    expect(combined?.sparql).toContain('BIND("graph" AS ?rowType)');
-    expect(combined?.sparql).toContain('?graphSubject ?graphPredicate ?graphObject');
-    expect(combined?.sparql).toContain('COUNT(DISTINCT ?event) AS ?n');
-    expect(combined?.sparql).toContain('GROUP BY ?g ?pk LIMIT 201');
+    const scans = dkg.calls.filter((call) => call.sparql?.includes('SELECT ?s ?p ?o ?g'));
+    expect(scans).toHaveLength(2);
+    expect(scans.every((call) => !call.sparql?.includes('GROUP BY'))).toBe(true);
   });
 
-  it('uses store-computed contributor totals without hiding independent decision rows', async () => {
+  it('computes contributor totals without hiding independent decision rows', async () => {
     const dkg = new GatewayDkg();
     dkg.bindingResolver = ({ view, sparql }) =>
-      sparql.includes('SELECT DISTINCT ?rowType')
+      sparql.includes('SELECT ?s ?p ?o ?g')
         ? ([
             {
-              rowType: binding('contributor'),
+              s: binding(`urn:test:${view}:event-one`),
+              p: binding('http://www.w3.org/ns/prov#wasAttributedTo'),
+              o: binding(`urn:test:${view}:agent`),
               g: binding(`urn:test:${view}:busy`),
-              pk: binding(CONTRIBUTOR),
-              n: binding('1500'),
-              latest: binding('2026-08-12T12:00:00Z'),
             },
             {
-              rowType: binding('decision'),
+              s: binding(`urn:test:${view}:event-two`),
+              p: binding('http://www.w3.org/ns/prov#wasAttributedTo'),
+              o: binding(`urn:test:${view}:agent`),
+              g: binding(`urn:test:${view}:busy`),
+            },
+            {
+              s: binding(`urn:test:${view}:agent`),
+              p: binding('https://w3id.org/buzz-dkg/nostr#pubkeyHex'),
+              o: binding(CONTRIBUTOR),
+              g: binding(`urn:test:${view}:busy`),
+            },
+            {
               g: binding(`urn:test:${view}:busy`),
               s: binding('urn:test:decision:still-visible'),
-              name: binding('Decision remains visible'),
+              p: binding('http://www.w3.org/1999/02/22-rdf-syntax-ns#type'),
+              o: binding('https://w3id.org/buzz-dkg/buzz#DecisionCluster'),
+            },
+            {
+              g: binding(`urn:test:${view}:busy`),
+              s: binding('urn:test:decision:still-visible'),
+              p: binding('http://schema.org/name'),
+              o: binding('Decision remains visible'),
             },
           ] as Array<Record<string, { value: string }>>)
         : [];
@@ -694,7 +741,7 @@ describe('query gateway HTTP boundary', () => {
     const response = await service.execute(body('channel_memory'));
 
     expect(response.result).toMatchObject({
-      contributors: [{ pubkey: CONTRIBUTOR, events: 1500 }],
+      contributors: [{ pubkey: CONTRIBUTOR, events: 2 }],
       decisions: [{ uri: 'urn:test:decision:still-visible' }],
     });
   });
@@ -835,6 +882,7 @@ describe('query gateway HTTP boundary', () => {
     ],
     ['subgraph_graph', { name: 'core' }, { subgraph: 'core', nodes: [], edges: [] }],
     ['subgraph_triples', { name: 'core' }, { subgraph: 'core', triples: [] }],
+    ['channel_triples', {}, { triples: [], limit: 10_000, truncated: false }],
     [
       'evidence',
       { uri: 'urn:buzz:claim:1' },
@@ -1004,6 +1052,95 @@ describe('query gateway HTTP boundary', () => {
     ]);
   });
 
+  it('caps a channel graph at 10,000 triples and reads layers serially with VM first', async () => {
+    const dkg = new GatewayDkg();
+    dkg.tripleBindings = Array.from({ length: 10_001 }, (_, index) => ({
+      s: binding(`<urn:buzz:subject:${index}>`),
+      p: binding('<urn:buzz:predicate>'),
+      o: binding(`"value ${index}"`),
+      g: binding('<https://example.test/fizz/_verifiable_memory/graph>'),
+    }));
+    const service = new QueryGatewayService(
+      () => CONTEXT_GRAPH,
+      dkg.asDkg(),
+      gatewayConfig({
+        operationTimeoutMs: 10_000,
+        dkgTimeoutMs: 5_000,
+        maxResultBytes: 8 * 1024 * 1024,
+      }),
+    );
+
+    const response = await service.execute(body('channel_triples'));
+    expect(response.result).toMatchObject({ limit: 10_000, truncated: true });
+    expect('triples' in response.result && response.result.triples).toHaveLength(10_000);
+    expect('triples' in response.result && response.result.triples[0]).toMatchObject({
+      subject: 'urn:buzz:subject:0',
+      predicate: 'urn:buzz:predicate',
+      object: '"value 0"',
+      layer: 'VM',
+      agent: 'fizz',
+    });
+    const calls = dkg.calls.filter((call) => call.kind === 'query');
+    expect(calls.map((call) => call.view)).toEqual(['verifiable-memory', 'shared-working-memory']);
+    expect(calls.every((call) => call.subGraphName === undefined)).toBe(true);
+    expect(calls.every((call) => call.sparql?.includes('LIMIT 10001'))).toBe(true);
+  });
+
+  it('does not begin the SWM channel scan until the VM scan resolves', async () => {
+    let releaseVm: (() => void) | undefined;
+    let signalVmStarted: (() => void) | undefined;
+    const vmGate = new Promise<void>((resolve) => {
+      releaseVm = resolve;
+    });
+    const vmStarted = new Promise<void>((resolve) => {
+      signalVmStarted = resolve;
+    });
+    class SerialLayerDkg extends GatewayDkg {
+      override async query(...args: Parameters<GatewayDkg['query']>) {
+        const [options] = args;
+        if (options.view === 'verifiable-memory') {
+          signalVmStarted?.();
+          await vmGate;
+        }
+        return super.query(...args);
+      }
+    }
+    const dkg = new SerialLayerDkg();
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+    const pending = service.execute(body('channel_triples'));
+
+    await vmStarted;
+    await Promise.resolve();
+    expect(dkg.calls).toHaveLength(0);
+    releaseVm?.();
+    await pending;
+    expect(dkg.calls.filter((call) => call.kind === 'query').map((call) => call.view)).toEqual([
+      'verifiable-memory',
+      'shared-working-memory',
+    ]);
+  });
+
+  it('truncates large-literal channel responses to the configured HTTP byte budget', async () => {
+    const dkg = new GatewayDkg();
+    dkg.tripleBindings = Array.from({ length: 40 }, (_, index) => ({
+      s: binding(`<urn:buzz:subject:${index}>`),
+      p: binding('<urn:buzz:predicate>'),
+      o: binding(`"${'x'.repeat(4_000)}"`),
+      g: binding('<https://example.test/fizz/_verifiable_memory/graph>'),
+    }));
+    const maxResultBytes = 20_000;
+    const { url } = await startGateway(dkg, gatewayConfig({ maxResultBytes }));
+    const response = await request(url, body('channel_triples'));
+    const raw = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(Buffer.byteLength(raw, 'utf8')).toBeLessThanOrEqual(maxResultBytes);
+    const payload = JSON.parse(raw) as { result: ChannelTriplesResult };
+    expect(payload.result.truncated).toBe(true);
+    expect(payload.result.triples.length).toBeGreaterThan(0);
+    expect(payload.result.triples.length).toBeLessThan(40);
+  });
+
   it('maps contributors and evidence through the RDF author relation', async () => {
     const dkg = new GatewayDkg();
     const event = 'urn:nostr:event:event-one';
@@ -1011,33 +1148,52 @@ describe('query gateway HTTP boundary', () => {
     const claim = 'urn:buzz:claim:claim-one';
     const at = '2026-08-05T12:00:00.000Z';
     const expectedAt = Date.parse(at) / 1_000;
+    const agent = 'urn:nostr:agent:contributor';
     dkg.bindingResolver = (options) => {
       if (options.view !== 'verifiable-memory') return [];
-      if (options.sparql.includes('SELECT DISTINCT ?rowType')) {
+      if (options.sparql.includes('SELECT ?s ?p ?o ?g')) {
         return [
           {
-            rowType: binding('graph'),
+            s: binding('urn:nostr:event:contribution-one'),
+            p: binding('http://www.w3.org/ns/prov#wasAttributedTo'),
+            o: binding(agent),
             g: binding('urn:g'),
-            name: binding('Verifiable graph'),
           },
           {
-            rowType: binding('contributor'),
-            pk: binding(CONTRIBUTOR),
-            event: binding('urn:nostr:event:contribution-one'),
-            at: binding(at),
+            s: binding('urn:nostr:event:contribution-one'),
+            p: binding('https://w3id.org/buzz-dkg/nostr#createdAt'),
+            o: binding(at),
+            g: binding('urn:g'),
           },
           {
-            rowType: binding('contributor'),
-            pk: binding(CONTRIBUTOR),
-            event: binding('urn:nostr:event:contribution-two'),
-            at: binding(at),
+            s: binding('urn:nostr:event:contribution-two'),
+            p: binding('http://www.w3.org/ns/prov#wasAttributedTo'),
+            o: binding(agent),
+            g: binding('urn:g'),
           },
           {
-            rowType: binding('decision'),
+            s: binding('urn:nostr:event:contribution-two'),
+            p: binding('https://w3id.org/buzz-dkg/nostr#createdAt'),
+            o: binding(at),
+            g: binding('urn:g'),
+          },
+          {
+            s: binding(agent),
+            p: binding('https://w3id.org/buzz-dkg/nostr#pubkeyHex'),
+            o: binding(CONTRIBUTOR),
+            g: binding('urn:g'),
+          },
+          {
             s: binding(decision),
-            name: binding('Choose the graph store'),
-            digest: binding('digest-one'),
-            t: binding(at),
+            p: binding('http://www.w3.org/1999/02/22-rdf-syntax-ns#type'),
+            o: binding('https://w3id.org/buzz-dkg/buzz#DecisionCluster'),
+            g: binding('urn:g'),
+          },
+          {
+            s: binding(decision),
+            p: binding('http://schema.org/name'),
+            o: binding('Choose the graph store'),
+            g: binding('urn:g'),
           },
         ] as Array<Record<string, { value: string }>>;
       }
