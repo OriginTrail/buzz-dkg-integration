@@ -8,6 +8,7 @@ import type { DkgClient } from '../src/dkg/client.ts';
 import { QueryGateway } from '../src/query-gateway/server.ts';
 import { DkgReadLimiter } from '../src/query-gateway/read-limiter.ts';
 import { parseQueryGatewayRequest, QueryGatewayService } from '../src/query-gateway/service.ts';
+import type { ChannelTriplesResult } from '../src/query-gateway/types.ts';
 import type { QueryGatewayConfig } from '../src/types.ts';
 
 const TOKEN = 'gateway-token-'.padEnd(32, 'x');
@@ -304,6 +305,7 @@ describe('query gateway configuration', () => {
         BDI_QUERY_GATEWAY_TOKEN: TOKEN,
       }),
     ).toMatchObject({
+      maxResultBytes: 8 * 1024 * 1024,
       maxDkgConcurrent: 1,
       maxDkgQueue: 32,
       cacheTtlMs: 120_000,
@@ -1061,16 +1063,82 @@ describe('query gateway HTTP boundary', () => {
     const service = new QueryGatewayService(
       () => CONTEXT_GRAPH,
       dkg.asDkg(),
-      gatewayConfig({ operationTimeoutMs: 10_000, dkgTimeoutMs: 5_000 }),
+      gatewayConfig({
+        operationTimeoutMs: 10_000,
+        dkgTimeoutMs: 5_000,
+        maxResultBytes: 8 * 1024 * 1024,
+      }),
     );
 
     const response = await service.execute(body('channel_triples'));
     expect(response.result).toMatchObject({ limit: 10_000, truncated: true });
     expect('triples' in response.result && response.result.triples).toHaveLength(10_000);
+    expect('triples' in response.result && response.result.triples[0]).toMatchObject({
+      subject: 'urn:buzz:subject:0',
+      predicate: 'urn:buzz:predicate',
+      object: '"value 0"',
+      layer: 'VM',
+      agent: 'fizz',
+    });
     const calls = dkg.calls.filter((call) => call.kind === 'query');
     expect(calls.map((call) => call.view)).toEqual(['verifiable-memory', 'shared-working-memory']);
     expect(calls.every((call) => call.subGraphName === undefined)).toBe(true);
     expect(calls.every((call) => call.sparql?.includes('LIMIT 10001'))).toBe(true);
+  });
+
+  it('does not begin the SWM channel scan until the VM scan resolves', async () => {
+    let releaseVm: (() => void) | undefined;
+    let signalVmStarted: (() => void) | undefined;
+    const vmGate = new Promise<void>((resolve) => {
+      releaseVm = resolve;
+    });
+    const vmStarted = new Promise<void>((resolve) => {
+      signalVmStarted = resolve;
+    });
+    class SerialLayerDkg extends GatewayDkg {
+      override async query(...args: Parameters<GatewayDkg['query']>) {
+        const [options] = args;
+        if (options.view === 'verifiable-memory') {
+          signalVmStarted?.();
+          await vmGate;
+        }
+        return super.query(...args);
+      }
+    }
+    const dkg = new SerialLayerDkg();
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+    const pending = service.execute(body('channel_triples'));
+
+    await vmStarted;
+    await Promise.resolve();
+    expect(dkg.calls).toHaveLength(0);
+    releaseVm?.();
+    await pending;
+    expect(dkg.calls.filter((call) => call.kind === 'query').map((call) => call.view)).toEqual([
+      'verifiable-memory',
+      'shared-working-memory',
+    ]);
+  });
+
+  it('truncates large-literal channel responses to the configured HTTP byte budget', async () => {
+    const dkg = new GatewayDkg();
+    dkg.tripleBindings = Array.from({ length: 40 }, (_, index) => ({
+      s: binding(`<urn:buzz:subject:${index}>`),
+      p: binding('<urn:buzz:predicate>'),
+      o: binding(`"${'x'.repeat(4_000)}"`),
+      g: binding('<https://example.test/fizz/_verifiable_memory/graph>'),
+    }));
+    const maxResultBytes = 20_000;
+    const { url } = await startGateway(dkg, gatewayConfig({ maxResultBytes }));
+    const response = await request(url, body('channel_triples'));
+    const raw = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(Buffer.byteLength(raw, 'utf8')).toBeLessThanOrEqual(maxResultBytes);
+    const payload = JSON.parse(raw) as { result: ChannelTriplesResult };
+    expect(payload.result.truncated).toBe(true);
+    expect(payload.result.triples.length).toBeGreaterThan(0);
+    expect(payload.result.triples.length).toBeLessThan(40);
   });
 
   it('maps contributors and evidence through the RDF author relation', async () => {

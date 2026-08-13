@@ -282,6 +282,75 @@ function bounded(value: string, max: number): string {
   return value.length <= max ? value : value.slice(0, max);
 }
 
+function collectGraphTriples(
+  triples: Map<string, GraphTriple>,
+  rows: LayeredRow[],
+  defaultAgent: string,
+  limit: number,
+): boolean {
+  let truncated = false;
+  for (const { row, layer } of rows) {
+    const subject = bounded(term(row, 's'), 1_000);
+    const predicate = bounded(term(row, 'p'), 1_000);
+    const object = bounded(rawTerm(row.o), 4_000);
+    if (!subject || !predicate) continue;
+    const key = JSON.stringify([subject, predicate, object]);
+    const existing = triples.get(key);
+    if (existing) {
+      if (LAYER_RANK[layer] > LAYER_RANK[existing.layer]) existing.layer = layer;
+      continue;
+    }
+    if (triples.size >= limit) {
+      truncated = true;
+      continue;
+    }
+    const graph = term(row, 'g');
+    const agentMatch = /\/([a-z0-9_-]+)\/_?(?:shared|verifiable)_memory\//iu.exec(graph);
+    triples.set(key, {
+      subject,
+      predicate,
+      object,
+      layer,
+      agent: bounded(agentMatch?.[1] ?? defaultAgent, 128),
+    });
+  }
+  return truncated;
+}
+
+function serializedBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8');
+}
+
+/** Keep channel graph reads useful even when literals make the count cap exceed the byte cap. */
+function fitChannelTriplesResponse(
+  value: QueryGatewaySuccess & { result: ChannelTriplesResult },
+  maxResultBytes: number,
+): QueryGatewaySuccess {
+  if (serializedBytes(value) <= maxResultBytes) return value;
+
+  let low = 0;
+  let high = value.result.triples.length;
+  let best: QueryGatewaySuccess | null = null;
+  while (low <= high) {
+    const count = Math.floor((low + high) / 2);
+    const candidate: QueryGatewaySuccess = {
+      ...value,
+      result: {
+        ...value.result,
+        triples: value.result.triples.slice(0, count),
+        truncated: true,
+      },
+    };
+    if (serializedBytes(candidate) <= maxResultBytes) {
+      best = candidate;
+      low = count + 1;
+    } else {
+      high = count - 1;
+    }
+  }
+  return best ?? value;
+}
+
 function dateTimestamp(value: unknown): number | null {
   if (value === undefined) return null;
   const parsed = Date.parse(bindingTerm(value));
@@ -340,14 +409,20 @@ export class QueryGatewayService {
       observe,
       work: async () => {
         const result = await this.dispatch(cg, request);
-        const value: QueryGatewaySuccess = {
+        let value: QueryGatewaySuccess = {
           ok: true,
           channelId: request.channelId,
           cg,
           operation: request.operation,
           result,
         };
-        if (Buffer.byteLength(JSON.stringify(value), 'utf8') > this.config.maxResultBytes) {
+        if (request.operation === 'channel_triples') {
+          value = fitChannelTriplesResponse(
+            value as QueryGatewaySuccess & { result: ChannelTriplesResult },
+            this.config.maxResultBytes,
+          );
+        }
+        if (serializedBytes(value) > this.config.maxResultBytes) {
           throw new IntegrationApiError(502, 'result_too_large', 'query result exceeds the limit');
         }
         return value;
@@ -816,28 +891,7 @@ export class QueryGatewayService {
       name,
     );
     const triples = new Map<string, GraphTriple>();
-    for (const { row, layer } of rows) {
-      const subject = bounded(term(row, 's'), 1_000);
-      const predicate = bounded(term(row, 'p'), 1_000);
-      const object = bounded(rawTerm(row.o), 4_000);
-      if (!subject || !predicate) continue;
-      const key = JSON.stringify([subject, predicate, object]);
-      const existing = triples.get(key);
-      if (existing) {
-        if (LAYER_RANK[layer] > LAYER_RANK[existing.layer]) existing.layer = layer;
-        continue;
-      }
-      if (triples.size >= MAX_TRIPLES) continue;
-      const graph = term(row, 'g');
-      const agentMatch = /\/([a-z0-9_-]+)\/_(?:shared|verifiable)_memory\//iu.exec(graph);
-      triples.set(key, {
-        subject,
-        predicate,
-        object,
-        layer,
-        agent: bounded(agentMatch?.[1] ?? name, 128),
-      });
-    }
+    collectGraphTriples(triples, rows, name, MAX_TRIPLES);
     return { subgraph: name, triples: [...triples.values()] };
   }
 
@@ -853,30 +907,15 @@ export class QueryGatewayService {
     for (const [view, layer] of [...VIEWS].reverse()) {
       const rows = await this.query(cg, view, query, undefined, MAX_CHANNEL_TRIPLES + 1);
       if (rows.length > MAX_CHANNEL_TRIPLES) truncated = true;
-      for (const row of rows) {
-        const subject = bounded(term(row, 's'), 1_000);
-        const predicate = bounded(term(row, 'p'), 1_000);
-        const object = bounded(rawTerm(row.o), 4_000);
-        if (!subject || !predicate) continue;
-        const key = JSON.stringify([subject, predicate, object]);
-        const existing = triples.get(key);
-        if (existing) {
-          if (LAYER_RANK[layer] > LAYER_RANK[existing.layer]) existing.layer = layer;
-          continue;
-        }
-        if (triples.size >= MAX_CHANNEL_TRIPLES) {
-          truncated = true;
-          continue;
-        }
-        const graph = term(row, 'g');
-        const agentMatch = /\/([a-z0-9_-]+)\/_?(?:shared|verifiable)_memory\//iu.exec(graph);
-        triples.set(key, {
-          subject,
-          predicate,
-          object,
-          layer,
-          agent: bounded(agentMatch?.[1] ?? 'channel', 128),
-        });
+      if (
+        collectGraphTriples(
+          triples,
+          rows.map((row) => ({ row, layer })),
+          'channel',
+          MAX_CHANNEL_TRIPLES,
+        )
+      ) {
+        truncated = true;
       }
     }
 
