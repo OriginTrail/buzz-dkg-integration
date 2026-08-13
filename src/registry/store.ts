@@ -80,6 +80,8 @@ export class Registry {
       );
       CREATE TABLE IF NOT EXISTS agent_memory (
         proposal_event_id TEXT PRIMARY KEY,
+        channel_id TEXT,
+        evidence_digest TEXT,
         envelope_json TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
@@ -91,6 +93,8 @@ export class Registry {
       'ALTER TABLE ops ADD COLUMN title TEXT',
       'ALTER TABLE ops ADD COLUMN tx_hash TEXT',
       'ALTER TABLE asks ADD COLUMN author_pubkey TEXT',
+      'ALTER TABLE agent_memory ADD COLUMN channel_id TEXT',
+      'ALTER TABLE agent_memory ADD COLUMN evidence_digest TEXT',
     ]) {
       try {
         this.db.exec(alter);
@@ -98,6 +102,11 @@ export class Registry {
         if (!String(e.message).includes('duplicate column')) throw e;
       }
     }
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_memory_evidence
+      ON agent_memory(channel_id, evidence_digest)
+      WHERE channel_id IS NOT NULL AND evidence_digest IS NOT NULL;
+    `);
   }
 
   loadBindings(bindings: ChannelBinding[]): void {
@@ -161,19 +170,64 @@ export class Registry {
     }));
   }
 
-  saveAgentMemoryEnvelope(proposalEventId: string, envelope: unknown): void {
+  /**
+   * Reserve one canonical channel evidence set for a signed proposal.
+   *
+   * `proposal_event_id` still protects byte-for-byte event replays. The
+   * `(channel_id, evidence_digest)` index additionally makes a newly signed
+   * retry idempotent when it references the same exact evidence set.
+   */
+  reserveAgentMemoryEnvelope(
+    proposalEventId: string,
+    channelId: string,
+    evidenceDigest: string,
+    envelope: unknown,
+  ): { proposalEventId: string; duplicate: boolean } {
     const json = JSON.stringify(envelope);
     const existing = this.db
-      .prepare('SELECT envelope_json FROM agent_memory WHERE proposal_event_id = ?')
-      .get(proposalEventId) as { envelope_json: string } | undefined;
+      .prepare(
+        'SELECT envelope_json, channel_id, evidence_digest FROM agent_memory WHERE proposal_event_id = ?',
+      )
+      .get(proposalEventId) as
+      | { envelope_json: string; channel_id: string | null; evidence_digest: string | null }
+      | undefined;
     if (existing && existing.envelope_json !== json) {
       throw new Error(`proposal event '${proposalEventId}' was replayed with different evidence`);
     }
+    if (existing) {
+      if (
+        (existing.channel_id !== null && existing.channel_id !== channelId) ||
+        (existing.evidence_digest !== null && existing.evidence_digest !== evidenceDigest)
+      ) {
+        throw new Error(`proposal event '${proposalEventId}' was replayed with different evidence`);
+      }
+      return { proposalEventId, duplicate: true };
+    }
+    const evidenceOwner = this.db
+      .prepare(
+        'SELECT proposal_event_id FROM agent_memory WHERE channel_id = ? AND evidence_digest = ?',
+      )
+      .get(channelId, evidenceDigest) as { proposal_event_id: string } | undefined;
+    if (evidenceOwner) {
+      return { proposalEventId: evidenceOwner.proposal_event_id, duplicate: true };
+    }
     this.db
       .prepare(
-        'INSERT OR IGNORE INTO agent_memory (proposal_event_id, envelope_json, created_at) VALUES (?, ?, ?)',
+        'INSERT OR IGNORE INTO agent_memory ' +
+          '(proposal_event_id, channel_id, evidence_digest, envelope_json, created_at) ' +
+          'VALUES (?, ?, ?, ?, ?)',
       )
-      .run(proposalEventId, json, Date.now());
+      .run(proposalEventId, channelId, evidenceDigest, json, Date.now());
+    const owner = this.db
+      .prepare(
+        'SELECT proposal_event_id FROM agent_memory WHERE channel_id = ? AND evidence_digest = ?',
+      )
+      .get(channelId, evidenceDigest) as { proposal_event_id: string } | undefined;
+    if (!owner) throw new Error('could not reserve agent memory evidence set');
+    return {
+      proposalEventId: owner.proposal_event_id,
+      duplicate: owner.proposal_event_id !== proposalEventId,
+    };
   }
 
   agentMemoryEnvelope(proposalEventId: string): unknown | null {

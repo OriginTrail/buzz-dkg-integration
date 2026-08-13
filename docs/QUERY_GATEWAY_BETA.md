@@ -161,8 +161,11 @@ Schema v1 still compiles through its unchanged legacy graph path.
 For a valid proposal the sidecar deterministically creates or reuses that
 channel's private Context Graph, compiles provenance-bearing RDF, writes Working
 Memory, promotes it to Shared Working Memory, and records a terminal local
-operation. The proposal event ID is the idempotency key, so retries do not
-duplicate graph state. This beta performs no Verifiable Memory publication and
+operation. The proposal event ID makes retries of the same signed event
+idempotent. The channel plus canonical source-event-set digest also identifies
+the accepted proposal, so a crash recovery that re-signs otherwise identical
+evidence resolves to the original operation instead of creating another graph
+write. This beta performs no Verifiable Memory publication and
 emits no relay chat event for the background write.
 
 The normative beta profiles, SHACL shapes, lifelike fixture, and executable
