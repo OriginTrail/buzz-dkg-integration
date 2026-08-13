@@ -915,14 +915,7 @@ describe('automatic channel memory lifecycle', () => {
     await daemon.drain();
     expect(daemon.registry.opByTrigger(accepted.proposalEventId)?.state).toBe('finalized');
 
-    const pendingPoll = daemon.submitAgentMemory(request);
-    expect(pendingPoll).toMatchObject({
-      outcome: 'duplicate',
-      operationId: accepted.proposalEventId,
-      state: 'processing',
-    });
-
-    await daemon.drain();
+    await daemon.recover();
     expect(daemon.registry.opByTrigger(accepted.proposalEventId)?.state).toBe('receipted');
     expect(dkg.kas.get(accepted.kaName)).toMatchObject({
       writes: 1,

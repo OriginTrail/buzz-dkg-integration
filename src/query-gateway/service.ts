@@ -443,25 +443,32 @@ export class QueryGatewayService {
       cg,
       view,
       `SELECT DISTINCT ?rowType ?g ?name ?s ?digest ?t ?pk ?event ?at WHERE {
-        GRAPH ?g {
+        {
           {
-            BIND("graph" AS ?rowType)
+            SELECT DISTINCT ?g WHERE {
+              GRAPH ?g { ?graphSubject ?graphPredicate ?graphObject }
+            } LIMIT 201
           }
-          UNION
-          {
+          BIND("graph" AS ?rowType)
+        }
+        UNION
+        {
+          GRAPH ?g {
             ?s a <${BUZZ}DecisionCluster> .
             OPTIONAL { ?s <${SCHEMA}name> ?name }
             OPTIONAL { ?s <${BUZZ}sourceSetDigest> ?digest }
             OPTIONAL { ?s <${PROV}endedAtTime> ?t }
-            BIND("decision" AS ?rowType)
           }
-          UNION
-          {
+          BIND("decision" AS ?rowType)
+        }
+        UNION
+        {
+          GRAPH ?g {
             ?event <${PROV}wasAttributedTo> ?agent .
             ?agent <${NOSTR}pubkeyHex> ?pk .
             OPTIONAL { ?event <${NOSTR}createdAt> ?at }
-            BIND("contributor" AS ?rowType)
           }
+          BIND("contributor" AS ?rowType)
         }
       } LIMIT 1000`,
     );

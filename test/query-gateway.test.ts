@@ -664,6 +664,7 @@ describe('query gateway HTTP boundary', () => {
     });
     const combined = dkg.calls.find((call) => call.sparql?.includes('SELECT DISTINCT ?rowType'));
     expect(combined?.sparql).toContain('BIND("graph" AS ?rowType)');
+    expect(combined?.sparql).toContain('?graphSubject ?graphPredicate ?graphObject');
   });
 
   it('removes timed-out work from the DKG read queue before it can execute', async () => {
