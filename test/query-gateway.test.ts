@@ -459,6 +459,42 @@ describe('query gateway HTTP boundary', () => {
     expect(submitted).toEqual([payload, payload]);
   });
 
+  it('invalidates cached channel queries when memory is accepted through HTTP', async () => {
+    const dkg = new GatewayDkg();
+    let name = 'before memory';
+    dkg.bindingResolver = () => [{ name: binding(name) }];
+    const { url } = await startGateway(dkg, gatewayConfig(), undefined, () => ({
+      ok: true,
+      outcome: 'accepted',
+      operationId: '33'.repeat(32),
+      proposalEventId: '33'.repeat(32),
+      channelId: CHANNEL,
+      requesterPubkey: REQUESTER,
+      contextGraphId: CONTEXT_GRAPH,
+      kaName: 'buzz-dkg-memory',
+      digest: '44'.repeat(32),
+      state: 'processing',
+    }));
+    const query = semanticBody(
+      'SELECT ?name WHERE { GRAPH ?g { <urn:decision:cache> <http://schema.org/name> ?name } } LIMIT 1',
+      'shared',
+    );
+
+    const first = (await (await request(url, query)).json()) as {
+      result: { layers: Array<{ bindings: Array<{ name: { value: string } }> }> };
+    };
+    name = 'after memory';
+    const cached = (await (await request(url, query)).json()) as typeof first;
+    expect(first.result.layers[0]?.bindings[0]?.name.value).toBe('before memory');
+    expect(cached.result.layers[0]?.bindings[0]?.name.value).toBe('before memory');
+
+    const accepted = await request(url.replace('/v1/query', '/v1/memory'), { signed: 'memory' });
+    expect(accepted.status).toBe(202);
+    const refreshed = (await (await request(url, query)).json()) as typeof first;
+    expect(refreshed.result.layers[0]?.bindings[0]?.name.value).toBe('after memory');
+    expect(dkg.calls.filter((call) => call.kind === 'query')).toHaveLength(2);
+  });
+
   it('resolves newly provisioned channel bindings at request time', async () => {
     const dkg = new GatewayDkg();
     const service = new QueryGatewayService(
@@ -555,10 +591,10 @@ describe('query gateway HTTP boundary', () => {
     const gatedDkg = new GatedDkg();
     const coalesced = await startGateway(gatedDkg);
     const firstPending = request(coalesced.url, body('channel_memory'));
-    await waitFor(() => gatedDkg.started === 1);
+    await waitFor(() => gatedDkg.started === 2);
     const secondPending = request(coalesced.url, body('channel_memory'));
     await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(gatedDkg.started).toBe(1);
+    expect(gatedDkg.started).toBe(2);
     gatedDkg.release();
     const responses = await Promise.all([firstPending, secondPending]);
     expect(responses.map((response) => response.status)).toEqual([200, 200]);

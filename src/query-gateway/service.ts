@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import type { DkgClient } from '../dkg/client.ts';
 import { IntegrationApiError } from '../errors.ts';
 import { canonicalRepositoryIdentityUrl } from '../memory/identity.ts';
@@ -31,7 +30,9 @@ import type {
   SubgraphTriplesResult,
   VisibleMemoryLayer,
 } from './types.ts';
-import { DkgReadLimiter } from './read-limiter.ts';
+import { QueryExecutionPolicy, type QueryCacheStatus } from './query-execution-policy.ts';
+
+export type { QueryCacheStatus } from './query-execution-policy.ts';
 
 type EnabledGatewayConfig = Extract<QueryGatewayConfig, { enabled: true }>;
 type BindingRow = SparqlBindingRow;
@@ -59,9 +60,6 @@ const MAX_DKG_ROWS = 2_500;
 const MAX_GRAPH_NODES = 1_200;
 const MAX_GRAPH_EDGES = 2_400;
 const MAX_TRIPLES = 1_000;
-const CIRCUIT_FAILURE_THRESHOLD = 3;
-const CIRCUIT_OPEN_MS = 15_000;
-
 const BUZZ = 'https://w3id.org/buzz-dkg/buzz#';
 const NOSTR = 'https://w3id.org/buzz-dkg/nostr#';
 const PROV = 'http://www.w3.org/ns/prov#';
@@ -292,44 +290,13 @@ function safeDerivedIri(value: string): boolean {
   return SAFE_IRI.test(value);
 }
 
-export function withGatewayTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  onTimeout?: () => void,
-): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      onTimeout?.();
-      reject(new IntegrationApiError(504, 'gateway_timeout', 'operation timed out'));
-    }, timeoutMs);
-  });
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer) clearTimeout(timer);
-  });
-}
-
-export type QueryCacheStatus = 'hit' | 'miss' | 'coalesced';
-
-type QueryCacheEntry = {
-  channelId: string;
-  expiresAt: number;
-  value: QueryGatewaySuccess;
-};
-
 type QueryExecutionObserver = (status: QueryCacheStatus) => void;
 
 export class QueryGatewayService {
   readonly #resolveContextGraph: (channelId: string) => string | null | Promise<string | null>;
-  readonly #readLimiter: DkgReadLimiter;
-  readonly #cache = new Map<string, QueryCacheEntry>();
-  readonly #pending = new Map<string, Promise<QueryGatewaySuccess>>();
-  readonly #channelGeneration = new Map<string, number>();
-  readonly #executionSignal = new AsyncLocalStorage<AbortSignal>();
+  readonly #executionPolicy: QueryExecutionPolicy<QueryGatewaySuccess>;
   readonly dkg: DkgClient;
   readonly config: EnabledGatewayConfig;
-  #consecutiveFailures = 0;
-  #circuitOpenUntil = 0;
 
   constructor(
     resolveContextGraph: (channelId: string) => string | null | Promise<string | null>,
@@ -339,27 +306,15 @@ export class QueryGatewayService {
     this.dkg = dkg;
     this.config = config;
     this.#resolveContextGraph = resolveContextGraph;
-    this.#readLimiter = new DkgReadLimiter(config.maxDkgConcurrent, config.maxDkgQueue);
+    this.#executionPolicy = new QueryExecutionPolicy(config);
   }
 
-  loadSnapshot(): ReturnType<DkgReadLimiter['snapshot']> & {
-    cacheEntries: number;
-    pendingQueries: number;
-    circuitOpen: boolean;
-  } {
-    return {
-      ...this.#readLimiter.snapshot(),
-      cacheEntries: this.#cache.size,
-      pendingQueries: this.#pending.size,
-      circuitOpen: Date.now() < this.#circuitOpenUntil,
-    };
+  loadSnapshot(): ReturnType<QueryExecutionPolicy<QueryGatewaySuccess>['snapshot']> {
+    return this.#executionPolicy.snapshot();
   }
 
   invalidateChannel(channelId: string): void {
-    this.#channelGeneration.set(channelId, (this.#channelGeneration.get(channelId) ?? 0) + 1);
-    for (const [key, entry] of this.#cache) {
-      if (entry.channelId === channelId) this.#cache.delete(key);
-    }
+    this.#executionPolicy.invalidateChannel(channelId);
   }
 
   async execute(input: unknown, observe?: QueryExecutionObserver): Promise<QueryGatewaySuccess> {
@@ -372,49 +327,17 @@ export class QueryGatewayService {
         'channel is not configured for DKG queries',
       );
     }
-    const now = Date.now();
-    const generation = this.#channelGeneration.get(request.channelId) ?? 0;
-    this.#pruneCache(now);
-    const key = JSON.stringify([
-      request.channelId,
-      generation,
-      cg,
-      request.operation,
-      'scope' in request ? request.scope : null,
-      request.arguments,
-    ]);
-    const cached = this.#cache.get(key);
-    if (cached && cached.expiresAt > now) {
-      // Refresh insertion order so bounded eviction approximates LRU.
-      this.#cache.delete(key);
-      this.#cache.set(key, cached);
-      observe?.('hit');
-      return cached.value;
-    }
-    const pending = this.#pending.get(key);
-    if (pending) {
-      observe?.('coalesced');
-      return pending;
-    }
-    if (now < this.#circuitOpenUntil) {
-      const retryAfterSeconds = Math.max(1, Math.ceil((this.#circuitOpenUntil - now) / 1_000));
-      throw new IntegrationApiError(
-        503,
-        'dkg_unavailable',
-        'DKG reads are cooling down after repeated upstream failures',
-        { retryAfterSeconds },
-      );
-    }
-
-    observe?.('miss');
-    const controller = new AbortController();
-    const dispatch = this.#executionSignal.run(controller.signal, () => this.dispatch(cg, request));
-    const work = withGatewayTimeout(dispatch, this.config.operationTimeoutMs, () =>
-      controller.abort(),
-    )
-      .then((result) => {
-        this.#consecutiveFailures = 0;
-        this.#circuitOpenUntil = 0;
+    return this.#executionPolicy.execute({
+      channelId: request.channelId,
+      keyParts: [
+        cg,
+        request.operation,
+        'scope' in request ? request.scope : null,
+        request.arguments,
+      ],
+      observe,
+      work: async () => {
+        const result = await this.dispatch(cg, request);
         const value: QueryGatewaySuccess = {
           ok: true,
           channelId: request.channelId,
@@ -425,47 +348,9 @@ export class QueryGatewayService {
         if (Buffer.byteLength(JSON.stringify(value), 'utf8') > this.config.maxResultBytes) {
           throw new IntegrationApiError(502, 'result_too_large', 'query result exceeds the limit');
         }
-        if (
-          this.config.cacheTtlMs > 0 &&
-          (this.#channelGeneration.get(request.channelId) ?? 0) === generation
-        ) {
-          this.#cache.set(key, {
-            channelId: request.channelId,
-            expiresAt: Date.now() + this.config.cacheTtlMs,
-            value,
-          });
-          this.#pruneCache(Date.now());
-        }
         return value;
-      })
-      .catch((error: unknown) => {
-        const upstreamFailure =
-          !(error instanceof IntegrationApiError) || error.code === 'gateway_timeout';
-        if (upstreamFailure) {
-          this.#consecutiveFailures += 1;
-          if (this.#consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD) {
-            this.#circuitOpenUntil = Date.now() + CIRCUIT_OPEN_MS;
-          }
-        }
-        throw error;
-      });
-    this.#pending.set(key, work);
-    try {
-      return await work;
-    } finally {
-      if (this.#pending.get(key) === work) this.#pending.delete(key);
-    }
-  }
-
-  #pruneCache(now: number): void {
-    for (const [key, entry] of this.#cache) {
-      if (entry.expiresAt <= now) this.#cache.delete(key);
-    }
-    while (this.#cache.size > this.config.maxCacheEntries) {
-      const oldest = this.#cache.keys().next().value as string | undefined;
-      if (!oldest) break;
-      this.#cache.delete(oldest);
-    }
+      },
+    });
   }
 
   private async dispatch(cg: string, request: QueryGatewayRequest): Promise<QueryGatewayResult> {
@@ -501,9 +386,8 @@ export class QueryGatewayService {
           maxQueryBytes: this.config.maxQueryBytes,
           dkgTimeoutMs: this.config.dkgTimeoutMs,
           query: async (view, sparql, timeoutMs) =>
-            this.#readLimiter.run(
-              () => this.dkg.query({ contextGraphId: cg, view, sparql }, timeoutMs),
-              this.#executionSignal.getStore(),
+            this.#executionPolicy.read(() =>
+              this.dkg.query({ contextGraphId: cg, view, sparql }, timeoutMs),
             ),
         });
     }
@@ -516,13 +400,11 @@ export class QueryGatewayService {
     subGraphName?: string,
     timeoutMs = this.config.dkgTimeoutMs,
   ): Promise<{ bindings: BindingRow[] }> {
-    const response = await this.#readLimiter.run(
-      () =>
-        this.dkg.query(
-          { contextGraphId: cg, view, sparql, ...(subGraphName ? { subGraphName } : {}) },
-          timeoutMs,
-        ),
-      this.#executionSignal.getStore(),
+    const response = await this.#executionPolicy.read(() =>
+      this.dkg.query(
+        { contextGraphId: cg, view, sparql, ...(subGraphName ? { subGraphName } : {}) },
+        timeoutMs,
+      ),
     );
     return { bindings: normalizeBindingQueryResult(response) };
   }
@@ -588,16 +470,10 @@ export class QueryGatewayService {
   }
 
   private async channelMemory(cg: string): Promise<ChannelMemoryResult> {
-    const summaries: { layer: VisibleMemoryLayer; rows: BindingRow[] }[] = [];
-    for (const [view, layer] of VIEWS) {
-      summaries.push(await this.channelMemoryLayer(cg, view, layer));
-    }
-    // Metadata is intentionally sequenced after the two bounded view reads.
-    // Blazegraph previously received this plus six SPARQL requests at once.
-    const subGraphResponse = await this.#readLimiter.run(
-      () => this.dkg.listSubGraphs(cg, this.config.dkgTimeoutMs),
-      this.#executionSignal.getStore(),
-    );
+    const [summaries, subGraphResponse] = await Promise.all([
+      Promise.all(VIEWS.map(([view, layer]) => this.channelMemoryLayer(cg, view, layer))),
+      this.#executionPolicy.read(() => this.dkg.listSubGraphs(cg, this.config.dkgTimeoutMs)),
+    ]);
 
     const layerGraphs: Record<VisibleMemoryLayer, { graph: string; label: string }[]> = {
       SWM: [],
