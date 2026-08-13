@@ -90,7 +90,7 @@ export function summarizeChannelMemoryLayer(
       }
       const event = optionalTerm(row, 'event');
       if (event) events.add(event);
-      const eventCount = events.size || count(row.n);
+      const eventCount = Math.max(events.size, count(row.n));
       const latest = dateTimestamp(row.at ?? row.latest);
       const current = contributors.get(pubkey);
       if (!current) {

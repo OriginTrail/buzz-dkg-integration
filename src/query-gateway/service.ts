@@ -442,7 +442,7 @@ export class QueryGatewayService {
     const rows = await this.query(
       cg,
       view,
-      `SELECT DISTINCT ?rowType ?g ?name ?s ?digest ?t ?pk ?event ?at WHERE {
+      `SELECT DISTINCT ?rowType ?g ?name ?s ?digest ?t ?pk ?n ?latest WHERE {
         {
           {
             SELECT DISTINCT ?g WHERE {
@@ -453,20 +453,28 @@ export class QueryGatewayService {
         }
         UNION
         {
-          GRAPH ?g {
-            ?s a <${BUZZ}DecisionCluster> .
-            OPTIONAL { ?s <${SCHEMA}name> ?name }
-            OPTIONAL { ?s <${BUZZ}sourceSetDigest> ?digest }
-            OPTIONAL { ?s <${PROV}endedAtTime> ?t }
+          {
+            SELECT DISTINCT ?g ?s ?name ?digest ?t WHERE {
+              GRAPH ?g {
+                ?s a <${BUZZ}DecisionCluster> .
+                OPTIONAL { ?s <${SCHEMA}name> ?name }
+                OPTIONAL { ?s <${BUZZ}sourceSetDigest> ?digest }
+                OPTIONAL { ?s <${PROV}endedAtTime> ?t }
+              }
+            } LIMIT 201
           }
           BIND("decision" AS ?rowType)
         }
         UNION
         {
-          GRAPH ?g {
-            ?event <${PROV}wasAttributedTo> ?agent .
-            ?agent <${NOSTR}pubkeyHex> ?pk .
-            OPTIONAL { ?event <${NOSTR}createdAt> ?at }
+          {
+            SELECT ?g ?pk (COUNT(DISTINCT ?event) AS ?n) (MAX(?eventAt) AS ?latest) WHERE {
+              GRAPH ?g {
+                ?event <${PROV}wasAttributedTo> ?agent .
+                ?agent <${NOSTR}pubkeyHex> ?pk .
+                OPTIONAL { ?event <${NOSTR}createdAt> ?eventAt }
+              }
+            } GROUP BY ?g ?pk LIMIT 201
           }
           BIND("contributor" AS ?rowType)
         }

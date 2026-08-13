@@ -665,6 +665,38 @@ describe('query gateway HTTP boundary', () => {
     const combined = dkg.calls.find((call) => call.sparql?.includes('SELECT DISTINCT ?rowType'));
     expect(combined?.sparql).toContain('BIND("graph" AS ?rowType)');
     expect(combined?.sparql).toContain('?graphSubject ?graphPredicate ?graphObject');
+    expect(combined?.sparql).toContain('COUNT(DISTINCT ?event) AS ?n');
+    expect(combined?.sparql).toContain('GROUP BY ?g ?pk LIMIT 201');
+  });
+
+  it('uses store-computed contributor totals without hiding independent decision rows', async () => {
+    const dkg = new GatewayDkg();
+    dkg.bindingResolver = ({ view, sparql }) =>
+      sparql.includes('SELECT DISTINCT ?rowType')
+        ? ([
+            {
+              rowType: binding('contributor'),
+              g: binding(`urn:test:${view}:busy`),
+              pk: binding(CONTRIBUTOR),
+              n: binding('1500'),
+              latest: binding('2026-08-12T12:00:00Z'),
+            },
+            {
+              rowType: binding('decision'),
+              g: binding(`urn:test:${view}:busy`),
+              s: binding('urn:test:decision:still-visible'),
+              name: binding('Decision remains visible'),
+            },
+          ] as Array<Record<string, { value: string }>>)
+        : [];
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('channel_memory'));
+
+    expect(response.result).toMatchObject({
+      contributors: [{ pubkey: CONTRIBUTOR, events: 1500 }],
+      decisions: [{ uri: 'urn:test:decision:still-visible' }],
+    });
   });
 
   it('removes timed-out work from the DKG read queue before it can execute', async () => {
