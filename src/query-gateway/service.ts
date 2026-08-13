@@ -31,6 +31,10 @@ import type {
   VisibleMemoryLayer,
 } from './types.ts';
 import { QueryExecutionPolicy, type QueryCacheStatus } from './query-execution-policy.ts';
+import {
+  summarizeChannelMemoryLayer,
+  type ChannelMemoryLayerSummary,
+} from './channel-memory-summary.ts';
 
 export type { QueryCacheStatus } from './query-execution-policy.ts';
 
@@ -439,7 +443,7 @@ export class QueryGatewayService {
     cg: string,
     view: VisibleView,
     layer: VisibleMemoryLayer,
-  ): Promise<{ layer: VisibleMemoryLayer; rows: BindingRow[] }> {
+  ): Promise<ChannelMemoryLayerSummary> {
     const rows = await this.query(
       cg,
       view,
@@ -466,7 +470,7 @@ export class QueryGatewayService {
         }
       } LIMIT 1000`,
     );
-    return { layer, rows };
+    return summarizeChannelMemoryLayer(layer, rows);
   }
 
   private async channelMemory(cg: string): Promise<ChannelMemoryResult> {
@@ -479,62 +483,27 @@ export class QueryGatewayService {
       SWM: [],
       VM: [],
     };
-    const seenGraphs: Record<VisibleMemoryLayer, Set<string>> = {
-      SWM: new Set<string>(),
-      VM: new Set<string>(),
-    };
 
     const decisionsByUri = new Map<string, DecisionSummary>();
     const contributorsByPubkey = new Map<string, ContributorSummary>();
-    const contributorEvents = new Map<string, Set<string>>();
-    for (const { rows, layer } of summaries) {
-      for (const row of rows) {
-        const rowType = term(row, 'rowType');
-        const graph = bounded(term(row, 'g'), 1_000);
-        if (graph && !seenGraphs[layer].has(graph)) {
-          seenGraphs[layer].add(graph);
-          const label = optionalTerm(row, 'name') ?? graph.split('/').slice(-2).join('/');
-          layerGraphs[layer].push({ graph, label: bounded(label, 200) });
-        }
-        if (rowType === 'graph') {
-          continue;
-        }
-        if (rowType === 'contributor') {
-          const pubkey = term(row, 'pk').toLowerCase();
-          if (!HEX_PUBKEY.test(pubkey)) continue;
-          const eventKey = `${layer}:${pubkey}`;
-          let eventsForLayer = contributorEvents.get(eventKey);
-          if (!eventsForLayer) {
-            eventsForLayer = new Set<string>();
-            contributorEvents.set(eventKey, eventsForLayer);
+    for (const summary of summaries) {
+      layerGraphs[summary.layer] = summary.graphs;
+      for (const candidate of summary.contributors) {
+        const current = contributorsByPubkey.get(candidate.pubkey);
+        if (!current) {
+          contributorsByPubkey.set(candidate.pubkey, candidate);
+        } else {
+          current.events = Math.max(current.events, candidate.events);
+          current.latest = Math.max(current.latest ?? 0, candidate.latest ?? 0) || null;
+          if (LAYER_RANK[candidate.layer] > LAYER_RANK[current.layer]) {
+            current.layer = candidate.layer;
           }
-          const event = optionalTerm(row, 'event');
-          if (event) eventsForLayer.add(event);
-          const events = eventsForLayer.size || count(row.n);
-          const latest = dateTimestamp(row.at ?? row.latest);
-          const current = contributorsByPubkey.get(pubkey);
-          if (!current) {
-            contributorsByPubkey.set(pubkey, { pubkey, events, latest, layer });
-          } else {
-            current.events = Math.max(current.events, events);
-            current.latest = Math.max(current.latest ?? 0, latest ?? 0) || null;
-            if (LAYER_RANK[layer] > LAYER_RANK[current.layer]) current.layer = layer;
-          }
-          continue;
         }
-        if (rowType !== 'decision') continue;
-        const uri = bounded(term(row, 's'), 1_000);
-        if (!uri) continue;
-        const current = decisionsByUri.get(uri);
-        const candidate: DecisionSummary = {
-          uri,
-          name: optionalTerm(row, 'name') ? bounded(optionalTerm(row, 'name')!, 200) : null,
-          digest: optionalTerm(row, 'digest') ? bounded(optionalTerm(row, 'digest')!, 256) : null,
-          at: optionalTerm(row, 't') ? bounded(optionalTerm(row, 't')!, 128) : null,
-          layer,
-        };
-        if (!current || LAYER_RANK[layer] > LAYER_RANK[current.layer]) {
-          decisionsByUri.set(uri, candidate);
+      }
+      for (const candidate of summary.decisions) {
+        const current = decisionsByUri.get(candidate.uri);
+        if (!current || LAYER_RANK[candidate.layer] > LAYER_RANK[current.layer]) {
+          decisionsByUri.set(candidate.uri, candidate);
         }
       }
     }
