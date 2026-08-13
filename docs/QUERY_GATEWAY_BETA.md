@@ -112,6 +112,38 @@ The operation and its exact arguments are:
 | `subgraph_graph`        | `{ name }`                                      | `{ subgraph, nodes, edges }`                                                                                                  |
 | `subgraph_triples`      | `{ name }`                                      | `{ subgraph, triples }`                                                                                                       |
 | `evidence`              | `{ uri }`                                       | `{ found, claimId, name, status, trustState, memoryLayer, attribution, digest, asOf, sources, relations, receiptUal, graph }` |
+| `semantic_query`        | `{ sparql, view? }`                             | `{ queryType, scope, cost, layers }`                                                                                          |
+
+`semantic_query` additionally requires `"scope":{"type":"current_channel"}`.
+It is the unified agent-facing read operation: an authenticated agent authors a
+SPARQL `SELECT`, `ASK`, or bounded `CONSTRUCT`, while the relay supplies the
+requester identity and the integration resolves the channel's Context Graph.
+For example:
+
+```json
+{
+  "channelId": "channel-one",
+  "operation": "semantic_query",
+  "scope": { "type": "current_channel" },
+  "arguments": {
+    "sparql": "SELECT ?decision ?name WHERE { GRAPH ?g { ?decision <http://schema.org/name> ?name } } LIMIT 25",
+    "view": "both"
+  },
+  "requesterPubkey": "<64-hex-pubkey>"
+}
+```
+
+The SPARQL 1.1 AST is checked before it reaches DKG. Updates, DESCRIBE,
+`FROM`, `SERVICE`, explicit graph identifiers, unconstrained `?s ?p ?o`
+scans, and unbounded property paths are rejected. `SELECT` and `CONSTRUCT`
+require `LIMIT` (maximum 100). A structural cost budget also bounds triples,
+optionals, unions, subqueries, `VALUES`, and variable predicates. Rejections
+use `unsafe_query` or `query_too_expensive` and include
+`error.details.suggestions` so an agent can make the query smaller and retry.
+Aggregate, grouping, ordering, and distinct operations carry high cost; agents
+should usually fetch a small row set and process it locally.
+Accepted semantic queries have a 10-second DKG execution ceiling in addition
+to the gateway's concurrency and response-size limits.
 
 A successful response is:
 
@@ -127,11 +159,13 @@ A successful response is:
 
 `cg` is returned for transparency but is always resolved from the daemon's
 configured channel bindings. Requests cannot supply a Context Graph, DKG URL,
-SPARQL, token, or write operation. Unknown fields are rejected. Retrieval is
-limited to shared working memory and verifiable memory; working memory is never
-queried and is represented as `null`.
+token, or write operation. SPARQL is accepted only inside `semantic_query` and
+only under the current-channel scope above. Unknown fields are rejected.
+Retrieval is limited to shared working memory and verifiable memory; working
+memory is never queried and is represented as `null`.
 
-Errors use `{ "ok": false, "error": { "code": "...", "message": "..." } }`.
+Errors use `{ "ok": false, "error": { "code": "...", "message": "...", "details": {} } }`;
+`details` is present only when structured correction guidance is available.
 Responses and structured audit logs never include gateway or DKG credentials or
 raw upstream failures.
 

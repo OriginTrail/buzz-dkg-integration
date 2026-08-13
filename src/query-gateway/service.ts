@@ -2,6 +2,8 @@ import type { DkgClient } from '../dkg/client.ts';
 import { IntegrationApiError } from '../errors.ts';
 import { canonicalRepositoryIdentityUrl } from '../memory/identity.ts';
 import type { QueryGatewayConfig } from '../types.ts';
+import { executeSemanticQuery, requiredSemanticSparql } from './semantic-query.ts';
+import { normalizeBindingQueryResult } from './sparql-result.ts';
 import type {
   ChannelMemoryResult,
   ContributorSummary,
@@ -20,6 +22,7 @@ import type {
   QueryGatewayResult,
   QueryGatewaySuccess,
   QueryOperation,
+  SparqlBindingRow,
   SoftwareContributorEntry,
   SoftwareContributorsResult,
   SubGraphSummary,
@@ -29,7 +32,7 @@ import type {
 } from './types.ts';
 
 type EnabledGatewayConfig = Extract<QueryGatewayConfig, { enabled: true }>;
-type BindingRow = Record<string, unknown>;
+type BindingRow = SparqlBindingRow;
 type LayeredRow = { row: BindingRow; layer: VisibleMemoryLayer };
 type VisibleView = 'shared-working-memory' | 'verifiable-memory';
 
@@ -116,7 +119,7 @@ function sparqlLiteral(value: string): string {
 
 export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
   if (!plainObject(value)) invalid('request body must be a JSON object');
-  exactKeys(value, ['channelId', 'operation', 'arguments', 'requesterPubkey'], 'request');
+  exactKeys(value, ['channelId', 'operation', 'scope', 'arguments', 'requesterPubkey'], 'request');
   const channelId = requiredString(value.channelId, 'channelId', CHANNEL_ID);
   const operations = new Set<QueryOperation>([
     'channel_memory',
@@ -126,6 +129,7 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
     'subgraph_graph',
     'subgraph_triples',
     'evidence',
+    'semantic_query',
   ]);
   if (typeof value.operation !== 'string' || !operations.has(value.operation as QueryOperation)) {
     invalid('operation is invalid');
@@ -140,6 +144,23 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
   );
 
   const base = { channelId, operation, requesterPubkey };
+  if (operation === 'semantic_query') {
+    if (!plainObject(value.scope)) invalid('scope must be a JSON object');
+    exactKeys(value.scope, ['type'], 'scope');
+    if (value.scope.type !== 'current_channel') invalid('scope.type must be current_channel');
+    exactKeys(value.arguments, ['sparql', 'view'], 'arguments');
+    const view = value.arguments.view ?? 'both';
+    if (view !== 'both' && view !== 'shared' && view !== 'verified') {
+      invalid('arguments.view is invalid');
+    }
+    return {
+      ...base,
+      operation,
+      scope: { type: 'current_channel' },
+      arguments: { sparql: requiredSemanticSparql(value.arguments.sparql), view },
+    };
+  }
+  if (value.scope !== undefined) invalid('scope is only accepted for semantic_query');
   if (operation === 'channel_memory') {
     exactKeys(value.arguments, [], 'arguments');
     return { ...base, operation, arguments: {} };
@@ -344,7 +365,30 @@ export class QueryGatewayService {
         return this.subgraphTriples(cg, request.arguments.name);
       case 'evidence':
         return this.evidence(cg, request.arguments.uri);
+      case 'semantic_query':
+        return executeSemanticQuery({
+          sparql: request.arguments.sparql,
+          selectedView: request.arguments.view,
+          maxQueryBytes: this.config.maxQueryBytes,
+          dkgTimeoutMs: this.config.dkgTimeoutMs,
+          query: async (view, sparql, timeoutMs) =>
+            this.dkg.query({ contextGraphId: cg, view, sparql }, timeoutMs),
+        });
     }
+  }
+
+  private async queryResult(
+    cg: string,
+    view: VisibleView,
+    sparql: string,
+    subGraphName?: string,
+    timeoutMs = this.config.dkgTimeoutMs,
+  ): Promise<{ bindings: BindingRow[] }> {
+    const response = await this.dkg.query(
+      { contextGraphId: cg, view, sparql, ...(subGraphName ? { subGraphName } : {}) },
+      timeoutMs,
+    );
+    return { bindings: normalizeBindingQueryResult(response) };
   }
 
   private async query(
@@ -360,13 +404,8 @@ export class QueryGatewayService {
         'internal query exceeded its bound',
       );
     }
-    const response = await this.dkg.query(
-      { contextGraphId: cg, view, sparql, ...(subGraphName ? { subGraphName } : {}) },
-      this.config.dkgTimeoutMs,
-    );
-    const rows = response?.result?.bindings;
-    if (!Array.isArray(rows)) throw new Error('DKG query returned an invalid bindings shape');
-    return rows.slice(0, MAX_DKG_ROWS) as BindingRow[];
+    const result = await this.queryResult(cg, view, sparql, subGraphName);
+    return result.bindings.slice(0, MAX_DKG_ROWS);
   }
 
   private async layered(cg: string, sparql: string, subGraphName?: string): Promise<LayeredRow[]> {

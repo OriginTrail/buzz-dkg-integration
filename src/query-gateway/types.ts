@@ -5,13 +5,23 @@ export type QueryOperation =
   | 'decision_trace'
   | 'subgraph_graph'
   | 'subgraph_triples'
-  | 'evidence';
+  | 'evidence'
+  | 'semantic_query';
 
 interface RequestBase<T extends QueryOperation, A> {
   channelId: string;
   operation: T;
   arguments: A;
   requesterPubkey: string;
+}
+
+export type SemanticQueryView = 'both' | 'shared' | 'verified';
+
+interface SemanticQueryRequest extends RequestBase<
+  'semantic_query',
+  { sparql: string; view: SemanticQueryView }
+> {
+  scope: { type: 'current_channel' };
 }
 
 export type QueryGatewayRequest =
@@ -28,7 +38,8 @@ export type QueryGatewayRequest =
   | RequestBase<'decision_trace', { repository: string; commitSha: string; componentName: string }>
   | RequestBase<'subgraph_graph', { name: string }>
   | RequestBase<'subgraph_triples', { name: string }>
-  | RequestBase<'evidence', { uri: string }>;
+  | RequestBase<'evidence', { uri: string }>
+  | SemanticQueryRequest;
 
 export type VisibleMemoryLayer = 'SWM' | 'VM';
 
@@ -186,6 +197,61 @@ export interface EvidenceResult {
   graph: string | null;
 }
 
+export interface SemanticQueryMetrics {
+  triples: number;
+  constructTriples: number;
+  optionalPatterns: number;
+  unionBranches: number;
+  filters: number;
+  graphPatterns: number;
+  propertyPaths: number;
+  variablePredicates: number;
+  subqueries: number;
+  valuesRows: number;
+  aggregates: number;
+  orderConditions: number;
+  groupConditions: number;
+  distinct: number;
+}
+
+export type SparqlJsonValue =
+  null | boolean | number | string | SparqlJsonValue[] | { [key: string]: SparqlJsonValue };
+
+/** Stable public boundary for SPARQL JSON binding terms returned by DKG. */
+export type SparqlBindingValue = string | { [key: string]: SparqlJsonValue };
+export type SparqlBindingRow = Record<string, SparqlBindingValue>;
+export type SparqlQuad = { [key: string]: SparqlJsonValue };
+
+interface SemanticQueryResultBase {
+  scope: { type: 'current_channel' };
+  cost: {
+    score: number;
+    budget: number;
+    metrics: SemanticQueryMetrics;
+  };
+}
+
+export type SemanticQueryLayerResult =
+  | { layer: VisibleMemoryLayer; bindings: SparqlBindingRow[] }
+  | { layer: VisibleMemoryLayer; boolean: boolean }
+  | { layer: VisibleMemoryLayer; quads: SparqlQuad[] };
+
+export type SemanticQueryResult = SemanticQueryResultBase &
+  (
+    | {
+        queryType: 'select';
+        layers: Array<{ layer: VisibleMemoryLayer; bindings: SparqlBindingRow[] }>;
+      }
+    | {
+        queryType: 'ask';
+        layers: Array<{ layer: VisibleMemoryLayer; boolean: boolean }>;
+      }
+    | {
+        queryType: 'construct';
+        layers: Array<{ layer: VisibleMemoryLayer; quads: SparqlQuad[] }>;
+      }
+  );
+
 export type QueryGatewayResult =
   | ChannelMemoryResult
   | ContributorTrailResult
@@ -193,7 +259,8 @@ export type QueryGatewayResult =
   | DecisionTraceResult
   | SubgraphGraphResult
   | SubgraphTriplesResult
-  | EvidenceResult;
+  | EvidenceResult
+  | SemanticQueryResult;
 
 export interface QueryGatewaySuccess {
   ok: true;

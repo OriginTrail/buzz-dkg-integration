@@ -55,6 +55,7 @@ class GatewayDkg {
         subGraphName?: string;
       }) => Array<Record<string, { value: string }>> | null)
     | null = null;
+  quads: unknown[] | null = null;
 
   async query(
     options: { contextGraphId: string; view: string; sparql: string; subGraphName?: string },
@@ -65,7 +66,7 @@ class GatewayDkg {
     if (this.hang) return new Promise<never>(() => undefined);
     const resolved = this.bindingResolver?.(options);
     if (resolved !== null && resolved !== undefined) {
-      return { result: { bindings: resolved } };
+      return { result: { bindings: resolved, ...(this.quads ? { quads: this.quads } : {}) } };
     }
     if (options.sparql.includes('SAMPLE(?n)')) {
       return {
@@ -160,6 +161,16 @@ function body(operation: string, args: Record<string, unknown> = {}) {
   return { channelId: CHANNEL, operation, arguments: args, requesterPubkey: REQUESTER };
 }
 
+function semanticBody(sparql: string, view = 'both') {
+  return {
+    channelId: CHANNEL,
+    operation: 'semantic_query',
+    scope: { type: 'current_channel' },
+    arguments: { sparql, view },
+    requesterPubkey: REQUESTER,
+  };
+}
+
 function binding(value: string): { value: string } {
   return { value };
 }
@@ -227,7 +238,7 @@ describe('query gateway configuration', () => {
 });
 
 describe('query gateway request contract', () => {
-  it('accepts only the seven typed operations and exact argument shapes', () => {
+  it('accepts the typed operations and exact argument shapes', () => {
     expect(parseQueryGatewayRequest(body('channel_memory'))).toMatchObject({
       operation: 'channel_memory',
       requesterPubkey: REQUESTER,
@@ -272,6 +283,15 @@ describe('query gateway request contract', () => {
     expect(parseQueryGatewayRequest(body('evidence', { uri: 'urn:buzz:claim:1' }))).toMatchObject({
       operation: 'evidence',
     });
+    expect(
+      parseQueryGatewayRequest(
+        semanticBody('SELECT ?s WHERE { GRAPH ?g { ?s <urn:type> <urn:Decision> } } LIMIT 25'),
+      ),
+    ).toMatchObject({
+      operation: 'semantic_query',
+      scope: { type: 'current_channel' },
+      arguments: { view: 'both' },
+    });
   });
 
   it('rejects omitted requester identity and all client-supplied query controls', () => {
@@ -291,6 +311,18 @@ describe('query gateway request contract', () => {
       parseQueryGatewayRequest(body('subgraph_graph', { name: 'core', sparql: 'DELETE WHERE {}' })),
     ).toThrow(/unexpected field/);
     expect(() => parseQueryGatewayRequest(body('raw_query'))).toThrow(/operation is invalid/);
+    expect(() =>
+      parseQueryGatewayRequest({
+        ...semanticBody('ASK { <urn:s> <urn:p> ?o }'),
+        scope: { type: 'context_graph', id: 'did:dkg:attacker' },
+      }),
+    ).toThrow(/scope contains unexpected field|scope.type/);
+    expect(() =>
+      parseQueryGatewayRequest({
+        ...semanticBody('ASK { <urn:s> <urn:p> ?o }'),
+        contextGraphId: 'did:dkg:attacker',
+      }),
+    ).toThrow(/unexpected field/);
     expect(() =>
       parseQueryGatewayRequest(
         body('software_contributors', {

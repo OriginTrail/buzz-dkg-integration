@@ -20,6 +20,8 @@
   },
   "dependencies": {
     "@noble/curves": "^1.9.7",
+    "@traqula/parser-sparql-1-1": "^1.2.0",
+    "@traqula/rules-sparql-1-1": "^1.2.0",
     "nostr-tools": "^2.10.0",
     "ws": "^8.18.0"
   },
