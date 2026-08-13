@@ -11,6 +11,15 @@ import { parseTrustVouchTags } from '../memory/trust-source.ts';
 type BindingRow = Record<string, unknown>;
 export type TrustLayeredRow = { row: BindingRow; layer: VisibleMemoryLayer };
 
+type MutableTrustVouch = Omit<
+  TrustVouchSummary,
+  'status' | 'lifecycleEvent' | 'replacementVouch'
+> & {
+  status: TrustVouchStatus;
+  lifecycleEvent: string | null;
+  replacementVouch: string | null;
+};
+
 const VIEWS: readonly VisibleMemoryLayer[] = ['SWM', 'VM'];
 const LAYER_RANK: Record<VisibleMemoryLayer, number> = { SWM: 0, VM: 1 };
 const MAX_TRUST_PEOPLE = 200;
@@ -32,6 +41,26 @@ const MEMORY = 'http://dkg.io/ontology/memory/';
 const SOFTWARE = 'http://dkg.io/ontology/software/';
 const TASKS = 'http://dkg.io/ontology/tasks/';
 const TRUST = 'http://dkg.io/ontology/trust/';
+
+export const WORK_EVIDENCE_TYPE_IRIS = [
+  `${MEMORY}Claim`,
+  `${MEMORY}Question`,
+  `${DECISIONS}Decision`,
+  `${TASKS}Task`,
+  `${GITHUB}PullRequest`,
+  `${GITHUB}Issue`,
+  `${GITHUB}Commit`,
+  `${GITHUB}Review`,
+  `${SOFTWARE}Build`,
+  `${SOFTWARE}TestCase`,
+  `${SOFTWARE}TestRun`,
+  `${SOFTWARE}Deployment`,
+  `${SOFTWARE}Finding`,
+] as const;
+
+export const WORK_EVIDENCE_SPARQL_VALUES = WORK_EVIDENCE_TYPE_IRIS.map((iri) => `<${iri}>`).join(
+  ' ',
+);
 
 function rawTerm(value: unknown): string {
   if (value && typeof value === 'object' && 'value' in value) {
@@ -120,6 +149,61 @@ function sourceMatchesVouch(
   }
 }
 
+function sourceMatchesLifecycle(
+  row: BindingRow,
+  issuer: string,
+  subject: string,
+  status: 'revoked' | 'superseded',
+  target: string,
+  replacement: string | null,
+): boolean {
+  const source = optionalTerm(row, 'source');
+  const sourceAuthor = optionalTerm(row, 'sourceAuthor');
+  const sourceTags = optionalTerm(row, 'sourceTags');
+  const sourceKind = optionalTerm(row, 'sourceKind');
+  const sourceSig = optionalTerm(row, 'sourceSig');
+  const targetId = target.match(/^urn:buzz-dkg:vouch:([0-9a-f]{64})$/iu)?.[1]?.toLowerCase();
+  const replacementId = replacement?.match(/^urn:buzz-dkg:vouch:([0-9a-f]{64})$/iu)?.[1];
+  if (
+    !source ||
+    !NOSTR_EVENT_URI.test(source) ||
+    sourceAuthor !== `${NOSTR_PUBKEY_URI}${issuer}` ||
+    sourceKind !== '1985' ||
+    sourceSig === null ||
+    !HEX_SIGNATURE.test(sourceSig) ||
+    !sourceTags ||
+    !targetId ||
+    (status === 'superseded' && !replacementId)
+  ) {
+    return false;
+  }
+  try {
+    const tags = JSON.parse(sourceTags) as unknown;
+    if (!Array.isArray(tags) || !tags.every((tag) => Array.isArray(tag))) return false;
+    const normalized = tags as unknown[][];
+    const subjects = normalized.filter((tag) => tag[0] === 'p');
+    const targets = normalized.filter((tag) => tag[0] === 'e' && tag[3] === 'target');
+    const replacements = normalized.filter((tag) => tag[0] === 'e' && tag[3] === 'replacement');
+    const action = status === 'revoked' ? 'revoke' : 'supersede';
+    return (
+      subjects.length === 1 &&
+      typeof subjects[0]?.[1] === 'string' &&
+      subjects[0][1].toLowerCase() === subject &&
+      targets.length === 1 &&
+      typeof targets[0]?.[1] === 'string' &&
+      targets[0][1].toLowerCase() === targetId &&
+      replacements.length === (status === 'superseded' ? 1 : 0) &&
+      (status === 'revoked' ||
+        (typeof replacements[0]?.[1] === 'string' &&
+          replacements[0][1].toLowerCase() === replacementId?.toLowerCase())) &&
+      normalized.some((tag) => tag[0] === 'L' && tag[1] === 'buzz.wot') &&
+      normalized.some((tag) => tag[0] === 'l' && tag[1] === action && tag[2] === 'buzz.wot')
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Discover and materialize the bounded trust snapshot for one Context Graph. */
 export async function queryTrustNetwork(
   layered: (sparql: string) => Promise<TrustLayeredRow[]>,
@@ -131,12 +215,7 @@ export async function queryTrustNetwork(
          ?memory <${MEMORY}contains> ?record .
          ?record a ?kind ; <${PROV}wasDerivedFrom> ?source .
          ?source <${PROV}wasAttributedTo> ?agent .
-         VALUES ?kind {
-           <${MEMORY}Claim> <${MEMORY}Question> <${DECISIONS}Decision> <${TASKS}Task>
-           <${GITHUB}PullRequest> <${GITHUB}Issue> <${GITHUB}Commit> <${GITHUB}Review>
-           <${SOFTWARE}Build> <${SOFTWARE}TestCase> <${SOFTWARE}TestRun>
-           <${SOFTWARE}Deployment> <${SOFTWARE}Finding>
-         }
+         VALUES ?kind { ${WORK_EVIDENCE_SPARQL_VALUES} }
          ?agent <${NOSTR}pubkeyHex> ?pk .
          OPTIONAL { ?source <${NOSTR}createdAt> ?at }
        } } GROUP BY ?pk ORDER BY DESC(?n) LIMIT ${MAX_TRUST_PEOPLE + 1}`,
@@ -166,6 +245,7 @@ export async function queryTrustNetwork(
     ),
     layered(
       `SELECT DISTINCT ?action ?issuer ?subject ?status ?target ?replacement ?at ?source
+        ?sourceKind ?sourceAuthor ?sourceTags ?sourceSig
        WHERE { GRAPH ?g {
          ?action a <${TRUST}VouchLifecycle> ; <${TRUST}scope> "channel" ;
            <${TRUST}targetVouch> ?target ; <${TRUST}issuer> ?issuer ;
@@ -173,6 +253,9 @@ export async function queryTrustNetwork(
          OPTIONAL { ?action <${TRUST}replacementVouch> ?replacement }
          OPTIONAL {
            ?action <${PROV}wasDerivedFrom> ?source .
+           ?source a <${NOSTR}Event> ; <${NOSTR}kind> ?sourceKind ;
+             <${NOSTR}tags> ?sourceTags ; <${NOSTR}sig> ?sourceSig ;
+             <${PROV}wasAttributedTo> ?sourceAuthor .
            OPTIONAL { ?source <${NOSTR}createdAt> ?at }
          }
        } } ORDER BY DESC(?at) LIMIT ${MAX_TRUST_LIFECYCLE + 1}`,
@@ -224,7 +307,7 @@ export async function queryTrustNetwork(
     const pubkey = value.slice(NOSTR_PUBKEY_URI.length).toLowerCase();
     return HEX_PUBKEY.test(pubkey) ? pubkey : null;
   };
-  const vouchesByUri = new Map<string, TrustVouchSummary>();
+  const vouchesByUri = new Map<string, MutableTrustVouch>();
   for (const { row, layer } of vouchRows) {
     const uri = bounded(term(row, 'vouch'), 1_000);
     const issuer = pubkeyFromEntity(term(row, 'issuer'));
@@ -232,12 +315,15 @@ export async function queryTrustNetwork(
     if (!uri || !issuer || !subject || issuer === subject) continue;
     const source = optionalTerm(row, 'source');
     const note = optionalTerm(row, 'note');
-    const candidate: TrustVouchSummary = {
+    const graphStatus = trustVouchStatus(optionalTerm(row, 'status'));
+    const candidate: MutableTrustVouch = {
       uri,
       issuer,
       subject,
       note: note ? bounded(note, 1_000) : null,
-      status: trustVouchStatus(optionalTerm(row, 'status')),
+      // New vouches are active; revoke/supersede state is accepted only from a separately
+      // signed lifecycle record below.
+      status: graphStatus === 'active' ? 'active' : 'unknown',
       at: dateTimestamp(row.at),
       sourceEvent: sourceMatchesVouch(row, issuer, subject, note) ? bounded(source!, 1_000) : null,
       evidence: [],
@@ -299,6 +385,14 @@ export async function queryTrustNetwork(
       !new Set(['revoked', 'superseded']).has(status) ||
       !source ||
       !NOSTR_EVENT_URI.test(source) ||
+      !sourceMatchesLifecycle(
+        row,
+        issuer,
+        subject,
+        status as 'revoked' | 'superseded',
+        target,
+        replacement,
+      ) ||
       (status === 'superseded' && (!replacement || !SAFE_IRI.test(replacement))) ||
       (status === 'revoked' && replacement)
     ) {
@@ -345,7 +439,25 @@ export async function queryTrustNetwork(
     (a, b) => (b.at ?? 0) - (a.at ?? 0) || a.uri.localeCompare(b.uri),
   );
   if (sortedVouches.length > MAX_TRUST_VOUCHES) partial = true;
-  const vouches = sortedVouches.slice(0, MAX_TRUST_VOUCHES);
+  const vouches = sortedVouches.slice(0, MAX_TRUST_VOUCHES).map((vouch): TrustVouchSummary => {
+    if (vouch.status === 'revoked') {
+      return {
+        ...vouch,
+        status: 'revoked',
+        lifecycleEvent: vouch.lifecycleEvent!,
+        replacementVouch: null,
+      };
+    }
+    if (vouch.status === 'superseded') {
+      return {
+        ...vouch,
+        status: 'superseded',
+        lifecycleEvent: vouch.lifecycleEvent!,
+        replacementVouch: vouch.replacementVouch!,
+      };
+    }
+    return { ...vouch, status: vouch.status, lifecycleEvent: null, replacementVouch: null };
+  });
   for (const vouch of vouches) {
     if (vouch.status !== 'active') continue;
     upsertPerson(vouch.issuer, vouch.layer).vouchesGiven += 1;

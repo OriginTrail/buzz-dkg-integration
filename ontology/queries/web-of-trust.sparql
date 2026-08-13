@@ -11,6 +11,12 @@ SELECT ?vouch ?issuer ?subject ?note ?source ?at WHERE {
       prov:wasDerivedFrom ?source .
     OPTIONAL { ?vouch schema:description ?note }
     OPTIONAL { ?source nostr:createdAt ?at }
+    FILTER NOT EXISTS {
+      ?lifecycle a trust:VouchLifecycle ;
+        trust:targetVouch ?vouch ;
+        trust:status ?lifecycleStatus .
+      VALUES ?lifecycleStatus { "revoked" "superseded" }
+    }
   }
 }
 ORDER BY DESC(?at)

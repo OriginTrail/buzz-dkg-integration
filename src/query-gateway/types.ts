@@ -137,21 +137,17 @@ export interface TrustPersonSummary {
   layer: VisibleMemoryLayer;
 }
 
-export interface TrustVouchSummary {
+interface TrustVouchSummaryBase {
   uri: string;
   issuer: string;
   subject: string;
   note: string | null;
-  status: TrustVouchStatus;
   at: number | null;
   sourceEvent: string | null;
   /** Explicit evidence roots selected and signed by the vouch issuer. */
   evidence: string[];
   /** Signed Nostr records from which the evidence targets were projected. */
   evidenceSources: string[];
-  /** Signed lifecycle source that most recently changed this vouch, when any. */
-  lifecycleEvent: string | null;
-  replacementVouch: string | null;
   layer: VisibleMemoryLayer;
 }
 
@@ -160,6 +156,12 @@ export type TrustVouchStatus = 'active' | 'revoked' | 'superseded' | 'unknown';
 export type TrustVouchLifecycleState =
   | { status: 'revoked'; lifecycleEvent: string; replacementVouch: null }
   | { status: 'superseded'; lifecycleEvent: string; replacementVouch: string };
+
+export type TrustVouchSummary = TrustVouchSummaryBase &
+  (
+    | { status: 'active' | 'unknown'; lifecycleEvent: null; replacementVouch: null }
+    | TrustVouchLifecycleState
+  );
 
 export interface TrustNetworkResult {
   /** Whether every visible row fit inside the fixed operation bounds. */

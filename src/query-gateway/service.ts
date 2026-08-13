@@ -3,7 +3,11 @@ import { IntegrationApiError } from '../errors.ts';
 import { canonicalRepositoryIdentityUrl } from '../memory/identity.ts';
 import type { QueryGatewayConfig } from '../types.ts';
 import { scoreReputation } from './reputation-score.ts';
-import { queryTrustNetwork, type TrustLayeredRow } from './trust-query.ts';
+import {
+  queryTrustNetwork,
+  type TrustLayeredRow,
+  WORK_EVIDENCE_SPARQL_VALUES,
+} from './trust-query.ts';
 import type {
   ChannelMemoryResult,
   ContributorSummary,
@@ -660,13 +664,7 @@ export class QueryGatewayService {
            ?record a ?kind ;
              <${PROV}wasAttributedTo> <${NOSTR_PUBKEY_URI}${subject}> ;
              <${PROV}wasDerivedFrom> ?source .
-           VALUES ?kind {
-             <${MEMORY}Claim> <${MEMORY}Question>
-             <${DECISIONS}Decision> <${TASKS}Task>
-             <${GITHUB}PullRequest> <${GITHUB}Issue> <${GITHUB}Commit> <${GITHUB}Review>
-             <${SOFTWARE}Build> <${SOFTWARE}TestCase> <${SOFTWARE}TestRun>
-             <${SOFTWARE}Deployment> <${SOFTWARE}Finding>
-           }
+           VALUES ?kind { ${WORK_EVIDENCE_SPARQL_VALUES} }
            OPTIONAL { ?record <${SCHEMA}name> ?name }
            OPTIONAL { ?source <${NOSTR}createdAt> ?at }
          } } ORDER BY DESC(?at) LIMIT ${MAX_WORK_EVIDENCE + 1}`,

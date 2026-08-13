@@ -107,11 +107,19 @@ function validateActiveVouch(
   const evidenceTargets = rTags.map((tag) => tag[1]!);
   const evidenceSources = eTags.map((tag) => `urn:nostr:event:${tag[1]!}`);
   if (
+    (evidenceSources.length !== 0 && evidenceSources.length !== evidenceTargets.length) ||
     new Set(evidenceTargets).size !== evidenceTargets.length ||
     new Set(evidenceSources).size !== evidenceSources.length
   ) {
-    invalid('dkg-trust@1 signed evidence references must be unique');
+    invalid(
+      'dkg-trust@1 signed evidence references must be unique and pair each source with one target',
+    );
   }
+  // Nostr signs tag order. When source events are supplied, each evidence e-tag is therefore
+  // paired with the r-tag at the same index rather than validated as an unrelated global set.
+  const signedEvidence = new Map(
+    evidenceTargets.map((target, index) => [target, evidenceSources[index]] as const),
+  );
 
   const supportedBy = proposal.relations.filter(
     (relation) => relation.subject === vouch.id && relation.predicate === 'trust:supportedBy',
@@ -129,7 +137,6 @@ function validateActiveVouch(
     invalid('dkg-trust@1 evidence entities must exactly match supportedBy relations');
   }
   const projectedTargets: string[] = [];
-  const projectedSources: string[] = [];
   for (const reference of references) {
     const referenceAttributes = trustAttributes(reference);
     const target = referenceAttributes.get('trust:evidenceTarget');
@@ -146,13 +153,13 @@ function validateActiveVouch(
       invalid('dkg-trust@1 evidence references contain unsupported data');
     }
     projectedTargets.push(target);
-    if (typeof evidenceSource === 'string') projectedSources.push(evidenceSource);
+    if (evidenceSource !== signedEvidence.get(target)) {
+      invalid('dkg-trust@1 projected evidence target/source pairing must match signed tag order');
+    }
   }
   if (
     projectedTargets.length !== new Set(projectedTargets).size ||
-    evidenceTargets.some((target) => !projectedTargets.includes(target)) ||
-    projectedSources.some((evidenceSource) => !evidenceSources.includes(evidenceSource)) ||
-    evidenceSources.some((evidenceSource) => !projectedSources.includes(evidenceSource))
+    evidenceTargets.some((target) => !projectedTargets.includes(target))
   ) {
     invalid('dkg-trust@1 projected evidence must exactly match the signed r and e tags');
   }

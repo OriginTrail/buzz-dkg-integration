@@ -27,14 +27,14 @@ trust:Vouch
 trust:issuer
   a owl:ObjectProperty ;
   rdfs:label "issued by" ;
-  rdfs:domain trust:Vouch ;
+  rdfs:domain [ a owl:Class ; owl:unionOf (trust:Vouch trust:VouchLifecycle) ] ;
   rdfs:range prov:Agent ;
   rdfs:subPropertyOf prov:wasAttributedTo .
 
 trust:subject
   a owl:ObjectProperty ;
   rdfs:label "trust subject" ;
-  rdfs:domain trust:Vouch ;
+  rdfs:domain [ a owl:Class ; owl:unionOf (trust:Vouch trust:VouchLifecycle) ] ;
   rdfs:range prov:Agent ;
   rdfs:subPropertyOf schema:about .
 
@@ -71,14 +71,14 @@ trust:VouchLifecycle
 trust:status
   a owl:DatatypeProperty ;
   rdfs:label "attestation status" ;
-  rdfs:domain trust:Vouch ;
+  rdfs:domain [ a owl:Class ; owl:unionOf (trust:Vouch trust:VouchLifecycle) ] ;
   rdfs:range xsd:string .
 
 trust:scope
   a owl:DatatypeProperty ;
   rdfs:label "attestation scope" ;
   rdfs:comment "The context in which the attestation applies. Version 1 permits channel only." ;
-  rdfs:domain trust:Vouch ;
+  rdfs:domain [ a owl:Class ; owl:unionOf (trust:Vouch trust:VouchLifecycle) ] ;
   rdfs:range xsd:string .
 
 trust:targetVouch

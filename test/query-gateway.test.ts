@@ -182,6 +182,32 @@ function trustSourceBindings(eventId: string, issuer: string, subject: string, c
   };
 }
 
+function trustLifecycleSourceBindings(
+  eventId: string,
+  issuer: string,
+  subject: string,
+  action: 'revoke' | 'supersede',
+  targetId: string,
+  replacementId?: string,
+) {
+  return {
+    source: binding(`urn:nostr:event:${eventId}`),
+    sourceKind: binding('1985'),
+    sourceAuthor: binding(`urn:nostr:pubkey:${issuer}`),
+    sourceSig: binding('cd'.repeat(64)),
+    sourceTags: binding(
+      JSON.stringify([
+        ['h', CHANNEL],
+        ['L', 'buzz.wot'],
+        ['l', action, 'buzz.wot'],
+        ['p', subject],
+        ['e', targetId, '', 'target'],
+        ...(replacementId ? [['e', replacementId, '', 'replacement']] : []),
+      ]),
+    ),
+  };
+}
+
 function fixtureQuery(sparql: string): Array<Record<string, { value: string }>> {
   const store = new oxigraph.Store();
   store.load(readFileSync(new URL('./fixtures/ontology/lifelike-project.trig', import.meta.url)), {
@@ -410,6 +436,18 @@ describe('query gateway request contract', () => {
           status: 'active',
           at: Date.parse('2026-07-30T13:00:00Z') / 1_000,
           sourceEvent: `urn:nostr:event:${'44'.repeat(32)}`,
+          evidence: ['urn:dkg:github:commit:acme/api/a1b2c3d4'],
+          evidenceSources: [`urn:nostr:event:${'22'.repeat(32)}`],
+          layer: 'VM',
+        },
+        {
+          uri: `urn:buzz-dkg:vouch:${'55'.repeat(32)}`,
+          issuer: 'aa'.repeat(32),
+          subject: 'bb'.repeat(32),
+          status: 'revoked',
+          sourceEvent: `urn:nostr:event:${'55'.repeat(32)}`,
+          lifecycleEvent: `urn:nostr:event:${'66'.repeat(32)}`,
+          replacementVouch: null,
           layer: 'VM',
         },
       ],
@@ -599,8 +637,9 @@ describe('query gateway request contract', () => {
     const subject = 'bb'.repeat(32);
     const intermediary = 'cc'.repeat(32);
     const communityIssuer = 'dd'.repeat(32);
+    const vouchUri = (id: number) => `urn:buzz-dkg:vouch:${String(id).repeat(64)}`;
     const vouch = (id: number, issuer: string, target: string) => ({
-      vouch: binding(`urn:buzz-dkg:vouch:${id}`),
+      vouch: binding(vouchUri(id)),
       issuer: binding(`urn:nostr:pubkey:${issuer}`),
       subject: binding(`urn:nostr:pubkey:${target}`),
       note: binding(`Evidence note ${id}`),
@@ -625,19 +664,19 @@ describe('query gateway request contract', () => {
       if (sparql.includes('trust/supportedBy')) {
         return [
           {
-            vouch: binding('urn:buzz-dkg:vouch:1'),
+            vouch: binding(vouchUri(1)),
             reference: binding('urn:buzz-dkg:reference:1'),
             target: binding(sharedEvidence),
             evidenceSource: binding(sharedEvidenceSource),
           },
           {
-            vouch: binding('urn:buzz-dkg:vouch:3'),
+            vouch: binding(vouchUri(3)),
             reference: binding('urn:buzz-dkg:reference:3'),
             target: binding(relatedEvidence),
             evidenceSource: binding(sharedEvidenceSource),
           },
           {
-            vouch: binding('urn:buzz-dkg:vouch:4'),
+            vouch: binding(vouchUri(4)),
             reference: binding('urn:buzz-dkg:reference:4'),
             target: binding(independentEvidence),
             evidenceSource: binding(`urn:nostr:event:${'ff'.repeat(32)}`),
@@ -651,18 +690,24 @@ describe('query gateway request contract', () => {
             issuer: binding(`urn:nostr:pubkey:${communityIssuer}`),
             subject: binding(`urn:nostr:pubkey:${subject}`),
             status: binding('revoked'),
-            target: binding('urn:buzz-dkg:vouch:4'),
+            target: binding(vouchUri(4)),
             at: binding('2026-07-30T13:00:00Z'),
-            source: binding(`urn:nostr:event:${'99'.repeat(32)}`),
+            ...trustLifecycleSourceBindings(
+              '99'.repeat(32),
+              communityIssuer,
+              subject,
+              'revoke',
+              '4'.repeat(64),
+            ),
           },
           {
-            // A later action by another signer cannot mask the valid revoke.
+            // A later graph assertion without a validated signed source cannot mask the revoke.
             action: binding('urn:buzz-dkg:vouch-lifecycle:attacker'),
-            issuer: binding(`urn:nostr:pubkey:${'ee'.repeat(32)}`),
+            issuer: binding(`urn:nostr:pubkey:${communityIssuer}`),
             subject: binding(`urn:nostr:pubkey:${subject}`),
             status: binding('superseded'),
-            target: binding('urn:buzz-dkg:vouch:4'),
-            replacement: binding('urn:buzz-dkg:vouch:attacker'),
+            target: binding(vouchUri(4)),
+            replacement: binding(`urn:buzz-dkg:vouch:${'8'.repeat(64)}`),
             at: binding('2026-08-01T13:00:00Z'),
             source: binding(`urn:nostr:event:${'aa'.repeat(32)}`),
           },
@@ -698,7 +743,7 @@ describe('query gateway request contract', () => {
         }>;
       }
     ).vouches;
-    expect(networkVouches.find(({ uri }) => uri === 'urn:buzz-dkg:vouch:4')).toMatchObject({
+    expect(networkVouches.find(({ uri }) => uri === vouchUri(4))).toMatchObject({
       status: 'revoked',
       lifecycleEvent: `urn:nostr:event:${'99'.repeat(32)}`,
       replacementVouch: null,
@@ -742,7 +787,7 @@ describe('query gateway request contract', () => {
     ]);
     const evidence = (response.result as { evidence: Array<{ uri: string; status: string }> })
       .evidence;
-    expect(evidence.map(({ uri }) => uri)).not.toContain('urn:buzz-dkg:vouch:4');
+    expect(evidence.map(({ uri }) => uri)).not.toContain(vouchUri(4));
     const lifecycleQuery = dkg.calls.find((call) => call.sparql?.includes('trust/targetVouch'));
     expect(lifecycleQuery?.sparql).toContain(`a <http://dkg.io/ontology/trust/VouchLifecycle>`);
     expect(lifecycleQuery?.sparql).toContain(`<http://dkg.io/ontology/trust/scope> "channel"`);
