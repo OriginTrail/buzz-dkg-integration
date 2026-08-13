@@ -8,7 +8,10 @@ import { fileURLToPath } from 'node:url';
 const DEFAULT_BRIDGE_PORT = 9297;
 const DEFAULT_GATEWAY_PORT = 9296;
 const MAX_CONNECTIONS = 64;
-const IDLE_TIMEOUT_MS = 30_000;
+// The authenticated gateway permits a 120-second operation budget. Keep the
+// transport alive slightly longer so a valid cold DKG read is not cut off by
+// this stateless TCP bridge before the gateway can answer.
+const IDLE_TIMEOUT_MS = 130_000;
 
 function port(name, raw, fallback) {
   const value = raw === undefined || raw === '' ? fallback : Number(raw);
