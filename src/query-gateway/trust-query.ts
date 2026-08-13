@@ -7,6 +7,7 @@ import type {
   TrustVouchSummary,
   VisibleMemoryLayer,
 } from './types.ts';
+import { parseTrustVouchTags } from '../memory/trust-source.ts';
 
 type BindingRow = Record<string, unknown>;
 export type TrustLayeredRow = { row: BindingRow; layer: VisibleMemoryLayer };
@@ -102,16 +103,8 @@ function sourceMatchesVouch(row: BindingRow, issuer: string, subject: string): b
   }
   try {
     const tags = JSON.parse(sourceTags) as unknown;
-    if (!Array.isArray(tags) || !tags.every((tag) => Array.isArray(tag))) return false;
-    const normalized = tags as unknown[][];
-    const subjects = normalized.filter((tag) => tag[0] === 'p');
-    return (
-      subjects.length === 1 &&
-      typeof subjects[0]?.[1] === 'string' &&
-      subjects[0][1].toLowerCase() === subject &&
-      normalized.some((tag) => tag[0] === 'L' && tag[1] === 'buzz.wot') &&
-      normalized.some((tag) => tag[0] === 'l' && tag[1] === 'vouch' && tag[2] === 'buzz.wot')
-    );
+    const parsed = parseTrustVouchTags(tags);
+    return parsed.ok && parsed.subjectPubkey === subject;
   } catch {
     return false;
   }

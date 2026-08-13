@@ -6,12 +6,12 @@ import type {
   AgentMemoryProposalV2,
   NostrEvent,
 } from '../types.ts';
+import { parseTrustVouchTags } from './trust-source.ts';
 
-const HEX_64 = /^[0-9a-f]{64}$/u;
 const TRUST_RELATIONS = new Set(['trust:issuer', 'trust:subject']);
 
 function invalid(message: string): never {
-  throw new IntegrationApiError(400, 'invalid_request', message);
+  throw new IntegrationApiError(400, 'invalid_memory_proposal', message);
 }
 
 interface SignedVouchAction {
@@ -28,29 +28,18 @@ function signedVouchAction(envelope: AgentMemoryEnvelope): SignedVouchAction {
   if (source.kind !== 1985 || source.pubkey !== envelope.requesterPubkey) {
     invalid('dkg-trust@1 source must be a kind 1985 event signed by the requester');
   }
-  const namespaces = source.tags.filter((tag) => tag[0] === 'L');
-  const labels = source.tags.filter((tag) => tag[0] === 'l');
-  if (
-    namespaces.length !== 1 ||
-    namespaces[0]!.length !== 2 ||
-    namespaces[0]![1] !== 'buzz.wot' ||
-    labels.length !== 1 ||
-    labels[0]!.length !== 3 ||
-    labels[0]![1] !== 'vouch' ||
-    labels[0]![2] !== 'buzz.wot'
-  ) {
+  const tags = parseTrustVouchTags(source.tags);
+  if (!tags.ok && tags.reason === 'label') {
     invalid('dkg-trust@1 source must be a buzz.wot vouch label');
   }
   if (!source.content.trim() || source.content.length > 1_000) {
     invalid('dkg-trust@1 signed vouch explanation must contain 1 to 1,000 characters');
   }
-  const subjectTags = source.tags.filter((tag) => tag[0] === 'p');
-  const subjectPubkey = subjectTags[0]?.[1];
-  if (subjectTags.length !== 1 || !subjectPubkey || !HEX_64.test(subjectPubkey)) {
+  if (!tags.ok) {
     invalid('dkg-trust@1 source must identify exactly one p-tag subject');
   }
   const issuerUri = `urn:nostr:pubkey:${source.pubkey}`;
-  const subjectUri = `urn:nostr:pubkey:${subjectPubkey.toLowerCase()}`;
+  const subjectUri = `urn:nostr:pubkey:${tags.subjectPubkey}`;
   if (issuerUri === subjectUri) invalid('dkg-trust@1 does not allow self-vouches');
   return { source, issuerUri, subjectUri };
 }

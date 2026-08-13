@@ -424,6 +424,33 @@ describe('query gateway request contract', () => {
     expect(result.people).toHaveLength(200);
   });
 
+  it('propagates bounded-query truncation into reputation completeness', async () => {
+    const dkg = new GatewayDkg();
+    const subject = 'bb'.repeat(32);
+    const rows = Array.from({ length: 201 }, (_, index) => ({
+      pk: binding(index === 0 ? subject : index.toString(16).padStart(64, '0')),
+      n: binding('1'),
+      latest: binding('2026-07-30T13:00:00Z'),
+    }));
+    dkg.bindingResolver = ({ view, sparql }) =>
+      view === 'shared-working-memory' && sparql.includes('COUNT(DISTINCT ?record)') ? rows : [];
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('reputation_summary', { pubkey: subject }));
+
+    expect(response.result).toMatchObject({
+      subject,
+      completeness: 'partial',
+      signals: { evidenceRecords: 0 },
+    });
+    expect(response.result).toHaveProperty(
+      'reasons',
+      expect.arrayContaining([
+        'Evidence discovery reached the channel bound; this score uses a bounded sample.',
+      ]),
+    );
+  });
+
   it('scores a bounded two-hop reputation lens and keeps every component explainable', async () => {
     const dkg = new GatewayDkg();
     const subject = 'bb'.repeat(32);

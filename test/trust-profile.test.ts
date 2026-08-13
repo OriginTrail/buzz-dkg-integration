@@ -194,6 +194,20 @@ describe('signed trust proposal profile', () => {
       }),
     ).toThrow(/subject must resolve to the signed source p tag/);
 
+    const tamperedExplanation = JSON.parse(proposal.content) as {
+      entities: Array<{ id: string; description?: string }>;
+    };
+    tamperedExplanation.entities.find((entity) => entity.id === 'vouch')!.description =
+      'A different, unsigned explanation.';
+    expect(() =>
+      parseAgentMemoryEnvelope({
+        channelId: CHANNEL,
+        requesterPubkey: PUBKEY,
+        proposalEvent: proposalForTrustSource(source, JSON.stringify(tamperedExplanation)),
+        sourceEvents: [source],
+      }),
+    ).toThrow(/explanation must match the signed source content/);
+
     const ambiguousSource = signed({
       kind: 1985,
       created_at: source.created_at,
