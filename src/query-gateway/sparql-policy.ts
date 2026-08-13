@@ -19,14 +19,15 @@ export const SEMANTIC_QUERY_DEFAULT_LIMIT = 25;
 export const SEMANTIC_QUERY_COST_BUDGET = 40;
 export const SEMANTIC_QUERY_MAX_QUADS = 300;
 
-export interface SemanticQueryPolicyResult {
-  queryType: 'select' | 'ask' | 'construct';
-  limit: number | null;
+interface SemanticQueryPolicyBase {
   offset: number;
   score: number;
   budget: number;
   metrics: SemanticQueryMetrics;
 }
+
+export type SemanticQueryPolicyResult = SemanticQueryPolicyBase &
+  ({ queryType: 'select' | 'construct'; limit: number } | { queryType: 'ask'; limit: null });
 
 const parser = new Parser();
 const MAX_TRIPLES = 16;
@@ -449,5 +450,18 @@ export function enforceSemanticQueryPolicy(
       ],
     });
   }
-  return { queryType, limit, offset, score, budget: SEMANTIC_QUERY_COST_BUDGET, metrics };
+  if (queryType === 'ask') {
+    return { queryType, limit: null, offset, score, budget: SEMANTIC_QUERY_COST_BUDGET, metrics };
+  }
+  // SELECT and CONSTRUCT without a numeric LIMIT are rejected above. Keeping
+  // that invariant in the return type prevents execution code from asserting it.
+  if (limit === null) throw new Error('bounded semantic query lost its verified LIMIT');
+  return {
+    queryType,
+    limit,
+    offset,
+    score,
+    budget: SEMANTIC_QUERY_COST_BUDGET,
+    metrics,
+  };
 }

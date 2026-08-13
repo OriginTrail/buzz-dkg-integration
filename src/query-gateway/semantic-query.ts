@@ -1,14 +1,11 @@
 import { IntegrationApiError } from '../errors.ts';
 import { enforceSemanticQueryPolicy, SEMANTIC_QUERY_MAX_QUADS } from './sparql-policy.ts';
-import type {
-  SemanticQueryResult,
-  SemanticQueryView,
-  SparqlBindingRow,
-  SparqlBindingValue,
-  SparqlJsonValue,
-  SparqlQuad,
-  VisibleMemoryLayer,
-} from './types.ts';
+import {
+  normalizeAskQueryResult,
+  normalizeBindingQueryResult,
+  normalizeQuadQueryResult,
+} from './sparql-result.ts';
+import type { SemanticQueryResult, SemanticQueryView, VisibleMemoryLayer } from './types.ts';
 
 export type SemanticVisibleView = 'shared-working-memory' | 'verifiable-memory';
 
@@ -24,69 +21,17 @@ const VIEWS: readonly [SemanticVisibleView, VisibleMemoryLayer][] = [
 ];
 const MAX_SEMANTIC_QUERY_TIMEOUT_MS = 10_000;
 
-function plainObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-function jsonValue(value: unknown, depth = 0): value is SparqlJsonValue {
-  if (depth > 12) return false;
-  if (value === null || ['boolean', 'number', 'string'].includes(typeof value)) return true;
-  if (Array.isArray(value)) return value.every((child) => jsonValue(child, depth + 1));
-  if (!plainObject(value)) return false;
-  return Object.values(value).every((child) => jsonValue(child, depth + 1));
-}
-
-function bindingValue(value: unknown): value is SparqlBindingValue {
-  return typeof value === 'string' || (plainObject(value) && jsonValue(value));
-}
-
-function semanticResult(value: unknown): Record<string, unknown> {
-  if (!plainObject(value) || !plainObject(value.result)) {
-    throw new Error('DKG query returned an invalid result shape');
-  }
-  return value.result;
-}
-
-function selectBindings(value: unknown, limit: number): SparqlBindingRow[] {
-  const result = semanticResult(value);
-  if (!Array.isArray(result.bindings)) {
-    throw new Error('DKG SELECT query returned an invalid bindings shape');
-  }
-  return result.bindings.slice(0, limit).map((candidate) => {
-    if (!plainObject(candidate) || !Object.values(candidate).every(bindingValue)) {
-      throw new Error('DKG query returned an invalid binding term');
-    }
-    return candidate as SparqlBindingRow;
-  });
-}
-
-function askBoolean(value: unknown): boolean {
-  const result = semanticResult(value);
-  if (typeof result.boolean !== 'boolean') {
-    throw new Error('DKG ASK query returned an invalid boolean shape');
-  }
-  return result.boolean;
-}
-
-function constructQuads(value: unknown, maximumQuads: number): SparqlQuad[] {
-  const result = semanticResult(value);
-  if (!Array.isArray(result.quads)) {
-    throw new Error('DKG CONSTRUCT query returned an invalid quads shape');
-  }
-  if (result.quads.length > maximumQuads) {
+function constructQuads(value: unknown, maximumQuads: number) {
+  const quads = normalizeQuadQueryResult(value);
+  if (quads.length > maximumQuads) {
     throw new IntegrationApiError(
       502,
       'result_bound_exceeded',
       'DKG returned more CONSTRUCT quads than the verified query bound',
-      { maxQuads: maximumQuads, receivedQuads: result.quads.length },
+      { maxQuads: maximumQuads, receivedQuads: quads.length },
     );
   }
-  return result.quads.map((quad) => {
-    if (!plainObject(quad) || !jsonValue(quad)) {
-      throw new Error('DKG query returned an invalid quad');
-    }
-    return quad as SparqlQuad;
-  });
+  return quads;
 }
 
 /** Parser-level validation owns shape only; configured size policy is enforced at execution. */
@@ -122,10 +67,9 @@ export async function executeSemanticQuery(options: {
     const layers = await Promise.all(
       views.map(async ([view, layer]) => ({
         layer,
-        bindings: selectBindings(
+        bindings: normalizeBindingQueryResult(
           await options.query(view, options.sparql, timeoutMs),
-          policy.limit!,
-        ),
+        ).slice(0, policy.limit),
       })),
     );
     return { ...base, queryType: 'select', layers };
@@ -134,14 +78,14 @@ export async function executeSemanticQuery(options: {
     const layers = await Promise.all(
       views.map(async ([view, layer]) => ({
         layer,
-        boolean: askBoolean(await options.query(view, options.sparql, timeoutMs)),
+        boolean: normalizeAskQueryResult(await options.query(view, options.sparql, timeoutMs)),
       })),
     );
     return { ...base, queryType: 'ask', layers };
   }
   const maximumQuads = Math.min(
     SEMANTIC_QUERY_MAX_QUADS,
-    policy.metrics.constructTriples * policy.limit!,
+    policy.metrics.constructTriples * policy.limit,
   );
   const layers = await Promise.all(
     views.map(async ([view, layer]) => ({
