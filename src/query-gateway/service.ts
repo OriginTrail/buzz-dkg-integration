@@ -6,6 +6,7 @@ import { executeSemanticQuery, requiredSemanticSparql } from './semantic-query.t
 import { normalizeBindingQueryResult } from './sparql-result.ts';
 import type {
   ChannelMemoryResult,
+  ChannelTriplesResult,
   ContributorSummary,
   ContributorTrailEntry,
   ContributorTrailResult,
@@ -64,6 +65,7 @@ const MAX_DKG_ROWS = 2_500;
 const MAX_GRAPH_NODES = 1_200;
 const MAX_GRAPH_EDGES = 2_400;
 const MAX_TRIPLES = 1_000;
+const MAX_CHANNEL_TRIPLES = 10_000;
 const BUZZ = 'https://w3id.org/buzz-dkg/buzz#';
 const NOSTR = 'https://w3id.org/buzz-dkg/nostr#';
 const PROV = 'http://www.w3.org/ns/prov#';
@@ -134,6 +136,7 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
     'decision_trace',
     'subgraph_graph',
     'subgraph_triples',
+    'channel_triples',
     'evidence',
     'semantic_query',
   ]);
@@ -167,7 +170,7 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
     };
   }
   if (value.scope !== undefined) invalid('scope is only accepted for semantic_query');
-  if (operation === 'channel_memory') {
+  if (operation === 'channel_memory' || operation === 'channel_triples') {
     exactKeys(value.arguments, [], 'arguments');
     return { ...base, operation, arguments: {} };
   }
@@ -376,6 +379,8 @@ export class QueryGatewayService {
         return this.subgraphGraph(cg, request.arguments.name);
       case 'subgraph_triples':
         return this.subgraphTriples(cg, request.arguments.name);
+      case 'channel_triples':
+        return this.channelTriples(cg);
       case 'evidence':
         return this.evidence(cg, request.arguments.uri);
       case 'semantic_query':
@@ -413,6 +418,7 @@ export class QueryGatewayService {
     view: VisibleView,
     sparql: string,
     subGraphName?: string,
+    maxRows = MAX_DKG_ROWS,
   ): Promise<BindingRow[]> {
     if (Buffer.byteLength(sparql, 'utf8') > this.config.maxQueryBytes) {
       throw new IntegrationApiError(
@@ -422,7 +428,7 @@ export class QueryGatewayService {
       );
     }
     const result = await this.queryResult(cg, view, sparql, subGraphName);
-    return result.bindings.slice(0, MAX_DKG_ROWS);
+    return result.bindings.slice(0, maxRows);
   }
 
   private async layered(cg: string, sparql: string, subGraphName?: string): Promise<LayeredRow[]> {
@@ -864,6 +870,52 @@ export class QueryGatewayService {
       });
     }
     return { subgraph: name, triples: [...triples.values()] };
+  }
+
+  private async channelTriples(cg: string): Promise<ChannelTriplesResult> {
+    const query = `SELECT ?s ?p ?o ?g WHERE { GRAPH ?g { ?s ?p ?o } } LIMIT ${
+      MAX_CHANNEL_TRIPLES + 1
+    }`;
+    const triples = new Map<string, GraphTriple>();
+    let truncated = false;
+
+    // Query serially to avoid doubling peak Blazegraph load. VM comes first so
+    // a shared/verifiable duplicate retains its strongest visible layer.
+    for (const [view, layer] of [...VIEWS].reverse()) {
+      const rows = await this.query(cg, view, query, undefined, MAX_CHANNEL_TRIPLES + 1);
+      if (rows.length > MAX_CHANNEL_TRIPLES) truncated = true;
+      for (const row of rows) {
+        const subject = bounded(term(row, 's'), 1_000);
+        const predicate = bounded(term(row, 'p'), 1_000);
+        const object = bounded(rawTerm(row.o), 4_000);
+        if (!subject || !predicate) continue;
+        const key = JSON.stringify([subject, predicate, object]);
+        const existing = triples.get(key);
+        if (existing) {
+          if (LAYER_RANK[layer] > LAYER_RANK[existing.layer]) existing.layer = layer;
+          continue;
+        }
+        if (triples.size >= MAX_CHANNEL_TRIPLES) {
+          truncated = true;
+          continue;
+        }
+        const graph = term(row, 'g');
+        const agentMatch = /\/([a-z0-9_-]+)\/_?(?:shared|verifiable)_memory\//iu.exec(graph);
+        triples.set(key, {
+          subject,
+          predicate,
+          object,
+          layer,
+          agent: bounded(agentMatch?.[1] ?? 'channel', 128),
+        });
+      }
+    }
+
+    return {
+      triples: [...triples.values()],
+      limit: MAX_CHANNEL_TRIPLES,
+      truncated,
+    };
   }
 
   private async evidence(cg: string, uri: string): Promise<EvidenceResult> {

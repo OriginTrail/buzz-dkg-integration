@@ -5,6 +5,7 @@ export type QueryOperation =
   | 'decision_trace'
   | 'subgraph_graph'
   | 'subgraph_triples'
+  | 'channel_triples'
   | 'evidence'
   | 'semantic_query';
 
@@ -38,6 +39,7 @@ export type QueryGatewayRequest =
   | RequestBase<'decision_trace', { repository: string; commitSha: string; componentName: string }>
   | RequestBase<'subgraph_graph', { name: string }>
   | RequestBase<'subgraph_triples', { name: string }>
+  | RequestBase<'channel_triples', Record<string, never>>
   | RequestBase<'evidence', { uri: string }>
   | SemanticQueryRequest;
 
@@ -169,6 +171,14 @@ export interface SubgraphTriplesResult {
   triples: GraphTriple[];
 }
 
+export interface ChannelTriplesResult {
+  triples: GraphTriple[];
+  /** Hard server-side response ceiling. */
+  limit: number;
+  /** True when the Context Graph contains more triples than this response. */
+  truncated: boolean;
+}
+
 export interface EvidenceSource {
   id: string;
   span: string | null;
@@ -259,6 +269,7 @@ export type QueryGatewayResult =
   | DecisionTraceResult
   | SubgraphGraphResult
   | SubgraphTriplesResult
+  | ChannelTriplesResult
   | EvidenceResult
   | SemanticQueryResult;
 

@@ -354,6 +354,10 @@ describe('query gateway request contract', () => {
     expect(parseQueryGatewayRequest(body('subgraph_triples', { name: 'core_1' }))).toMatchObject({
       operation: 'subgraph_triples',
     });
+    expect(parseQueryGatewayRequest(body('channel_triples'))).toMatchObject({
+      operation: 'channel_triples',
+      arguments: {},
+    });
     expect(parseQueryGatewayRequest(body('evidence', { uri: 'urn:buzz:claim:1' }))).toMatchObject({
       operation: 'evidence',
     });
@@ -835,6 +839,7 @@ describe('query gateway HTTP boundary', () => {
     ],
     ['subgraph_graph', { name: 'core' }, { subgraph: 'core', nodes: [], edges: [] }],
     ['subgraph_triples', { name: 'core' }, { subgraph: 'core', triples: [] }],
+    ['channel_triples', {}, { triples: [], limit: 10_000, truncated: false }],
     [
       'evidence',
       { uri: 'urn:buzz:claim:1' },
@@ -1002,6 +1007,29 @@ describe('query gateway HTTP boundary', () => {
       expect.objectContaining({ object: '"quoted literal"@en', layer: 'VM' }),
       expect.objectContaining({ object: '<urn:buzz:object:2>', layer: 'VM' }),
     ]);
+  });
+
+  it('caps a channel graph at 10,000 triples and reads layers serially with VM first', async () => {
+    const dkg = new GatewayDkg();
+    dkg.tripleBindings = Array.from({ length: 10_001 }, (_, index) => ({
+      s: binding(`<urn:buzz:subject:${index}>`),
+      p: binding('<urn:buzz:predicate>'),
+      o: binding(`"value ${index}"`),
+      g: binding('<https://example.test/fizz/_verifiable_memory/graph>'),
+    }));
+    const service = new QueryGatewayService(
+      () => CONTEXT_GRAPH,
+      dkg.asDkg(),
+      gatewayConfig({ operationTimeoutMs: 10_000, dkgTimeoutMs: 5_000 }),
+    );
+
+    const response = await service.execute(body('channel_triples'));
+    expect(response.result).toMatchObject({ limit: 10_000, truncated: true });
+    expect('triples' in response.result && response.result.triples).toHaveLength(10_000);
+    const calls = dkg.calls.filter((call) => call.kind === 'query');
+    expect(calls.map((call) => call.view)).toEqual(['verifiable-memory', 'shared-working-memory']);
+    expect(calls.every((call) => call.subGraphName === undefined)).toBe(true);
+    expect(calls.every((call) => call.sparql?.includes('LIMIT 10001'))).toBe(true);
   });
 
   it('maps contributors and evidence through the RDF author relation', async () => {
