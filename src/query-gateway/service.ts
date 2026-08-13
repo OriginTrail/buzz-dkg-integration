@@ -33,7 +33,7 @@ import type {
 } from './types.ts';
 import { QueryExecutionPolicy, type QueryCacheStatus } from './query-execution-policy.ts';
 import {
-  summarizeChannelMemoryLayer,
+  summarizeChannelMemoryTriples,
   type ChannelMemoryLayerSummary,
 } from './channel-memory-summary.ts';
 
@@ -448,52 +448,21 @@ export class QueryGatewayService {
     const rows = await this.query(
       cg,
       view,
-      `SELECT DISTINCT ?rowType ?g ?name ?s ?digest ?t ?pk ?n ?latest WHERE {
-        {
-          {
-            SELECT DISTINCT ?g WHERE {
-              GRAPH ?g { ?graphSubject ?graphPredicate ?graphObject }
-            } LIMIT 201
-          }
-          BIND("graph" AS ?rowType)
-        }
-        UNION
-        {
-          {
-            SELECT DISTINCT ?g ?s ?name ?digest ?t WHERE {
-              GRAPH ?g {
-                ?s a <${BUZZ}DecisionCluster> .
-                OPTIONAL { ?s <${SCHEMA}name> ?name }
-                OPTIONAL { ?s <${BUZZ}sourceSetDigest> ?digest }
-                OPTIONAL { ?s <${PROV}endedAtTime> ?t }
-              }
-            } LIMIT 201
-          }
-          BIND("decision" AS ?rowType)
-        }
-        UNION
-        {
-          {
-            SELECT ?g ?pk (COUNT(DISTINCT ?event) AS ?n) (MAX(?eventAt) AS ?latest) WHERE {
-              GRAPH ?g {
-                ?event <${PROV}wasAttributedTo> ?agent .
-                ?agent <${NOSTR}pubkeyHex> ?pk .
-                OPTIONAL { ?event <${NOSTR}createdAt> ?eventAt }
-              }
-            } GROUP BY ?g ?pk LIMIT 201
-          }
-          BIND("contributor" AS ?rowType)
-        }
-      } LIMIT 1000`,
+      `SELECT ?s ?p ?o ?g WHERE { GRAPH ?g { ?s ?p ?o } } LIMIT ${MAX_CHANNEL_TRIPLES + 1}`,
+      undefined,
+      MAX_CHANNEL_TRIPLES + 1,
     );
-    return summarizeChannelMemoryLayer(layer, rows);
+    return summarizeChannelMemoryTriples(layer, rows);
   }
 
   private async channelMemory(cg: string): Promise<ChannelMemoryResult> {
-    const [summaries, subGraphResponse] = await Promise.all([
-      Promise.all(VIEWS.map(([view, layer]) => this.channelMemoryLayer(cg, view, layer))),
-      this.#executionPolicy.read(() => this.dkg.listSubGraphs(cg, this.config.dkgTimeoutMs)),
-    ]);
+    const summaries: ChannelMemoryLayerSummary[] = [];
+    for (const [view, layer] of [...VIEWS].reverse()) {
+      summaries.push(await this.channelMemoryLayer(cg, view, layer));
+    }
+    const subGraphResponse = await this.#executionPolicy.read(() =>
+      this.dkg.listSubGraphs(cg, this.config.dkgTimeoutMs),
+    );
 
     const layerGraphs: Record<VisibleMemoryLayer, { graph: string; label: string }[]> = {
       SWM: [],

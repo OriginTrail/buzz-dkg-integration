@@ -534,7 +534,19 @@ describe('query gateway HTTP boundary', () => {
   });
 
   it('resolves the Context Graph server-side and queries only SWM and VM', async () => {
-    const { dkg, url } = await startGateway();
+    const dkg = new GatewayDkg();
+    dkg.bindingResolver = ({ view, sparql }) =>
+      sparql.includes('SELECT ?s ?p ?o ?g')
+        ? [
+            {
+              s: binding(`urn:test:${view}:subject`),
+              p: binding('urn:test:predicate'),
+              o: binding('value'),
+              g: binding(`https://example.test/${view}/graph`),
+            },
+          ]
+        : null;
+    const { url } = await startGateway(dkg);
     const response = await request(url, body('channel_memory'));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
@@ -548,13 +560,13 @@ describe('query gateway HTTP boundary', () => {
           SWM: [
             {
               graph: 'https://example.test/shared-working-memory/graph',
-              label: 'shared-working-memory graph',
+              label: 'shared-working-memory/graph',
             },
           ],
           VM: [
             {
               graph: 'https://example.test/verifiable-memory/graph',
-              label: 'verifiable-memory graph',
+              label: 'verifiable-memory/graph',
             },
           ],
         },
@@ -593,13 +605,17 @@ describe('query gateway HTTP boundary', () => {
     expect(dkg.calls).toHaveLength(3);
   });
 
-  it('keeps the combined channel summary valid SPARQL', async () => {
+  it('uses a bounded plain triple scan for the channel summary', async () => {
     const dkg = new GatewayDkg();
     dkg.bindingResolver = ({ sparql }) => fixtureQuery(sparql);
     const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
     const response = await service.execute(body('channel_memory'));
     expect(response.operation).toBe('channel_memory');
-    expect(dkg.calls.filter((call) => call.kind === 'query')).toHaveLength(2);
+    const calls = dkg.calls.filter((call) => call.kind === 'query');
+    expect(calls).toHaveLength(2);
+    expect(calls.map((call) => call.view)).toEqual(['verifiable-memory', 'shared-working-memory']);
+    expect(calls.every((call) => call.sparql?.includes('LIMIT 10001'))).toBe(true);
+    expect(calls.every((call) => !call.sparql?.includes('GROUP BY'))).toBe(true);
   });
 
   it('caches and coalesces identical channel summaries', async () => {
@@ -614,10 +630,10 @@ describe('query gateway HTTP boundary', () => {
     const gatedDkg = new GatedDkg();
     const coalesced = await startGateway(gatedDkg);
     const firstPending = request(coalesced.url, body('channel_memory'));
-    await waitFor(() => gatedDkg.started === 2);
+    await waitFor(() => gatedDkg.started === 1);
     const secondPending = request(coalesced.url, body('channel_memory'));
     await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(gatedDkg.started).toBe(2);
+    expect(gatedDkg.started).toBe(1);
     gatedDkg.release();
     const responses = await Promise.all([firstPending, secondPending]);
     expect(responses.map((response) => response.status)).toEqual([200, 200]);
@@ -645,10 +661,12 @@ describe('query gateway HTTP boundary', () => {
   it('keeps generic graph-only channel layers discoverable', async () => {
     const dkg = new GatewayDkg();
     dkg.bindingResolver = ({ view, sparql }) =>
-      sparql.includes('SELECT DISTINCT ?rowType')
+      sparql.includes('SELECT ?s ?p ?o ?g')
         ? [
             {
-              rowType: binding('graph'),
+              s: binding(`urn:test:${view}:subject`),
+              p: binding('urn:test:predicate'),
+              o: binding('value'),
               g: binding(`urn:test:${view}:generic-only`),
             },
           ]
@@ -666,30 +684,45 @@ describe('query gateway HTTP boundary', () => {
       decisions: [],
       contributors: [],
     });
-    const combined = dkg.calls.find((call) => call.sparql?.includes('SELECT DISTINCT ?rowType'));
-    expect(combined?.sparql).toContain('BIND("graph" AS ?rowType)');
-    expect(combined?.sparql).toContain('?graphSubject ?graphPredicate ?graphObject');
-    expect(combined?.sparql).toContain('COUNT(DISTINCT ?event) AS ?n');
-    expect(combined?.sparql).toContain('GROUP BY ?g ?pk LIMIT 201');
+    const scans = dkg.calls.filter((call) => call.sparql?.includes('SELECT ?s ?p ?o ?g'));
+    expect(scans).toHaveLength(2);
+    expect(scans.every((call) => !call.sparql?.includes('GROUP BY'))).toBe(true);
   });
 
-  it('uses store-computed contributor totals without hiding independent decision rows', async () => {
+  it('computes contributor totals without hiding independent decision rows', async () => {
     const dkg = new GatewayDkg();
     dkg.bindingResolver = ({ view, sparql }) =>
-      sparql.includes('SELECT DISTINCT ?rowType')
+      sparql.includes('SELECT ?s ?p ?o ?g')
         ? ([
             {
-              rowType: binding('contributor'),
+              s: binding(`urn:test:${view}:event-one`),
+              p: binding('http://www.w3.org/ns/prov#wasAttributedTo'),
+              o: binding(`urn:test:${view}:agent`),
               g: binding(`urn:test:${view}:busy`),
-              pk: binding(CONTRIBUTOR),
-              n: binding('1500'),
-              latest: binding('2026-08-12T12:00:00Z'),
             },
             {
-              rowType: binding('decision'),
+              s: binding(`urn:test:${view}:event-two`),
+              p: binding('http://www.w3.org/ns/prov#wasAttributedTo'),
+              o: binding(`urn:test:${view}:agent`),
+              g: binding(`urn:test:${view}:busy`),
+            },
+            {
+              s: binding(`urn:test:${view}:agent`),
+              p: binding('https://w3id.org/buzz-dkg/nostr#pubkeyHex'),
+              o: binding(CONTRIBUTOR),
+              g: binding(`urn:test:${view}:busy`),
+            },
+            {
               g: binding(`urn:test:${view}:busy`),
               s: binding('urn:test:decision:still-visible'),
-              name: binding('Decision remains visible'),
+              p: binding('http://www.w3.org/1999/02/22-rdf-syntax-ns#type'),
+              o: binding('https://w3id.org/buzz-dkg/buzz#DecisionCluster'),
+            },
+            {
+              g: binding(`urn:test:${view}:busy`),
+              s: binding('urn:test:decision:still-visible'),
+              p: binding('http://schema.org/name'),
+              o: binding('Decision remains visible'),
             },
           ] as Array<Record<string, { value: string }>>)
         : [];
@@ -698,7 +731,7 @@ describe('query gateway HTTP boundary', () => {
     const response = await service.execute(body('channel_memory'));
 
     expect(response.result).toMatchObject({
-      contributors: [{ pubkey: CONTRIBUTOR, events: 1500 }],
+      contributors: [{ pubkey: CONTRIBUTOR, events: 2 }],
       decisions: [{ uri: 'urn:test:decision:still-visible' }],
     });
   });
@@ -1039,33 +1072,52 @@ describe('query gateway HTTP boundary', () => {
     const claim = 'urn:buzz:claim:claim-one';
     const at = '2026-08-05T12:00:00.000Z';
     const expectedAt = Date.parse(at) / 1_000;
+    const agent = 'urn:nostr:agent:contributor';
     dkg.bindingResolver = (options) => {
       if (options.view !== 'verifiable-memory') return [];
-      if (options.sparql.includes('SELECT DISTINCT ?rowType')) {
+      if (options.sparql.includes('SELECT ?s ?p ?o ?g')) {
         return [
           {
-            rowType: binding('graph'),
+            s: binding('urn:nostr:event:contribution-one'),
+            p: binding('http://www.w3.org/ns/prov#wasAttributedTo'),
+            o: binding(agent),
             g: binding('urn:g'),
-            name: binding('Verifiable graph'),
           },
           {
-            rowType: binding('contributor'),
-            pk: binding(CONTRIBUTOR),
-            event: binding('urn:nostr:event:contribution-one'),
-            at: binding(at),
+            s: binding('urn:nostr:event:contribution-one'),
+            p: binding('https://w3id.org/buzz-dkg/nostr#createdAt'),
+            o: binding(at),
+            g: binding('urn:g'),
           },
           {
-            rowType: binding('contributor'),
-            pk: binding(CONTRIBUTOR),
-            event: binding('urn:nostr:event:contribution-two'),
-            at: binding(at),
+            s: binding('urn:nostr:event:contribution-two'),
+            p: binding('http://www.w3.org/ns/prov#wasAttributedTo'),
+            o: binding(agent),
+            g: binding('urn:g'),
           },
           {
-            rowType: binding('decision'),
+            s: binding('urn:nostr:event:contribution-two'),
+            p: binding('https://w3id.org/buzz-dkg/nostr#createdAt'),
+            o: binding(at),
+            g: binding('urn:g'),
+          },
+          {
+            s: binding(agent),
+            p: binding('https://w3id.org/buzz-dkg/nostr#pubkeyHex'),
+            o: binding(CONTRIBUTOR),
+            g: binding('urn:g'),
+          },
+          {
             s: binding(decision),
-            name: binding('Choose the graph store'),
-            digest: binding('digest-one'),
-            t: binding(at),
+            p: binding('http://www.w3.org/1999/02/22-rdf-syntax-ns#type'),
+            o: binding('https://w3id.org/buzz-dkg/buzz#DecisionCluster'),
+            g: binding('urn:g'),
+          },
+          {
+            s: binding(decision),
+            p: binding('http://schema.org/name'),
+            o: binding('Choose the graph store'),
+            g: binding('urn:g'),
           },
         ] as Array<Record<string, { value: string }>>;
       }
