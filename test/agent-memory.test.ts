@@ -70,6 +70,91 @@ function envelope(overrides: { proposalContent?: string; channelId?: string } = 
   };
 }
 
+type TrustProposalContent = {
+  schemaVersion: number;
+  profiles: string[];
+  summary: string;
+  entities: Array<{
+    id: string;
+    type: string;
+    name?: string;
+    description?: string;
+    locator?: { kind: string; uri: string };
+    attributes?: Array<{ predicate: string; value: string }>;
+  }>;
+  relations: Array<{ subject: string; predicate: string; object: string }>;
+  promptVersion?: string;
+};
+
+function trustVouchContent(subject: string, note: string): TrustProposalContent {
+  return {
+    schemaVersion: 2,
+    profiles: ['dkg-memory@1', 'dkg-trust@1'],
+    summary: 'Vouch for Alice',
+    entities: [
+      {
+        id: 'vouch',
+        type: 'trust:Vouch',
+        name: 'Vouch for Alice',
+        description: note,
+        attributes: [
+          { predicate: 'trust:status', value: 'active' },
+          { predicate: 'trust:scope', value: 'channel' },
+        ],
+      },
+      {
+        id: 'issuer',
+        type: 'schema:Person',
+        name: 'Vouch issuer',
+        locator: { kind: 'uri', uri: `urn:nostr:pubkey:${PUBKEY}` },
+      },
+      {
+        id: 'subject',
+        type: 'schema:Person',
+        name: 'Alice',
+        locator: { kind: 'uri', uri: `urn:nostr:pubkey:${subject}` },
+      },
+    ],
+    relations: [
+      { subject: 'vouch', predicate: 'trust:issuer', object: 'issuer' },
+      { subject: 'vouch', predicate: 'trust:subject', object: 'subject' },
+    ],
+    promptVersion: 'human-vouch-v1',
+  };
+}
+
+function signedVouchFixture(subject: string) {
+  const source = signed({
+    kind: 1985,
+    created_at: 1_788_000_030,
+    tags: [
+      ['h', CHANNEL],
+      ['L', 'buzz.wot'],
+      ['l', 'vouch', 'buzz.wot'],
+      ['p', subject],
+    ],
+    content: 'Reviewed two releases carefully and caught a rollback edge case.',
+  });
+  const proposal = proposalForTrustSource(
+    source,
+    JSON.stringify(trustVouchContent(subject, source.content)),
+  );
+  return { proposal, source };
+}
+
+function proposalForTrustSource(source: NostrEvent, content: string): NostrEvent {
+  return signed({
+    kind: DKG_MEMORY_PROPOSAL_KIND,
+    created_at: source.created_at + 1,
+    tags: [
+      ['h', CHANNEL],
+      ['e', source.id, '', 'source'],
+      ['t', 'dkg-memory-proposal'],
+    ],
+    content,
+  });
+}
+
 function setup() {
   const relay = new MockRelay(hexId('service'));
   const dkg = new MockDkg();
@@ -403,60 +488,7 @@ describe('agent memory proposal contract', () => {
 
   it('compiles a signed human vouch into queryable trust edges with source provenance', () => {
     const subject = 'ab'.repeat(32);
-    const source = signed({
-      kind: 1985,
-      created_at: 1_788_000_030,
-      tags: [
-        ['h', CHANNEL],
-        ['L', 'buzz.wot'],
-        ['l', 'vouch', 'buzz.wot'],
-        ['p', subject],
-      ],
-      content: 'Reviewed two releases carefully and caught a rollback edge case.',
-    });
-    const proposal = signed({
-      kind: DKG_MEMORY_PROPOSAL_KIND,
-      created_at: source.created_at + 1,
-      tags: [
-        ['h', CHANNEL],
-        ['e', source.id, '', 'source'],
-        ['t', 'dkg-memory-proposal'],
-      ],
-      content: JSON.stringify({
-        schemaVersion: 2,
-        profiles: ['dkg-memory@1', 'dkg-trust@1'],
-        summary: 'Vouch for Alice',
-        entities: [
-          {
-            id: 'vouch',
-            type: 'trust:Vouch',
-            name: 'Vouch for Alice',
-            description: source.content,
-            attributes: [
-              { predicate: 'trust:status', value: 'active' },
-              { predicate: 'trust:scope', value: 'channel' },
-            ],
-          },
-          {
-            id: 'issuer',
-            type: 'schema:Person',
-            name: 'Vouch issuer',
-            locator: { kind: 'uri', uri: `urn:nostr:pubkey:${PUBKEY}` },
-          },
-          {
-            id: 'subject',
-            type: 'schema:Person',
-            name: 'Alice',
-            locator: { kind: 'uri', uri: `urn:nostr:pubkey:${subject}` },
-          },
-        ],
-        relations: [
-          { subject: 'vouch', predicate: 'trust:issuer', object: 'issuer' },
-          { subject: 'vouch', predicate: 'trust:subject', object: 'subject' },
-        ],
-        promptVersion: 'human-vouch-v1',
-      }),
-    });
+    const { proposal, source } = signedVouchFixture(subject);
     const parsed = parseAgentMemoryEnvelope({
       channelId: CHANNEL,
       requesterPubkey: PUBKEY,
@@ -571,16 +603,7 @@ describe('agent memory proposal contract', () => {
     ).toThrow(/active and channel-scoped/);
 
     const proposalFor = (trustSource: NostrEvent, content = proposal.content) =>
-      signed({
-        kind: DKG_MEMORY_PROPOSAL_KIND,
-        created_at: proposal.created_at,
-        tags: [
-          ['h', CHANNEL],
-          ['e', trustSource.id, '', 'source'],
-          ['t', 'dkg-memory-proposal'],
-        ],
-        content,
-      });
+      proposalForTrustSource(trustSource, content);
     const wrongKind = signed({ ...source, kind: 1 });
     expect(() =>
       parseAgentMemoryEnvelope({
