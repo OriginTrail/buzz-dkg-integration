@@ -181,12 +181,15 @@ async function startGateway(
   submitAgentMemory?: NonNullable<
     ConstructorParameters<typeof QueryGateway>[3]
   >['submitAgentMemory'],
+  subscribeAgentMemoryStored?: NonNullable<
+    ConstructorParameters<typeof QueryGateway>[3]
+  >['subscribeAgentMemoryStored'],
 ) {
   const gateway = new QueryGateway(
     config,
     [{ channelId: CHANNEL, contextGraphId: CONTEXT_GRAPH, promoters: [] }],
     dkg.asDkg(),
-    { log, submitAgentMemory },
+    { log, submitAgentMemory, subscribeAgentMemoryStored },
   );
   running.push(gateway);
   await gateway.start();
@@ -459,22 +462,34 @@ describe('query gateway HTTP boundary', () => {
     expect(submitted).toEqual([payload, payload]);
   });
 
-  it('invalidates cached channel queries when memory is accepted through HTTP', async () => {
+  it('invalidates cached channel queries only after memory storage is confirmed', async () => {
     const dkg = new GatewayDkg();
     let name = 'before memory';
+    let notifyStored: ((channelId: string) => void) | undefined;
     dkg.bindingResolver = () => [{ name: binding(name) }];
-    const { url } = await startGateway(dkg, gatewayConfig(), undefined, () => ({
-      ok: true,
-      outcome: 'accepted',
-      operationId: '33'.repeat(32),
-      proposalEventId: '33'.repeat(32),
-      channelId: CHANNEL,
-      requesterPubkey: REQUESTER,
-      contextGraphId: CONTEXT_GRAPH,
-      kaName: 'buzz-dkg-memory',
-      digest: '44'.repeat(32),
-      state: 'processing',
-    }));
+    const { url } = await startGateway(
+      dkg,
+      gatewayConfig(),
+      undefined,
+      () => ({
+        ok: true,
+        outcome: 'accepted',
+        operationId: '33'.repeat(32),
+        proposalEventId: '33'.repeat(32),
+        channelId: CHANNEL,
+        requesterPubkey: REQUESTER,
+        contextGraphId: CONTEXT_GRAPH,
+        kaName: 'buzz-dkg-memory',
+        digest: '44'.repeat(32),
+        state: 'processing',
+      }),
+      (listener) => {
+        notifyStored = listener;
+        return () => {
+          notifyStored = undefined;
+        };
+      },
+    );
     const query = semanticBody(
       'SELECT ?name WHERE { GRAPH ?g { <urn:decision:cache> <http://schema.org/name> ?name } } LIMIT 1',
       'shared',
@@ -490,6 +505,10 @@ describe('query gateway HTTP boundary', () => {
 
     const accepted = await request(url.replace('/v1/query', '/v1/memory'), { signed: 'memory' });
     expect(accepted.status).toBe(202);
+    const whileProcessing = (await (await request(url, query)).json()) as typeof first;
+    expect(whileProcessing.result.layers[0]?.bindings[0]?.name.value).toBe('before memory');
+
+    notifyStored?.(CHANNEL);
     const refreshed = (await (await request(url, query)).json()) as typeof first;
     expect(refreshed.result.layers[0]?.bindings[0]?.name.value).toBe('after memory');
     expect(dkg.calls.filter((call) => call.kind === 'query')).toHaveLength(2);

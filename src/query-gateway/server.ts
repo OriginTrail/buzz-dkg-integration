@@ -118,6 +118,7 @@ export class QueryGateway {
       log?: GatewayLogger;
       resolveContextGraph?: (channelId: string) => string | null | Promise<string | null>;
       submitAgentMemory?: (raw: unknown) => AgentMemoryIngestResult;
+      subscribeAgentMemoryStored?: (listener: (channelId: string) => void) => () => void;
     } = {},
   ) {
     this.config = config;
@@ -132,6 +133,9 @@ export class QueryGateway {
       dependencies.resolveContextGraph ?? ((channelId: string) => mapped.get(channelId) ?? null);
     this.#service = new QueryGatewayService(resolveContextGraph, dkg, config);
     this.#submitAgentMemory = dependencies.submitAgentMemory;
+    this.#unsubscribeAgentMemoryStored = dependencies.subscribeAgentMemoryStored?.((channelId) =>
+      this.#service.invalidateChannel(channelId),
+    );
     this.#log = dependencies.log ?? logger;
     this.#server = createServer((req, res) => void this.handle(req, res));
     this.#server.maxHeadersCount = 32;
@@ -142,6 +146,7 @@ export class QueryGateway {
   }
 
   readonly #submitAgentMemory: ((raw: unknown) => AgentMemoryIngestResult) | undefined;
+  readonly #unsubscribeAgentMemoryStored: (() => void) | undefined;
 
   get address(): AddressInfo | null {
     const address = this.#server.address();
@@ -165,6 +170,7 @@ export class QueryGateway {
   }
 
   async stop(): Promise<void> {
+    this.#unsubscribeAgentMemoryStored?.();
     if (!this.#server.listening) return;
     await new Promise<void>((resolve, reject) => {
       this.#server.close((error) => (error ? reject(error) : resolve()));
@@ -226,7 +232,9 @@ export class QueryGateway {
           );
         }
         const memory = this.#submitAgentMemory(raw);
-        this.#service.invalidateChannel(memory.channelId);
+        // A duplicate may already be confirmed. New processing writes invalidate
+        // through subscribeAgentMemoryStored only after SWM read-back succeeds.
+        if (memory.state === 'stored') this.#service.invalidateChannel(memory.channelId);
         output = memory;
         responseStatus = memory.state === 'stored' ? 200 : 202;
         audit = {

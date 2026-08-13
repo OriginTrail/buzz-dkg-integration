@@ -791,6 +791,8 @@ describe('automatic channel memory lifecycle', () => {
   it('accepts durably before slow first-use graph provisioning starts', async () => {
     const { daemon, dkg } = setup();
     const request = envelope();
+    const storedChannels: string[] = [];
+    daemon.onAgentMemoryStored((channelId) => storedChannels.push(channelId));
     let release!: () => void;
     dkg.createContextGraphGate = new Promise<void>((resolve) => {
       release = resolve;
@@ -798,6 +800,7 @@ describe('automatic channel memory lifecycle', () => {
 
     const accepted = daemon.submitAgentMemory(request);
     expect(accepted).toMatchObject({ outcome: 'accepted', state: 'processing' });
+    expect(storedChannels).toEqual([]);
     expect(dkg.createContextGraphStarted).toBe(0);
     expect(dkg.lifecycleLog).toHaveLength(0);
 
@@ -814,6 +817,7 @@ describe('automatic channel memory lifecycle', () => {
     release();
     await daemon.drain();
     expect(daemon.registry.opByTrigger(accepted.proposalEventId)?.state).toBe('receipted');
+    expect(storedChannels).toEqual([CHANNEL]);
 
     const storedPoll = daemon.submitAgentMemory(request);
     expect(storedPoll).toMatchObject({

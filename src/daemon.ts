@@ -92,6 +92,7 @@ export class Daemon {
   #chainId: string | undefined;
   readonly #graphProvisioning = new Map<string, Promise<string>>();
   readonly #scheduledAgentMemory = new Set<string>();
+  readonly #agentMemoryStoredListeners = new Set<(channelId: string) => void>();
 
   constructor(
     config: DaemonConfig,
@@ -126,6 +127,12 @@ export class Daemon {
   /** Wait for all queued events to be processed (tests + shutdown). */
   drain(): Promise<void> {
     return this.#queue;
+  }
+
+  /** Subscribe to SWM-confirmed memory writes so read caches can invalidate after commit. */
+  onAgentMemoryStored(listener: (channelId: string) => void): () => void {
+    this.#agentMemoryStoredListeners.add(listener);
+    return () => this.#agentMemoryStoredListeners.delete(listener);
   }
 
   /**
@@ -567,6 +574,7 @@ export class Daemon {
         );
         if (!confirmed) throw new Error('SWM read-back did not confirm the agent memory digest');
         this.registry.transition(op.id, 'receipted', { receipt_event_id: null });
+        for (const listener of this.#agentMemoryStoredListeners) listener(op.channelId);
         logger.info('agent memory stored', {
           opId: op.id,
           proposalEventId: op.triggerEventId,

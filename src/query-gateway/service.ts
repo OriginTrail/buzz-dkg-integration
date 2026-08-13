@@ -279,11 +279,6 @@ function bounded(value: string, max: number): string {
   return value.length <= max ? value : value.slice(0, max);
 }
 
-function count(value: unknown): number {
-  const parsed = Number(bindingTerm(value));
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
-}
-
 function dateTimestamp(value: unknown): number | null {
   if (value === undefined) return null;
   const parsed = Date.parse(bindingTerm(value));

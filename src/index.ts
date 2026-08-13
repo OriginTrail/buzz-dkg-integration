@@ -11,6 +11,7 @@ const queryGateway = config.queryGateway?.enabled
       // and persist a channel Context Graph.
       resolveContextGraph: (channelId) => daemon.contextGraphForQuery(channelId),
       submitAgentMemory: (raw) => daemon.submitAgentMemory(raw),
+      subscribeAgentMemoryStored: (listener) => daemon.onAgentMemoryStored(listener),
     })
   : null;
 let daemonStarted = false;
