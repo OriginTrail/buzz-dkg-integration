@@ -38,11 +38,16 @@ import {
   profileAttributeDatatype,
 } from './profiles.ts';
 import { canonicalExternalIdentityUri, canonicalRepositoryIdentityUrl } from './identity.ts';
+import { validateTrustProposal } from './trust-profile.ts';
 
 const HEX_64 = /^[0-9a-f]{64}$/u;
 const CHANNEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const ITEM_KINDS = new Set(['decision', 'claim', 'question', 'task', 'relationship']);
-const PROFILE_IDS = new Set<AgentMemoryProfileId>(['dkg-memory@1', 'dkg-software@1']);
+const PROFILE_IDS = new Set<AgentMemoryProfileId>([
+  'dkg-memory@1',
+  'dkg-software@1',
+  'dkg-trust@1',
+]);
 const LOCAL_ID = /^[a-z][a-z0-9-]{0,63}$/u;
 const GITHUB_REPOSITORY = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/u;
 const GITHUB_RESOURCE = new Set(['repository', 'pull-request', 'issue', 'commit']);
@@ -305,6 +310,15 @@ function parseAttribute(
     !new Set(['todo', 'in_progress', 'blocked', 'done', 'cancelled']).has(String(value.value))
   ) {
     invalid(`${label}.value is not a supported task status`);
+  }
+  if (
+    predicate === 'trust:status' &&
+    !new Set(['active', 'revoked', 'superseded']).has(String(value.value))
+  ) {
+    invalid(`${label}.value is not a supported trust status`);
+  }
+  if (predicate === 'trust:scope' && value.value !== 'channel') {
+    invalid(`${label}.value is not a supported trust scope`);
   }
   return { predicate, value: value.value as string | number | boolean };
 }
@@ -571,9 +585,12 @@ export function parseAgentMemoryEnvelope(raw: unknown): {
   // is a transport detail and must not turn a legitimate retry into a conflict.
   const sourcesById = new Map(sourceEvents.map((event) => [event.id, event]));
   const orderedSourceEvents = referenced.map((id) => sourcesById.get(id)!);
+  const envelope = { channelId, requesterPubkey, proposalEvent, sourceEvents: orderedSourceEvents };
+  const proposal = parseAgentMemoryProposal(proposalEvent.content);
+  validateTrustProposal(envelope, proposal);
   return {
-    envelope: { channelId, requesterPubkey, proposalEvent, sourceEvents: orderedSourceEvents },
-    proposal: parseAgentMemoryProposal(proposalEvent.content),
+    envelope,
+    proposal,
   };
 }
 

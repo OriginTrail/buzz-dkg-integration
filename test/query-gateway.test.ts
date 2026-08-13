@@ -164,6 +164,24 @@ function binding(value: string): { value: string } {
   return { value };
 }
 
+function trustSourceBindings(eventId: string, issuer: string, subject: string, content = '') {
+  return {
+    source: binding(`urn:nostr:event:${eventId}`),
+    sourceKind: binding('1985'),
+    sourceAuthor: binding(`urn:nostr:pubkey:${issuer}`),
+    sourceSig: binding('ab'.repeat(64)),
+    sourceContent: binding(content),
+    sourceTags: binding(
+      JSON.stringify([
+        ['h', CHANNEL],
+        ['L', 'buzz.wot'],
+        ['l', 'vouch', 'buzz.wot'],
+        ['p', subject],
+      ]),
+    ),
+  };
+}
+
 function fixtureQuery(sparql: string): Array<Record<string, { value: string }>> {
   const store = new oxigraph.Store();
   store.load(readFileSync(new URL('./fixtures/ontology/lifelike-project.trig', import.meta.url)), {
@@ -227,7 +245,7 @@ describe('query gateway configuration', () => {
 });
 
 describe('query gateway request contract', () => {
-  it('accepts only the seven typed operations and exact argument shapes', () => {
+  it('accepts only typed operations and exact argument shapes', () => {
     expect(parseQueryGatewayRequest(body('channel_memory'))).toMatchObject({
       operation: 'channel_memory',
       requesterPubkey: REQUESTER,
@@ -271,6 +289,356 @@ describe('query gateway request contract', () => {
     });
     expect(parseQueryGatewayRequest(body('evidence', { uri: 'urn:buzz:claim:1' }))).toMatchObject({
       operation: 'evidence',
+    });
+    expect(parseQueryGatewayRequest(body('trust_network'))).toMatchObject({
+      operation: 'trust_network',
+      arguments: {},
+    });
+    expect(
+      parseQueryGatewayRequest(body('reputation_summary', { pubkey: CONTRIBUTOR.toUpperCase() })),
+    ).toMatchObject({
+      operation: 'reputation_summary',
+      arguments: { pubkey: CONTRIBUTOR },
+    });
+  });
+
+  it('returns bounded trust relationships with contribution and source evidence', async () => {
+    const dkg = new GatewayDkg();
+    const issuer = 'aa'.repeat(32);
+    const subject = 'bb'.repeat(32);
+    dkg.bindingResolver = ({ view, sparql }) => {
+      if (view === 'verifiable-memory') return [];
+      if (sparql.includes('trust/Vouch')) {
+        return [
+          {
+            vouch: binding('urn:buzz-dkg:vouch:1'),
+            issuer: binding(`urn:nostr:pubkey:${issuer}`),
+            subject: binding(`urn:nostr:pubkey:${subject}`),
+            status: binding('active'),
+            ...trustSourceBindings('33'.repeat(32), issuer, subject),
+            sourceSig: binding('not-a-signature'),
+          },
+          {
+            vouch: binding('urn:buzz-dkg:vouch:1'),
+            issuer: binding(`urn:nostr:pubkey:${issuer}`),
+            subject: binding(`urn:nostr:pubkey:${subject}`),
+            note: binding('Careful reviewer who found the rollback edge case.'),
+            status: binding('active'),
+            at: binding('2026-07-30T13:00:00Z'),
+            ...trustSourceBindings(
+              '44'.repeat(32),
+              issuer,
+              subject,
+              'Careful reviewer who found the rollback edge case.',
+            ),
+          },
+        ];
+      }
+      if (sparql.includes('COUNT(DISTINCT ?record)')) {
+        return [
+          {
+            pk: binding(subject),
+            n: binding('3'),
+            latest: binding('2026-07-29T11:05:00Z'),
+          },
+        ];
+      }
+      return [];
+    };
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('trust_network'));
+
+    expect(response.result).toEqual({
+      completeness: 'complete',
+      people: [
+        {
+          pubkey: subject,
+          contributions: 3,
+          contributionLayer: 'SWM',
+          latest: Date.parse('2026-07-29T11:05:00Z') / 1_000,
+          vouchesReceived: 1,
+          vouchesGiven: 0,
+          layer: 'SWM',
+        },
+        {
+          pubkey: issuer,
+          contributions: 0,
+          contributionLayer: null,
+          latest: null,
+          vouchesReceived: 0,
+          vouchesGiven: 1,
+          layer: 'SWM',
+        },
+      ],
+      vouches: [
+        {
+          uri: 'urn:buzz-dkg:vouch:1',
+          issuer,
+          subject,
+          note: 'Careful reviewer who found the rollback edge case.',
+          status: 'active',
+          at: Date.parse('2026-07-30T13:00:00Z') / 1_000,
+          sourceEvent: `urn:nostr:event:${'44'.repeat(32)}`,
+          layer: 'SWM',
+        },
+      ],
+    });
+    expect(dkg.calls.filter((call) => call.kind === 'query')).toHaveLength(4);
+  });
+
+  it('executes the production trust SPARQL against source-provenance ontology data', async () => {
+    const dkg = new GatewayDkg();
+    dkg.bindingResolver = (options) =>
+      options.view === 'verifiable-memory' ? fixtureQuery(options.sparql) : [];
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('trust_network'));
+
+    expect(response.result).toMatchObject({
+      completeness: 'complete',
+      vouches: [
+        {
+          uri: 'urn:buzz-dkg:vouch:alice-for-bob',
+          issuer: 'aa'.repeat(32),
+          subject: 'bb'.repeat(32),
+          note: 'Bob reviewed the token changes carefully and caught the rollback edge case.',
+          status: 'active',
+          at: Date.parse('2026-07-30T13:00:00Z') / 1_000,
+          sourceEvent: `urn:nostr:event:${'44'.repeat(32)}`,
+          layer: 'VM',
+        },
+      ],
+    });
+  });
+
+  it('does not score a projection whose explanation differs from signed source content', async () => {
+    const dkg = new GatewayDkg();
+    const issuer = 'aa'.repeat(32);
+    const subject = 'bb'.repeat(32);
+    dkg.bindingResolver = ({ view, sparql }) =>
+      view === 'shared-working-memory' && sparql.includes('trust/Vouch')
+        ? [
+            {
+              vouch: binding('urn:buzz-dkg:vouch:tampered-note'),
+              issuer: binding(`urn:nostr:pubkey:${issuer}`),
+              subject: binding(`urn:nostr:pubkey:${subject}`),
+              note: binding('Altered graph explanation.'),
+              status: binding('active'),
+              ...trustSourceBindings(
+                '55'.repeat(32),
+                issuer,
+                subject,
+                'The explanation that was actually signed.',
+              ),
+            },
+          ]
+        : [];
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const network = await service.execute(body('trust_network'));
+    expect(network.result).toMatchObject({
+      vouches: [{ uri: 'urn:buzz-dkg:vouch:tampered-note', sourceEvent: null }],
+    });
+    const reputation = await service.execute(body('reputation_summary', { pubkey: subject }));
+    expect(reputation.result).toMatchObject({
+      score: 0,
+      signals: { independentVouchers: 0 },
+      evidence: [],
+    });
+  });
+
+  it('reports partial evidence instead of hiding fixed query truncation', async () => {
+    const dkg = new GatewayDkg();
+    const rows = Array.from({ length: 201 }, (_, index) => ({
+      pk: binding(index.toString(16).padStart(64, '0')),
+      n: binding(String(201 - index)),
+      latest: binding('2026-07-30T13:00:00Z'),
+    }));
+    dkg.bindingResolver = ({ view, sparql }) =>
+      view === 'shared-working-memory' && sparql.includes('COUNT(DISTINCT ?record)') ? rows : [];
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('trust_network'));
+    const result = response.result as { completeness: string; people: unknown[] };
+
+    expect(result.completeness).toBe('partial');
+    expect(result.people).toHaveLength(200);
+  });
+
+  it('propagates bounded-query truncation into reputation completeness', async () => {
+    const dkg = new GatewayDkg();
+    const subject = 'bb'.repeat(32);
+    const rows = Array.from({ length: 201 }, (_, index) => ({
+      pk: binding(index === 0 ? subject : index.toString(16).padStart(64, '0')),
+      n: binding('1'),
+      latest: binding('2026-07-30T13:00:00Z'),
+    }));
+    dkg.bindingResolver = ({ view, sparql }) =>
+      view === 'shared-working-memory' && sparql.includes('COUNT(DISTINCT ?record)') ? rows : [];
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('reputation_summary', { pubkey: subject }));
+
+    expect(response.result).toMatchObject({
+      subject,
+      completeness: 'partial',
+      signals: { evidenceRecords: 0 },
+    });
+    expect(response.result).toHaveProperty(
+      'reasons',
+      expect.arrayContaining([
+        'Evidence discovery reached the channel bound; this score uses a bounded sample.',
+      ]),
+    );
+  });
+
+  it('scores a bounded two-hop reputation lens and keeps every component explainable', async () => {
+    const dkg = new GatewayDkg();
+    const subject = 'bb'.repeat(32);
+    const intermediary = 'cc'.repeat(32);
+    const communityIssuer = 'dd'.repeat(32);
+    const vouch = (id: number, issuer: string, target: string, proven = true) => ({
+      vouch: binding(`urn:buzz-dkg:vouch:${id}`),
+      issuer: binding(`urn:nostr:pubkey:${issuer}`),
+      subject: binding(`urn:nostr:pubkey:${target}`),
+      note: binding(`Evidence note ${id}`),
+      status: binding('active'),
+      at: binding(`2026-07-${20 + id}T13:00:00Z`),
+      ...(proven
+        ? trustSourceBindings(String(id).repeat(64), issuer, target, `Evidence note ${id}`)
+        : trustSourceBindings(
+            String(id).repeat(64),
+            issuer,
+            '00'.repeat(32),
+            `Evidence note ${id}`,
+          )),
+    });
+    dkg.bindingResolver = ({ view, sparql }) => {
+      if (view === 'verifiable-memory') return [];
+      if (sparql.includes('trust/Vouch')) {
+        return [
+          vouch(1, REQUESTER, subject),
+          vouch(2, REQUESTER, intermediary),
+          vouch(3, intermediary, subject),
+          vouch(4, communityIssuer, subject),
+          // Active-looking graph data whose p-tag does not match the projected
+          // subject stays visible for diagnostics but must never be scored.
+          vouch(5, 'ee'.repeat(32), subject, false),
+          // Historical lifecycle records remain inspectable in trust_network,
+          // but reputation must use active evidence only.
+          { ...vouch(6, 'ff'.repeat(32), subject), status: binding('revoked') },
+          { ...vouch(7, '12'.repeat(32), subject), status: binding('superseded') },
+        ];
+      }
+      if (sparql.includes('COUNT(DISTINCT ?record)')) {
+        return [
+          {
+            pk: binding(subject),
+            n: binding('4'),
+            latest: binding('2026-07-30T13:00:00Z'),
+          },
+        ];
+      }
+      return [];
+    };
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('reputation_summary', { pubkey: subject }));
+
+    expect(response.result).toMatchObject({
+      subject,
+      perspective: REQUESTER,
+      context: 'channel',
+      completeness: 'complete',
+      score: 74,
+      confidence: 'high',
+      breakdown: {
+        directTrust: 100,
+        networkTrust: 60,
+        demonstratedWork: 50,
+        evidenceDiversity: 92,
+      },
+      signals: {
+        directVouch: true,
+        twoHopVouchers: 1,
+        independentVouchers: 3,
+        evidenceRecords: 4,
+        verifiableEvidence: false,
+      },
+      methodology: 'dkg-reputation-v1',
+    });
+    expect(response.result).toHaveProperty('reasons', [
+      'You signed a direct vouch for this person.',
+      '3 independent contributors signed a vouch.',
+      '1 vouch arrived through a two-hop trust path.',
+      '4 attributed channel evidence records were found.',
+    ]);
+    expect(response.result).toHaveProperty('evidence');
+    const evidence = (response.result as { evidence: Array<{ uri: string }> }).evidence;
+    expect(new Set(evidence.map((item) => item.uri))).toEqual(
+      new Set([
+        'urn:buzz-dkg:vouch:1',
+        'urn:buzz-dkg:vouch:2',
+        'urn:buzz-dkg:vouch:3',
+        'urn:buzz-dkg:vouch:4',
+      ]),
+    );
+    expect(evidence.some((item) => item.uri.endsWith(':6') || item.uri.endsWith(':7'))).toBe(false);
+    expect(dkg.calls.filter((call) => call.kind === 'query')).toHaveLength(4);
+  });
+
+  it('does not promote SWM work evidence when only a vouch reaches VM', async () => {
+    const dkg = new GatewayDkg();
+    const issuer = 'aa'.repeat(32);
+    const subject = 'bb'.repeat(32);
+    dkg.bindingResolver = ({ view, sparql }) => {
+      if (sparql.includes('trust/Vouch')) {
+        return view === 'verifiable-memory'
+          ? [
+              {
+                vouch: binding('urn:buzz-dkg:vouch:vm-only'),
+                issuer: binding(`urn:nostr:pubkey:${issuer}`),
+                subject: binding(`urn:nostr:pubkey:${subject}`),
+                status: binding('active'),
+                ...trustSourceBindings('99'.repeat(32), issuer, subject),
+              },
+            ]
+          : [];
+      }
+      if (sparql.includes('COUNT(DISTINCT ?record)')) {
+        return view === 'shared-working-memory' ? [{ pk: binding(subject), n: binding('1') }] : [];
+      }
+      return [];
+    };
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('reputation_summary', { pubkey: subject }));
+
+    expect(response.result).toMatchObject({
+      signals: { evidenceRecords: 1, verifiableEvidence: false },
+    });
+  });
+
+  it('returns zero reputation with no confidence when the channel has no evidence', async () => {
+    const dkg = new GatewayDkg();
+    dkg.bindingResolver = () => [];
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    const response = await service.execute(body('reputation_summary', { pubkey: CONTRIBUTOR }));
+
+    expect(response.result).toMatchObject({
+      subject: CONTRIBUTOR,
+      score: 0,
+      confidence: 'none',
+      breakdown: {
+        directTrust: 0,
+        networkTrust: 0,
+        demonstratedWork: 0,
+        evidenceDiversity: 0,
+      },
+      reasons: ['No reputation evidence exists in this channel yet.'],
+      evidence: [],
     });
   });
 

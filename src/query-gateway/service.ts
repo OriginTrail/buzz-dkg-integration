@@ -27,6 +27,7 @@ import type {
   SubgraphTriplesResult,
   VisibleMemoryLayer,
 } from './types.ts';
+import { queryTrustNetwork, scoreTrustNetwork, type TrustLayeredRow } from './trust-query.ts';
 
 type EnabledGatewayConfig = Extract<QueryGatewayConfig, { enabled: true }>;
 type BindingRow = Record<string, unknown>;
@@ -123,6 +124,8 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
     'contributor_trail',
     'software_contributors',
     'decision_trace',
+    'trust_network',
+    'reputation_summary',
     'subgraph_graph',
     'subgraph_triples',
     'evidence',
@@ -140,11 +143,11 @@ export function parseQueryGatewayRequest(value: unknown): QueryGatewayRequest {
   );
 
   const base = { channelId, operation, requesterPubkey };
-  if (operation === 'channel_memory') {
+  if (operation === 'channel_memory' || operation === 'trust_network') {
     exactKeys(value.arguments, [], 'arguments');
     return { ...base, operation, arguments: {} };
   }
-  if (operation === 'contributor_trail') {
+  if (operation === 'contributor_trail' || operation === 'reputation_summary') {
     exactKeys(value.arguments, ['pubkey'], 'arguments');
     return {
       ...base,
@@ -338,6 +341,10 @@ export class QueryGatewayService {
           request.arguments.commitSha,
           request.arguments.componentName,
         );
+      case 'trust_network':
+        return this.trustNetwork(cg);
+      case 'reputation_summary':
+        return this.reputationSummary(cg, request.arguments.pubkey, request.requesterPubkey);
       case 'subgraph_graph':
         return this.subgraphGraph(cg, request.arguments.name);
       case 'subgraph_triples':
@@ -621,6 +628,14 @@ export class QueryGatewayService {
       if (!current || LAYER_RANK[layer] > LAYER_RANK[current.layer]) byKey.set(key, candidate);
     }
     return { repository, commitSha, componentName, decisions: [...byKey.values()] };
+  }
+
+  private trustNetwork(cg: string) {
+    return queryTrustNetwork((sparql) => this.layered(cg, sparql) as Promise<TrustLayeredRow[]>);
+  }
+
+  private async reputationSummary(cg: string, subject: string, perspective: string) {
+    return scoreTrustNetwork(await this.trustNetwork(cg), subject, perspective);
   }
 
   private async subgraphGraph(cg: string, name: string): Promise<SubgraphGraphResult> {

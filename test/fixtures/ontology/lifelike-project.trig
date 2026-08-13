@@ -8,6 +8,7 @@
 @prefix decisions: <http://dkg.io/ontology/decisions/> .
 @prefix tasks:     <http://dkg.io/ontology/tasks/> .
 @prefix software:  <http://dkg.io/ontology/software/> .
+@prefix trust:     <http://dkg.io/ontology/trust/> .
 @prefix buzz:      <https://w3id.org/buzz-dkg/buzz#> .
 @prefix nostr:     <https://w3id.org/buzz-dkg/nostr#> .
 
@@ -137,6 +138,27 @@
     software:result "passed" ;
     software:supports <urn:dkg:github:commit:acme/api/a1b2c3d4> ;
     prov:wasDerivedFrom <urn:nostr:event:2222222222222222222222222222222222222222222222222222222222222222> .
+}
+
+<urn:test:acme-api:swm:trust> {
+  <urn:buzz-dkg:vouch:alice-for-bob>
+    a trust:Vouch ;
+    schema:name "Alice vouches for Bob's release work" ;
+    schema:description "Bob reviewed the token changes carefully and caught the rollback edge case." ;
+    trust:issuer <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> ;
+    trust:subject <urn:nostr:pubkey:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> ;
+    trust:status "active" ;
+    trust:scope "channel" ;
+    prov:wasDerivedFrom <urn:nostr:event:4444444444444444444444444444444444444444444444444444444444444444> .
+
+  <urn:nostr:event:4444444444444444444444444444444444444444444444444444444444444444>
+    a nostr:Event ;
+    nostr:kind 1985 ;
+    nostr:createdAt "2026-07-30T13:00:00Z"^^xsd:dateTime ;
+    nostr:content "Bob reviewed the token changes carefully and caught the rollback edge case." ;
+    nostr:sig "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab" ;
+    nostr:tags "[[\"h\",\"channel-one\"],[\"L\",\"buzz.wot\"],[\"l\",\"vouch\",\"buzz.wot\"],[\"p\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"]]" ;
+    prov:wasAttributedTo <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> .
 }
 
 # A second Buzz community independently discusses the same repository and

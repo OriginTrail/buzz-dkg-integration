@@ -19,6 +19,7 @@ not introduce a parallel `buzz-code:` namespace.
 | ---------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `dkg-memory@1`   | Always                                  | General decisions, claims, questions, tasks, relationships, evidence, and provenance                   |
 | `dkg-software@1` | Agent when software evidence is present | Repositories, commits, pull requests, issues, packages, files, symbols, builds, tests, and deployments |
+| `dkg-trust@1`    | Explicit signed trust action            | Contextual vouches and a non-persisted, calculated reputation-assessment vocabulary                    |
 | `buzz-nostr@1`   | Buzz integration, never the LLM         | Buzz channel and signed Nostr source-event provenance                                                  |
 
 Profiles are additive. A coding agent discussing an event or assigning a task
@@ -37,6 +38,7 @@ tasks:     http://dkg.io/ontology/tasks/
 agent:     http://dkg.io/ontology/agent/
 buzz:      https://w3id.org/buzz-dkg/buzz#
 nostr:     https://w3id.org/buzz-dkg/nostr#
+trust:     http://dkg.io/ontology/trust/
 ```
 
 External terms come from RDF/RDFS/OWL/XSD, Schema.org, PROV-O, Dublin Core,
@@ -204,6 +206,7 @@ lifelike data:
    while an identically named symbol in another repository stays distinct?
 8. Can a mixed general/software turn be queried across both profiles?
 9. Can the same queries stay scoped to one Context Graph and SWM/VM view?
+10. Can a vouch identify its issuer, subject, note, timestamp, and signed source event without producing a global score?
 
 Executable SPARQL lives under `ontology/queries/`; fixtures and assertions live
 in `test/ontology-competency.test.ts`.

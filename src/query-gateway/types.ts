@@ -3,6 +3,8 @@ export type QueryOperation =
   | 'contributor_trail'
   | 'software_contributors'
   | 'decision_trace'
+  | 'trust_network'
+  | 'reputation_summary'
   | 'subgraph_graph'
   | 'subgraph_triples'
   | 'evidence';
@@ -26,6 +28,8 @@ export type QueryGatewayRequest =
       }
     >
   | RequestBase<'decision_trace', { repository: string; commitSha: string; componentName: string }>
+  | RequestBase<'trust_network', Record<string, never>>
+  | RequestBase<'reputation_summary', { pubkey: string }>
   | RequestBase<'subgraph_graph', { name: string }>
   | RequestBase<'subgraph_triples', { name: string }>
   | RequestBase<'evidence', { uri: string }>;
@@ -122,6 +126,68 @@ export interface DecisionTraceResult {
   decisions: DecisionTraceEntry[];
 }
 
+export interface TrustPersonSummary {
+  pubkey: string;
+  contributions: number;
+  /** Highest layer containing an attributed work record, excluding vouches. */
+  contributionLayer: VisibleMemoryLayer | null;
+  latest: number | null;
+  vouchesReceived: number;
+  vouchesGiven: number;
+  layer: VisibleMemoryLayer;
+}
+
+export interface TrustVouchSummary {
+  uri: string;
+  issuer: string;
+  subject: string;
+  note: string | null;
+  status: TrustVouchStatus;
+  at: number | null;
+  sourceEvent: string | null;
+  layer: VisibleMemoryLayer;
+}
+
+export type TrustVouchStatus = 'active' | 'revoked' | 'superseded' | 'unknown';
+
+export interface TrustNetworkResult {
+  /** Whether every visible row fit inside the fixed operation bounds. */
+  completeness: 'complete' | 'partial';
+  people: TrustPersonSummary[];
+  vouches: TrustVouchSummary[];
+}
+
+export type ReputationConfidence = 'none' | 'low' | 'medium' | 'high';
+
+export interface ReputationBreakdown {
+  directTrust: number;
+  networkTrust: number;
+  demonstratedWork: number;
+  evidenceDiversity: number;
+}
+
+export interface ReputationSignals {
+  directVouch: boolean;
+  twoHopVouchers: number;
+  independentVouchers: number;
+  evidenceRecords: number;
+  verifiableEvidence: boolean;
+}
+
+export interface ReputationSummaryResult {
+  subject: string;
+  perspective: string;
+  context: 'channel';
+  completeness: 'complete' | 'partial';
+  score: number;
+  confidence: ReputationConfidence;
+  breakdown: ReputationBreakdown;
+  signals: ReputationSignals;
+  reasons: string[];
+  evidence: TrustVouchSummary[];
+  methodology: 'dkg-reputation-v1';
+}
+
 export interface GraphNode {
   id: string;
   kind: 'claim' | 'commit' | 'decision';
@@ -191,6 +257,8 @@ export type QueryGatewayResult =
   | ContributorTrailResult
   | SoftwareContributorsResult
   | DecisionTraceResult
+  | TrustNetworkResult
+  | ReputationSummaryResult
   | SubgraphGraphResult
   | SubgraphTriplesResult
   | EvidenceResult;
