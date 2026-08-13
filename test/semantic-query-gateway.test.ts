@@ -323,6 +323,7 @@ describe('semantic query execution', () => {
     });
 
     dkg.quads = null;
+    service.invalidateChannel(CHANNEL);
     await expect(service.execute(semanticBody(query, 'shared'))).rejects.toThrow(
       /invalid quads shape/,
     );
