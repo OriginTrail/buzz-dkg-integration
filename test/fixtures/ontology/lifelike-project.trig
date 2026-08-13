@@ -149,7 +149,32 @@
     trust:subject <urn:nostr:pubkey:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> ;
     trust:status "active" ;
     trust:scope "channel" ;
+    trust:supportedBy <urn:buzz-dkg:evidence-reference:alice-for-bob:1> ;
     prov:wasDerivedFrom <urn:nostr:event:4444444444444444444444444444444444444444444444444444444444444444> .
+
+  <urn:buzz-dkg:evidence-reference:alice-for-bob:1>
+    a trust:EvidenceReference ;
+    trust:evidenceTarget <urn:dkg:github:commit:acme/api/a1b2c3d4> ;
+    trust:evidenceSource <urn:nostr:event:2222222222222222222222222222222222222222222222222222222222222222> .
+
+  <urn:buzz-dkg:vouch:5555555555555555555555555555555555555555555555555555555555555555>
+    a trust:Vouch ;
+    schema:name "Earlier Alice vouch for Bob" ;
+    schema:description "Earlier evidence was later withdrawn." ;
+    trust:issuer <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> ;
+    trust:subject <urn:nostr:pubkey:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> ;
+    trust:status "active" ;
+    trust:scope "channel" ;
+    prov:wasDerivedFrom <urn:nostr:event:5555555555555555555555555555555555555555555555555555555555555555> .
+
+  <urn:buzz-dkg:vouch-lifecycle:6666666666666666666666666666666666666666666666666666666666666666>
+    a trust:VouchLifecycle ;
+    trust:issuer <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> ;
+    trust:subject <urn:nostr:pubkey:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb> ;
+    trust:status "revoked" ;
+    trust:scope "channel" ;
+    trust:targetVouch "urn:buzz-dkg:vouch:5555555555555555555555555555555555555555555555555555555555555555"^^xsd:anyURI ;
+    prov:wasDerivedFrom <urn:nostr:event:6666666666666666666666666666666666666666666666666666666666666666> .
 
   <urn:nostr:event:4444444444444444444444444444444444444444444444444444444444444444>
     a nostr:Event ;
@@ -158,6 +183,24 @@
     nostr:content "Bob reviewed the token changes carefully and caught the rollback edge case." ;
     nostr:sig "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab" ;
     nostr:tags "[[\"h\",\"channel-one\"],[\"L\",\"buzz.wot\"],[\"l\",\"vouch\",\"buzz.wot\"],[\"p\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"]]" ;
+    prov:wasAttributedTo <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> .
+
+  <urn:nostr:event:5555555555555555555555555555555555555555555555555555555555555555>
+    a nostr:Event ;
+    nostr:kind 1985 ;
+    nostr:createdAt "2026-07-25T13:00:00Z"^^xsd:dateTime ;
+    nostr:content "Earlier evidence was later withdrawn." ;
+    nostr:sig "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd" ;
+    nostr:tags "[[\"h\",\"channel-one\"],[\"L\",\"buzz.wot\"],[\"l\",\"vouch\",\"buzz.wot\"],[\"p\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"]]" ;
+    prov:wasAttributedTo <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> .
+
+  <urn:nostr:event:6666666666666666666666666666666666666666666666666666666666666666>
+    a nostr:Event ;
+    nostr:kind 1985 ;
+    nostr:createdAt "2026-07-29T13:00:00Z"^^xsd:dateTime ;
+    nostr:content "The earlier evidence was withdrawn." ;
+    nostr:sig "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef" ;
+    nostr:tags "[[\"h\",\"channel-one\"],[\"L\",\"buzz.wot\"],[\"l\",\"revoke\",\"buzz.wot\"],[\"p\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"],[\"e\",\"5555555555555555555555555555555555555555555555555555555555555555\",\"\",\"target\"]]" ;
     prov:wasAttributedTo <urn:nostr:pubkey:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa> .
 }
 

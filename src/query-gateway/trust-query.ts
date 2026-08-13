@@ -1,8 +1,7 @@
 import type {
-  ReputationConfidence,
-  ReputationSummaryResult,
   TrustNetworkResult,
   TrustPersonSummary,
+  TrustVouchLifecycleState,
   TrustVouchStatus,
   TrustVouchSummary,
   VisibleMemoryLayer,
@@ -12,12 +11,24 @@ import { parseTrustVouchTags } from '../memory/trust-source.ts';
 type BindingRow = Record<string, unknown>;
 export type TrustLayeredRow = { row: BindingRow; layer: VisibleMemoryLayer };
 
+type MutableTrustVouch = Omit<
+  TrustVouchSummary,
+  'status' | 'lifecycleEvent' | 'replacementVouch'
+> & {
+  status: TrustVouchStatus;
+  lifecycleEvent: string | null;
+  replacementVouch: string | null;
+};
+
 const VIEWS: readonly VisibleMemoryLayer[] = ['SWM', 'VM'];
 const LAYER_RANK: Record<VisibleMemoryLayer, number> = { SWM: 0, VM: 1 };
 const MAX_TRUST_PEOPLE = 200;
 const MAX_TRUST_VOUCHES = 400;
+const MAX_TRUST_SUPPORTS = 2_400;
+const MAX_TRUST_LIFECYCLE = 400;
 const HEX_PUBKEY = /^[0-9a-f]{64}$/iu;
 const HEX_SIGNATURE = /^[0-9a-f]{128}$/iu;
+const SAFE_IRI = /^[A-Za-z][A-Za-z0-9+.-]*:[^<>"{}|^`\\\s]{1,999}$/u;
 const NOSTR_EVENT_URI = /^urn:nostr:event:[0-9a-f]{64}$/u;
 const NOSTR_PUBKEY_URI = 'urn:nostr:pubkey:';
 
@@ -30,6 +41,26 @@ const MEMORY = 'http://dkg.io/ontology/memory/';
 const SOFTWARE = 'http://dkg.io/ontology/software/';
 const TASKS = 'http://dkg.io/ontology/tasks/';
 const TRUST = 'http://dkg.io/ontology/trust/';
+
+export const WORK_EVIDENCE_TYPE_IRIS = [
+  `${MEMORY}Claim`,
+  `${MEMORY}Question`,
+  `${DECISIONS}Decision`,
+  `${TASKS}Task`,
+  `${GITHUB}PullRequest`,
+  `${GITHUB}Issue`,
+  `${GITHUB}Commit`,
+  `${GITHUB}Review`,
+  `${SOFTWARE}Build`,
+  `${SOFTWARE}TestCase`,
+  `${SOFTWARE}TestRun`,
+  `${SOFTWARE}Deployment`,
+  `${SOFTWARE}Finding`,
+] as const;
+
+export const WORK_EVIDENCE_SPARQL_VALUES = WORK_EVIDENCE_TYPE_IRIS.map((iri) => `<${iri}>`).join(
+  ' ',
+);
 
 function rawTerm(value: unknown): string {
   if (value && typeof value === 'object' && 'value' in value) {
@@ -118,23 +149,73 @@ function sourceMatchesVouch(
   }
 }
 
+function sourceMatchesLifecycle(
+  row: BindingRow,
+  issuer: string,
+  subject: string,
+  status: 'revoked' | 'superseded',
+  target: string,
+  replacement: string | null,
+): boolean {
+  const source = optionalTerm(row, 'source');
+  const sourceAuthor = optionalTerm(row, 'sourceAuthor');
+  const sourceTags = optionalTerm(row, 'sourceTags');
+  const sourceKind = optionalTerm(row, 'sourceKind');
+  const sourceSig = optionalTerm(row, 'sourceSig');
+  const targetId = target.match(/^urn:buzz-dkg:vouch:([0-9a-f]{64})$/iu)?.[1]?.toLowerCase();
+  const replacementId = replacement?.match(/^urn:buzz-dkg:vouch:([0-9a-f]{64})$/iu)?.[1];
+  if (
+    !source ||
+    !NOSTR_EVENT_URI.test(source) ||
+    sourceAuthor !== `${NOSTR_PUBKEY_URI}${issuer}` ||
+    sourceKind !== '1985' ||
+    sourceSig === null ||
+    !HEX_SIGNATURE.test(sourceSig) ||
+    !sourceTags ||
+    !targetId ||
+    (status === 'superseded' && !replacementId)
+  ) {
+    return false;
+  }
+  try {
+    const tags = JSON.parse(sourceTags) as unknown;
+    if (!Array.isArray(tags) || !tags.every((tag) => Array.isArray(tag))) return false;
+    const normalized = tags as unknown[][];
+    const subjects = normalized.filter((tag) => tag[0] === 'p');
+    const targets = normalized.filter((tag) => tag[0] === 'e' && tag[3] === 'target');
+    const replacements = normalized.filter((tag) => tag[0] === 'e' && tag[3] === 'replacement');
+    const action = status === 'revoked' ? 'revoke' : 'supersede';
+    return (
+      subjects.length === 1 &&
+      typeof subjects[0]?.[1] === 'string' &&
+      subjects[0][1].toLowerCase() === subject &&
+      targets.length === 1 &&
+      typeof targets[0]?.[1] === 'string' &&
+      targets[0][1].toLowerCase() === targetId &&
+      replacements.length === (status === 'superseded' ? 1 : 0) &&
+      (status === 'revoked' ||
+        (typeof replacements[0]?.[1] === 'string' &&
+          replacements[0][1].toLowerCase() === replacementId?.toLowerCase())) &&
+      normalized.some((tag) => tag[0] === 'L' && tag[1] === 'buzz.wot') &&
+      normalized.some((tag) => tag[0] === 'l' && tag[1] === action && tag[2] === 'buzz.wot')
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Discover and materialize the bounded trust snapshot for one Context Graph. */
 export async function queryTrustNetwork(
   layered: (sparql: string) => Promise<TrustLayeredRow[]>,
 ): Promise<TrustNetworkResult> {
-  const [contributionRows, vouchRows] = await Promise.all([
+  const [contributionRows, vouchRows, supportRows, lifecycleRows] = await Promise.all([
     layered(
       `SELECT ?pk (COUNT(DISTINCT ?record) AS ?n) (MAX(?at) AS ?latest)
        WHERE { GRAPH ?g {
          ?memory <${MEMORY}contains> ?record .
          ?record a ?kind ; <${PROV}wasDerivedFrom> ?source .
          ?source <${PROV}wasAttributedTo> ?agent .
-         VALUES ?kind {
-           <${MEMORY}Claim> <${MEMORY}Question> <${DECISIONS}Decision> <${TASKS}Task>
-           <${GITHUB}PullRequest> <${GITHUB}Issue> <${GITHUB}Commit> <${GITHUB}Review>
-           <${SOFTWARE}Build> <${SOFTWARE}TestCase> <${SOFTWARE}TestRun>
-           <${SOFTWARE}Deployment> <${SOFTWARE}Finding>
-         }
+         VALUES ?kind { ${WORK_EVIDENCE_SPARQL_VALUES} }
          ?agent <${NOSTR}pubkeyHex> ?pk .
          OPTIONAL { ?source <${NOSTR}createdAt> ?at }
        } } GROUP BY ?pk ORDER BY DESC(?n) LIMIT ${MAX_TRUST_PEOPLE + 1}`,
@@ -153,7 +234,31 @@ export async function queryTrustNetwork(
              <${PROV}wasAttributedTo> ?sourceAuthor .
            OPTIONAL { ?source <${NOSTR}createdAt> ?at }
          }
-       } } ORDER BY DESC(?at) LIMIT ${MAX_TRUST_VOUCHES + 1}`,
+      } } ORDER BY DESC(?at) LIMIT ${MAX_TRUST_VOUCHES + 1}`,
+    ),
+    layered(
+      `SELECT DISTINCT ?vouch ?reference ?target ?evidenceSource WHERE { GRAPH ?g {
+         ?vouch <${TRUST}supportedBy> ?reference .
+         ?reference <${TRUST}evidenceTarget> ?target .
+         OPTIONAL { ?reference <${TRUST}evidenceSource> ?evidenceSource }
+       } } LIMIT ${MAX_TRUST_SUPPORTS + 1}`,
+    ),
+    layered(
+      `SELECT DISTINCT ?action ?issuer ?subject ?status ?target ?replacement ?at ?source
+        ?sourceKind ?sourceAuthor ?sourceTags ?sourceSig
+       WHERE { GRAPH ?g {
+         ?action a <${TRUST}VouchLifecycle> ; <${TRUST}scope> "channel" ;
+           <${TRUST}targetVouch> ?target ; <${TRUST}issuer> ?issuer ;
+           <${TRUST}subject> ?subject ; <${TRUST}status> ?status .
+         OPTIONAL { ?action <${TRUST}replacementVouch> ?replacement }
+         OPTIONAL {
+           ?action <${PROV}wasDerivedFrom> ?source .
+           ?source a <${NOSTR}Event> ; <${NOSTR}kind> ?sourceKind ;
+             <${NOSTR}tags> ?sourceTags ; <${NOSTR}sig> ?sourceSig ;
+             <${PROV}wasAttributedTo> ?sourceAuthor .
+           OPTIONAL { ?source <${NOSTR}createdAt> ?at }
+         }
+       } } ORDER BY DESC(?at) LIMIT ${MAX_TRUST_LIFECYCLE + 1}`,
     ),
   ]);
 
@@ -161,7 +266,9 @@ export async function queryTrustNetwork(
     VIEWS.some((layer) => rows.filter((candidate) => candidate.layer === layer).length > maximum);
   let partial =
     queryHitBound(contributionRows, MAX_TRUST_PEOPLE) ||
-    queryHitBound(vouchRows, MAX_TRUST_VOUCHES);
+    queryHitBound(vouchRows, MAX_TRUST_VOUCHES) ||
+    queryHitBound(supportRows, MAX_TRUST_SUPPORTS) ||
+    queryHitBound(lifecycleRows, MAX_TRUST_LIFECYCLE);
   const people = new Map<string, TrustPersonSummary>();
   const upsertPerson = (pubkey: string, layer: VisibleMemoryLayer): TrustPersonSummary => {
     const current = people.get(pubkey);
@@ -200,7 +307,7 @@ export async function queryTrustNetwork(
     const pubkey = value.slice(NOSTR_PUBKEY_URI.length).toLowerCase();
     return HEX_PUBKEY.test(pubkey) ? pubkey : null;
   };
-  const vouchesByUri = new Map<string, TrustVouchSummary>();
+  const vouchesByUri = new Map<string, MutableTrustVouch>();
   for (const { row, layer } of vouchRows) {
     const uri = bounded(term(row, 'vouch'), 1_000);
     const issuer = pubkeyFromEntity(term(row, 'issuer'));
@@ -208,14 +315,21 @@ export async function queryTrustNetwork(
     if (!uri || !issuer || !subject || issuer === subject) continue;
     const source = optionalTerm(row, 'source');
     const note = optionalTerm(row, 'note');
-    const candidate: TrustVouchSummary = {
+    const graphStatus = trustVouchStatus(optionalTerm(row, 'status'));
+    const candidate: MutableTrustVouch = {
       uri,
       issuer,
       subject,
       note: note ? bounded(note, 1_000) : null,
-      status: trustVouchStatus(optionalTerm(row, 'status')),
+      // New vouches are active; revoke/supersede state is accepted only from a separately
+      // signed lifecycle record below.
+      status: graphStatus === 'active' ? 'active' : 'unknown',
       at: dateTimestamp(row.at),
       sourceEvent: sourceMatchesVouch(row, issuer, subject, note) ? bounded(source!, 1_000) : null,
+      evidence: [],
+      evidenceSources: [],
+      lifecycleEvent: null,
+      replacementVouch: null,
       layer,
     };
     const current = vouchesByUri.get(uri);
@@ -227,12 +341,125 @@ export async function queryTrustNetwork(
       vouchesByUri.set(uri, candidate);
     }
   }
+
+  for (const { row } of supportRows) {
+    const vouch = vouchesByUri.get(bounded(term(row, 'vouch'), 1_000));
+    const target = bounded(term(row, 'target'), 1_000);
+    if (!vouch || !SAFE_IRI.test(target)) continue;
+    if (!vouch.evidence.includes(target)) vouch.evidence.push(target);
+    const evidenceSource = optionalTerm(row, 'evidenceSource');
+    if (
+      evidenceSource &&
+      NOSTR_EVENT_URI.test(evidenceSource) &&
+      !vouch.evidenceSources.includes(evidenceSource)
+    ) {
+      vouch.evidenceSources.push(evidenceSource);
+    }
+  }
+
+  type LifecycleAction = TrustVouchLifecycleState & {
+    issuer: string;
+    subject: string;
+    at: number | null;
+    layer: VisibleMemoryLayer;
+  };
+  const lifecycleByTarget = new Map<string, LifecycleAction>();
+  for (const { row, layer } of lifecycleRows) {
+    const target = bounded(term(row, 'target'), 1_000);
+    const targetVouch = vouchesByUri.get(target);
+    const issuer = pubkeyFromEntity(term(row, 'issuer'));
+    const subject = pubkeyFromEntity(term(row, 'subject'));
+    const status = term(row, 'status');
+    const source = optionalTerm(row, 'source')
+      ? bounded(optionalTerm(row, 'source')!, 1_000)
+      : null;
+    const replacement = optionalTerm(row, 'replacement')
+      ? bounded(optionalTerm(row, 'replacement')!, 1_000)
+      : null;
+    if (
+      !targetVouch ||
+      !issuer ||
+      !subject ||
+      issuer !== targetVouch.issuer ||
+      subject !== targetVouch.subject ||
+      !new Set(['revoked', 'superseded']).has(status) ||
+      !source ||
+      !NOSTR_EVENT_URI.test(source) ||
+      !sourceMatchesLifecycle(
+        row,
+        issuer,
+        subject,
+        status as 'revoked' | 'superseded',
+        target,
+        replacement,
+      ) ||
+      (status === 'superseded' && (!replacement || !SAFE_IRI.test(replacement))) ||
+      (status === 'revoked' && replacement)
+    ) {
+      continue;
+    }
+    const candidate: LifecycleAction =
+      status === 'revoked'
+        ? {
+            issuer,
+            subject,
+            status,
+            at: dateTimestamp(row.at),
+            lifecycleEvent: source,
+            replacementVouch: null,
+            layer,
+          }
+        : {
+            issuer,
+            subject,
+            status: 'superseded',
+            at: dateTimestamp(row.at),
+            lifecycleEvent: source,
+            replacementVouch: replacement!,
+            layer,
+          };
+    const current = lifecycleByTarget.get(target);
+    if (
+      !current ||
+      (candidate.at ?? 0) > (current.at ?? 0) ||
+      ((candidate.at ?? 0) === (current.at ?? 0) &&
+        candidate.lifecycleEvent.localeCompare(current.lifecycleEvent) > 0)
+    ) {
+      lifecycleByTarget.set(target, candidate);
+    }
+  }
+  for (const [target, lifecycle] of lifecycleByTarget) {
+    const vouch = vouchesByUri.get(target)!;
+    vouch.status = lifecycle.status;
+    vouch.lifecycleEvent = lifecycle.lifecycleEvent;
+    vouch.replacementVouch = lifecycle.replacementVouch;
+    if (LAYER_RANK[lifecycle.layer] > LAYER_RANK[vouch.layer]) vouch.layer = lifecycle.layer;
+  }
   const sortedVouches = [...vouchesByUri.values()].sort(
     (a, b) => (b.at ?? 0) - (a.at ?? 0) || a.uri.localeCompare(b.uri),
   );
   if (sortedVouches.length > MAX_TRUST_VOUCHES) partial = true;
-  const vouches = sortedVouches.slice(0, MAX_TRUST_VOUCHES);
+  const vouches = sortedVouches.slice(0, MAX_TRUST_VOUCHES).map((vouch): TrustVouchSummary => {
+    if (vouch.status === 'revoked') {
+      return {
+        ...vouch,
+        status: 'revoked',
+        lifecycleEvent: vouch.lifecycleEvent!,
+        replacementVouch: null,
+      };
+    }
+    if (vouch.status === 'superseded') {
+      return {
+        ...vouch,
+        status: 'superseded',
+        lifecycleEvent: vouch.lifecycleEvent!,
+        replacementVouch: vouch.replacementVouch!,
+      };
+    }
+    return { ...vouch, status: vouch.status, lifecycleEvent: null, replacementVouch: null };
+  });
   for (const vouch of vouches) {
+    if (vouch.status !== 'active') continue;
     upsertPerson(vouch.issuer, vouch.layer).vouchesGiven += 1;
     upsertPerson(vouch.subject, vouch.layer).vouchesReceived += 1;
   }
@@ -247,111 +474,5 @@ export async function queryTrustNetwork(
     completeness: partial ? 'partial' : 'complete',
     people: sortedPeople.slice(0, MAX_TRUST_PEOPLE),
     vouches,
-  };
-}
-
-/** Score a bounded, explainable two-hop reputation lens without more graph reads. */
-export function scoreTrustNetwork(
-  network: TrustNetworkResult,
-  subject: string,
-  perspective: string,
-): ReputationSummaryResult {
-  const active = network.vouches.filter(
-    (vouch) =>
-      vouch.status === 'active' &&
-      vouch.sourceEvent !== null &&
-      NOSTR_EVENT_URI.test(vouch.sourceEvent),
-  );
-  const inbound = active.filter((vouch) => vouch.subject === subject);
-  const requesterVouches = new Set(
-    active.filter((vouch) => vouch.issuer === perspective).map((vouch) => vouch.subject),
-  );
-  const inboundIssuers = new Set(inbound.map((vouch) => vouch.issuer));
-  const directVouch = inboundIssuers.has(perspective);
-  const twoHopIssuers = new Set(
-    [...inboundIssuers].filter(
-      (issuer) => issuer !== perspective && issuer !== subject && requesterVouches.has(issuer),
-    ),
-  );
-  const communityIssuers = [...inboundIssuers].filter(
-    (issuer) => issuer !== perspective && !twoHopIssuers.has(issuer),
-  );
-  const person = network.people.find((candidate) => candidate.pubkey === subject);
-  const evidenceRecords = person?.contributions ?? 0;
-  const verifiableEvidence = person?.contributionLayer === 'VM';
-  const directTrust = Math.min(
-    100,
-    (directVouch ? 60 : 0) + Math.min(2, inboundIssuers.size - (directVouch ? 1 : 0)) * 20,
-  );
-  const networkTrust = Math.min(100, twoHopIssuers.size * 45 + communityIssuers.length * 15);
-  const demonstratedWork = Math.min(100, Math.round(evidenceRecords * 12.5));
-  const evidenceDiversity = Math.min(
-    100,
-    inboundIssuers.size * 20 + Math.min(evidenceRecords, 5) * 8 + (verifiableEvidence ? 20 : 0),
-  );
-  const score = Math.round(
-    directTrust * 0.35 + networkTrust * 0.25 + demonstratedWork * 0.3 + evidenceDiversity * 0.1,
-  );
-  const confidenceEvidence =
-    inboundIssuers.size * 2 + Math.min(evidenceRecords, 8) + (verifiableEvidence ? 2 : 0);
-  const confidence: ReputationConfidence =
-    confidenceEvidence === 0
-      ? 'none'
-      : confidenceEvidence <= 3
-        ? 'low'
-        : confidenceEvidence <= 8
-          ? 'medium'
-          : 'high';
-  const reasons: string[] = [];
-  if (directVouch) reasons.push('You signed a direct vouch for this person.');
-  if (inboundIssuers.size > 0) {
-    reasons.push(
-      `${inboundIssuers.size} independent contributor${inboundIssuers.size === 1 ? '' : 's'} signed a vouch.`,
-    );
-  }
-  if (twoHopIssuers.size > 0) {
-    reasons.push(
-      `${twoHopIssuers.size} vouch${twoHopIssuers.size === 1 ? '' : 'es'} arrived through a two-hop trust path.`,
-    );
-  }
-  if (evidenceRecords > 0) {
-    reasons.push(
-      `${evidenceRecords} attributed channel evidence record${evidenceRecords === 1 ? '' : 's'} were found.`,
-    );
-  }
-  if (verifiableEvidence) reasons.push('Verifiable-memory evidence is available.');
-  if (network.completeness === 'partial') {
-    reasons.push('Evidence discovery reached the channel bound; this score uses a bounded sample.');
-  }
-  if (reasons.length === 0) reasons.push('No reputation evidence exists in this channel yet.');
-  const pathSubjects = new Set([...twoHopIssuers]);
-  const evidenceByUri = new Map<string, TrustVouchSummary>();
-  for (const vouch of active) {
-    if (
-      vouch.subject === subject ||
-      (vouch.issuer === perspective && pathSubjects.has(vouch.subject))
-    ) {
-      evidenceByUri.set(vouch.uri, vouch);
-    }
-    if (evidenceByUri.size >= 25) break;
-  }
-  return {
-    subject,
-    perspective,
-    context: 'channel',
-    completeness: network.completeness,
-    score,
-    confidence,
-    breakdown: { directTrust, networkTrust, demonstratedWork, evidenceDiversity },
-    signals: {
-      directVouch,
-      twoHopVouchers: twoHopIssuers.size,
-      independentVouchers: inboundIssuers.size,
-      evidenceRecords,
-      verifiableEvidence,
-    },
-    reasons,
-    evidence: [...evidenceByUri.values()],
-    methodology: 'dkg-reputation-v1',
   };
 }

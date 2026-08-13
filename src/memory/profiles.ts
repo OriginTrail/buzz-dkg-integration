@@ -141,12 +141,16 @@ export const PROFILE_DEFINITIONS: Record<AgentMemoryProfileId, ProfileDefinition
     ]),
   },
   'dkg-trust@1': {
-    types: new Set([...terms('trust', ['Vouch'])]),
-    relations: new Set([...terms('trust', ['issuer', 'subject'])]),
+    types: new Set([...terms('trust', ['Vouch', 'EvidenceReference', 'VouchLifecycle'])]),
+    relations: new Set([...terms('trust', ['issuer', 'subject', 'supportedBy'])]),
     attributes: new Map([
       ...attributes('trust', {
         status: 'string',
         scope: 'string',
+        evidenceTarget: 'anyURI',
+        evidenceSource: 'anyURI',
+        targetVouch: 'anyURI',
+        replacementVouch: 'anyURI',
       }),
     ]),
   },

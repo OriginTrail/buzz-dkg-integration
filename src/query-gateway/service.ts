@@ -2,6 +2,12 @@ import type { DkgClient } from '../dkg/client.ts';
 import { IntegrationApiError } from '../errors.ts';
 import { canonicalRepositoryIdentityUrl } from '../memory/identity.ts';
 import type { QueryGatewayConfig } from '../types.ts';
+import { scoreReputation } from './reputation-score.ts';
+import {
+  queryTrustNetwork,
+  type TrustLayeredRow,
+  WORK_EVIDENCE_SPARQL_VALUES,
+} from './trust-query.ts';
 import type {
   ChannelMemoryResult,
   ContributorSummary,
@@ -20,14 +26,15 @@ import type {
   QueryGatewayResult,
   QueryGatewaySuccess,
   QueryOperation,
+  ReputationSummaryResult,
   SoftwareContributorEntry,
   SoftwareContributorsResult,
   SubGraphSummary,
   SubgraphGraphResult,
   SubgraphTriplesResult,
   VisibleMemoryLayer,
+  WorkEvidenceSummary,
 } from './types.ts';
-import { queryTrustNetwork, scoreTrustNetwork, type TrustLayeredRow } from './trust-query.ts';
 
 type EnabledGatewayConfig = Extract<QueryGatewayConfig, { enabled: true }>;
 type BindingRow = Record<string, unknown>;
@@ -55,6 +62,7 @@ const MAX_DKG_ROWS = 2_500;
 const MAX_GRAPH_NODES = 1_200;
 const MAX_GRAPH_EDGES = 2_400;
 const MAX_TRIPLES = 1_000;
+const MAX_WORK_EVIDENCE = 24;
 
 const BUZZ = 'https://w3id.org/buzz-dkg/buzz#';
 const NOSTR = 'https://w3id.org/buzz-dkg/nostr#';
@@ -64,6 +72,8 @@ const CODE = 'http://dkg.io/ontology/code/';
 const GITHUB = 'http://dkg.io/ontology/github/';
 const DECISIONS = 'http://dkg.io/ontology/decisions/';
 const SOFTWARE = 'http://dkg.io/ontology/software/';
+const NOSTR_PUBKEY_URI = 'urn:nostr:pubkey:';
+const NOSTR_EVENT_URI = /^urn:nostr:event:[0-9a-f]{64}$/u;
 
 function invalid(message: string): never {
   throw new IntegrationApiError(400, 'invalid_request', message);
@@ -634,8 +644,72 @@ export class QueryGatewayService {
     return queryTrustNetwork((sparql) => this.layered(cg, sparql) as Promise<TrustLayeredRow[]>);
   }
 
-  private async reputationSummary(cg: string, subject: string, perspective: string) {
-    return scoreTrustNetwork(await this.trustNetwork(cg), subject, perspective);
+  /**
+   * Calculate one channel-contextual reputation lens from a bounded trust
+   * network snapshot. SPARQL discovers at most 200 people and 400 vouches;
+   * traversal and scoring happen here, never recursively inside the database.
+   */
+  private async reputationSummary(
+    cg: string,
+    subject: string,
+    perspective: string,
+  ): Promise<ReputationSummaryResult> {
+    const [network, workRows] = await Promise.all([
+      this.trustNetwork(cg),
+      this.layered(
+        cg,
+        `SELECT DISTINCT ?record ?kind ?name ?source ?at WHERE { GRAPH ?g {
+           ?record a ?kind ;
+             <${PROV}wasAttributedTo> <${NOSTR_PUBKEY_URI}${subject}> ;
+             <${PROV}wasDerivedFrom> ?source .
+           VALUES ?kind { ${WORK_EVIDENCE_SPARQL_VALUES} }
+           OPTIONAL { ?record <${SCHEMA}name> ?name }
+           OPTIONAL { ?source <${NOSTR}createdAt> ?at }
+         } } ORDER BY DESC(?at) LIMIT ${MAX_WORK_EVIDENCE + 1}`,
+      ),
+    ]);
+    const assessment = scoreReputation(network, subject, perspective);
+    const reasons = [...assessment.reasons];
+    const workByUri = new Map<string, WorkEvidenceSummary>();
+    for (const { row, layer } of workRows) {
+      const uri = bounded(term(row, 'record'), 1_000);
+      const kind = bounded(term(row, 'kind'), 1_000);
+      const sourceEvent = optionalTerm(row, 'source')
+        ? bounded(optionalTerm(row, 'source')!, 1_000)
+        : null;
+      if (!SAFE_IRI.test(uri) || !SAFE_IRI.test(kind)) continue;
+      const candidate: WorkEvidenceSummary = {
+        uri,
+        kind,
+        name: optionalTerm(row, 'name') ? bounded(optionalTerm(row, 'name')!, 500) : null,
+        sourceEvent: sourceEvent && NOSTR_EVENT_URI.test(sourceEvent) ? sourceEvent : null,
+        at: dateTimestamp(row.at),
+        layer,
+      };
+      const current = workByUri.get(uri);
+      if (!current || LAYER_RANK[layer] > LAYER_RANK[current.layer]) workByUri.set(uri, candidate);
+    }
+    const workEvidence = [...workByUri.values()]
+      .sort((left, right) => (right.at ?? 0) - (left.at ?? 0) || left.uri.localeCompare(right.uri))
+      .slice(0, MAX_WORK_EVIDENCE);
+    const workQueryPartial = VIEWS.some(
+      ([, layer]) =>
+        workRows.filter((candidate) => candidate.layer === layer).length > MAX_WORK_EVIDENCE,
+    );
+    if (workQueryPartial && network.completeness === 'complete') {
+      reasons.push('Work-evidence discovery reached its fixed channel bound.');
+    }
+
+    return {
+      subject,
+      perspective,
+      context: 'channel',
+      completeness: network.completeness === 'partial' || workQueryPartial ? 'partial' : 'complete',
+      ...assessment,
+      reasons,
+      workEvidence,
+      methodology: 'dkg-reputation-v2',
+    };
   }
 
   private async subgraphGraph(cg: string, name: string): Promise<SubgraphGraphResult> {

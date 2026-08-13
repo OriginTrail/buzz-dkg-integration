@@ -137,18 +137,31 @@ export interface TrustPersonSummary {
   layer: VisibleMemoryLayer;
 }
 
-export interface TrustVouchSummary {
+interface TrustVouchSummaryBase {
   uri: string;
   issuer: string;
   subject: string;
   note: string | null;
-  status: TrustVouchStatus;
   at: number | null;
   sourceEvent: string | null;
+  /** Explicit evidence roots selected and signed by the vouch issuer. */
+  evidence: string[];
+  /** Signed Nostr records from which the evidence targets were projected. */
+  evidenceSources: string[];
   layer: VisibleMemoryLayer;
 }
 
 export type TrustVouchStatus = 'active' | 'revoked' | 'superseded' | 'unknown';
+
+export type TrustVouchLifecycleState =
+  | { status: 'revoked'; lifecycleEvent: string; replacementVouch: null }
+  | { status: 'superseded'; lifecycleEvent: string; replacementVouch: string };
+
+export type TrustVouchSummary = TrustVouchSummaryBase &
+  (
+    | { status: 'active' | 'unknown'; lifecycleEvent: null; replacementVouch: null }
+    | TrustVouchLifecycleState
+  );
 
 export interface TrustNetworkResult {
   /** Whether every visible row fit inside the fixed operation bounds. */
@@ -170,8 +183,19 @@ export interface ReputationSignals {
   directVouch: boolean;
   twoHopVouchers: number;
   independentVouchers: number;
+  /** Corroborating vouches after shared evidence roots are collapsed. */
+  independentLineages: number;
   evidenceRecords: number;
   verifiableEvidence: boolean;
+}
+
+export interface WorkEvidenceSummary {
+  uri: string;
+  kind: string;
+  name: string | null;
+  sourceEvent: string | null;
+  at: number | null;
+  layer: VisibleMemoryLayer;
 }
 
 export interface ReputationSummaryResult {
@@ -185,7 +209,9 @@ export interface ReputationSummaryResult {
   signals: ReputationSignals;
   reasons: string[];
   evidence: TrustVouchSummary[];
-  methodology: 'dkg-reputation-v1';
+  /** Candidate records the human may explicitly attach to a future vouch. */
+  workEvidence: WorkEvidenceSummary[];
+  methodology: 'dkg-reputation-v2';
 }
 
 export interface GraphNode {
