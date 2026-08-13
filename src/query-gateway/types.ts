@@ -222,22 +222,35 @@ export type SparqlBindingValue = string | { [key: string]: SparqlJsonValue };
 export type SparqlBindingRow = Record<string, SparqlBindingValue>;
 export type SparqlQuad = { [key: string]: SparqlJsonValue };
 
-export interface SemanticQueryLayerResult {
-  layer: VisibleMemoryLayer;
-  bindings: SparqlBindingRow[];
-  quads?: SparqlQuad[];
-}
-
-export interface SemanticQueryResult {
-  queryType: 'select' | 'ask' | 'construct';
+interface SemanticQueryResultBase {
   scope: { type: 'current_channel' };
   cost: {
     score: number;
     budget: number;
     metrics: SemanticQueryMetrics;
   };
-  layers: SemanticQueryLayerResult[];
 }
+
+export type SemanticQueryLayerResult =
+  | { layer: VisibleMemoryLayer; bindings: SparqlBindingRow[] }
+  | { layer: VisibleMemoryLayer; boolean: boolean }
+  | { layer: VisibleMemoryLayer; quads: SparqlQuad[] };
+
+export type SemanticQueryResult = SemanticQueryResultBase &
+  (
+    | {
+        queryType: 'select';
+        layers: Array<{ layer: VisibleMemoryLayer; bindings: SparqlBindingRow[] }>;
+      }
+    | {
+        queryType: 'ask';
+        layers: Array<{ layer: VisibleMemoryLayer; boolean: boolean }>;
+      }
+    | {
+        queryType: 'construct';
+        layers: Array<{ layer: VisibleMemoryLayer; quads: SparqlQuad[] }>;
+      }
+  );
 
 export type QueryGatewayResult =
   | ChannelMemoryResult

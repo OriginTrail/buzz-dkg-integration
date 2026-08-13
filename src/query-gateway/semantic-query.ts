@@ -12,22 +12,16 @@ import type {
 
 export type SemanticVisibleView = 'shared-working-memory' | 'verifiable-memory';
 
-export interface NormalizedSparqlResult {
-  bindings: SparqlBindingRow[];
-  quads?: SparqlQuad[];
-}
-
 export type SemanticQueryRunner = (
   view: SemanticVisibleView,
   sparql: string,
   timeoutMs: number,
-) => Promise<NormalizedSparqlResult>;
+) => Promise<unknown>;
 
 const VIEWS: readonly [SemanticVisibleView, VisibleMemoryLayer][] = [
   ['shared-working-memory', 'SWM'],
   ['verifiable-memory', 'VM'],
 ];
-const MAX_SEMANTIC_ROWS = 100;
 const MAX_SEMANTIC_QUERY_TIMEOUT_MS = 10_000;
 
 function plainObject(value: unknown): value is Record<string, unknown> {
@@ -46,29 +40,53 @@ function bindingValue(value: unknown): value is SparqlBindingValue {
   return typeof value === 'string' || (plainObject(value) && jsonValue(value));
 }
 
-/** Validate the DKG response before it crosses the public semantic-query boundary. */
-export function normalizeSparqlResult(value: unknown): NormalizedSparqlResult {
-  if (!plainObject(value) || !plainObject(value.result) || !Array.isArray(value.result.bindings)) {
-    throw new Error('DKG query returned an invalid bindings shape');
+function semanticResult(value: unknown): Record<string, unknown> {
+  if (!plainObject(value) || !plainObject(value.result)) {
+    throw new Error('DKG query returned an invalid result shape');
   }
-  const bindings: SparqlBindingRow[] = [];
-  for (const candidate of value.result.bindings) {
+  return value.result;
+}
+
+function selectBindings(value: unknown, limit: number): SparqlBindingRow[] {
+  const result = semanticResult(value);
+  if (!Array.isArray(result.bindings)) {
+    throw new Error('DKG SELECT query returned an invalid bindings shape');
+  }
+  return result.bindings.slice(0, limit).map((candidate) => {
     if (!plainObject(candidate) || !Object.values(candidate).every(bindingValue)) {
       throw new Error('DKG query returned an invalid binding term');
     }
-    bindings.push(candidate as SparqlBindingRow);
+    return candidate as SparqlBindingRow;
+  });
+}
+
+function askBoolean(value: unknown): boolean {
+  const result = semanticResult(value);
+  if (typeof result.boolean !== 'boolean') {
+    throw new Error('DKG ASK query returned an invalid boolean shape');
   }
-  const rawQuads = value.result.quads;
-  if (rawQuads !== undefined && !Array.isArray(rawQuads)) {
-    throw new Error('DKG query returned an invalid quads shape');
+  return result.boolean;
+}
+
+function constructQuads(value: unknown, maximumQuads: number): SparqlQuad[] {
+  const result = semanticResult(value);
+  if (!Array.isArray(result.quads)) {
+    throw new Error('DKG CONSTRUCT query returned an invalid quads shape');
   }
-  const quads = rawQuads?.map((quad) => {
+  if (result.quads.length > maximumQuads) {
+    throw new IntegrationApiError(
+      502,
+      'result_bound_exceeded',
+      'DKG returned more CONSTRUCT quads than the verified query bound',
+      { maxQuads: maximumQuads, receivedQuads: result.quads.length },
+    );
+  }
+  return result.quads.map((quad) => {
     if (!plainObject(quad) || !jsonValue(quad)) {
       throw new Error('DKG query returned an invalid quad');
     }
     return quad as SparqlQuad;
   });
-  return { bindings, ...(quads ? { quads } : {}) };
 }
 
 /** Parser-level validation owns shape only; configured size policy is enforced at execution. */
@@ -96,28 +114,44 @@ export async function executeSemanticQuery(options: {
     return options.selectedView === 'shared' ? layer === 'SWM' : layer === 'VM';
   });
   const timeoutMs = Math.min(options.dkgTimeoutMs, MAX_SEMANTIC_QUERY_TIMEOUT_MS);
-  const layers = await Promise.all(
-    views.map(async ([view, layer]) => {
-      const result = await options.query(view, options.sparql, timeoutMs);
-      if (result.quads && result.quads.length > SEMANTIC_QUERY_MAX_QUADS) {
-        throw new IntegrationApiError(
-          502,
-          'result_bound_exceeded',
-          'DKG returned more CONSTRUCT quads than the verified query bound',
-          { maxQuads: SEMANTIC_QUERY_MAX_QUADS, receivedQuads: result.quads.length },
-        );
-      }
-      return {
-        layer,
-        bindings: result.bindings.slice(0, MAX_SEMANTIC_ROWS),
-        ...(result.quads ? { quads: result.quads } : {}),
-      };
-    }),
-  );
-  return {
-    queryType: policy.queryType,
+  const base = {
     scope: { type: 'current_channel' },
     cost: { score: policy.score, budget: policy.budget, metrics: policy.metrics },
+  } as const;
+  if (policy.queryType === 'select') {
+    const layers = await Promise.all(
+      views.map(async ([view, layer]) => ({
+        layer,
+        bindings: selectBindings(
+          await options.query(view, options.sparql, timeoutMs),
+          policy.limit!,
+        ),
+      })),
+    );
+    return { ...base, queryType: 'select', layers };
+  }
+  if (policy.queryType === 'ask') {
+    const layers = await Promise.all(
+      views.map(async ([view, layer]) => ({
+        layer,
+        boolean: askBoolean(await options.query(view, options.sparql, timeoutMs)),
+      })),
+    );
+    return { ...base, queryType: 'ask', layers };
+  }
+  const maximumQuads = Math.min(
+    SEMANTIC_QUERY_MAX_QUADS,
+    policy.metrics.constructTriples * policy.limit!,
+  );
+  const layers = await Promise.all(
+    views.map(async ([view, layer]) => ({
+      layer,
+      quads: constructQuads(await options.query(view, options.sparql, timeoutMs), maximumQuads),
+    })),
+  );
+  return {
+    ...base,
+    queryType: 'construct',
     layers,
   };
 }

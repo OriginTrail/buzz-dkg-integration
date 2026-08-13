@@ -2,11 +2,8 @@ import type { DkgClient } from '../dkg/client.ts';
 import { IntegrationApiError } from '../errors.ts';
 import { canonicalRepositoryIdentityUrl } from '../memory/identity.ts';
 import type { QueryGatewayConfig } from '../types.ts';
-import {
-  executeSemanticQuery,
-  normalizeSparqlResult,
-  requiredSemanticSparql,
-} from './semantic-query.ts';
+import { executeSemanticQuery, requiredSemanticSparql } from './semantic-query.ts';
+import { normalizeBindingQueryResult } from './sparql-result.ts';
 import type {
   ChannelMemoryResult,
   ContributorSummary,
@@ -26,7 +23,6 @@ import type {
   QueryGatewaySuccess,
   QueryOperation,
   SparqlBindingRow,
-  SparqlQuad,
   SoftwareContributorEntry,
   SoftwareContributorsResult,
   SubGraphSummary,
@@ -376,7 +372,7 @@ export class QueryGatewayService {
           maxQueryBytes: this.config.maxQueryBytes,
           dkgTimeoutMs: this.config.dkgTimeoutMs,
           query: async (view, sparql, timeoutMs) =>
-            this.queryResult(cg, view, sparql, undefined, timeoutMs),
+            this.dkg.query({ contextGraphId: cg, view, sparql }, timeoutMs),
         });
     }
   }
@@ -387,12 +383,12 @@ export class QueryGatewayService {
     sparql: string,
     subGraphName?: string,
     timeoutMs = this.config.dkgTimeoutMs,
-  ): Promise<{ bindings: BindingRow[]; quads?: SparqlQuad[] }> {
+  ): Promise<{ bindings: BindingRow[] }> {
     const response = await this.dkg.query(
       { contextGraphId: cg, view, sparql, ...(subGraphName ? { subGraphName } : {}) },
       timeoutMs,
     );
-    return normalizeSparqlResult(response);
+    return { bindings: normalizeBindingQueryResult(response) };
   }
 
   private async query(

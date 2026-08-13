@@ -45,14 +45,23 @@ class GatewayDkg {
       }) => Array<Record<string, { value: string }>> | null)
     | null = null;
   quads: unknown[] | null = null;
+  askResult: boolean | null = null;
+  rawResponse: unknown | null = null;
 
   async query(
     options: { contextGraphId: string; view: string; sparql: string },
     timeoutMs?: number,
   ) {
     this.calls.push({ kind: 'query', ...options, timeoutMs });
+    if (this.rawResponse !== null) return this.rawResponse;
     const bindings = this.bindingResolver?.(options) ?? [];
-    return { result: { bindings, ...(this.quads ? { quads: this.quads } : {}) } };
+    return {
+      result: {
+        bindings,
+        ...(this.askResult !== null ? { boolean: this.askResult } : {}),
+        ...(this.quads ? { quads: this.quads } : {}),
+      },
+    };
   }
 
   async listSubGraphs() {
@@ -195,6 +204,33 @@ describe('semantic query execution', () => {
     expect(dkg.calls).toEqual([expect.objectContaining({ timeoutMs: 10_000 })]);
   });
 
+  it('returns ASK booleans and caps SELECT rows to the verified query limit', async () => {
+    const dkg = new GatewayDkg();
+    dkg.askResult = true;
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+    const ask = await service.execute(
+      semanticBody('ASK { GRAPH ?g { <urn:s> <urn:p> ?o } }', 'shared'),
+    );
+    expect(ask.result).toMatchObject({
+      queryType: 'ask',
+      layers: [{ layer: 'SWM', boolean: true }],
+    });
+
+    dkg.askResult = null;
+    dkg.bindingResolver = () => [
+      { value: binding('one') },
+      { value: binding('two') },
+      { value: binding('must be capped') },
+    ];
+    const select = await service.execute(
+      semanticBody('SELECT ?value WHERE { GRAPH ?g { ?s <urn:p> ?value } } LIMIT 2', 'shared'),
+    );
+    expect(select.result).toMatchObject({
+      queryType: 'select',
+      layers: [{ layer: 'SWM', bindings: [{ value: binding('one') }, { value: binding('two') }] }],
+    });
+  });
+
   it('answers a lifelike agent-authored decision trace with the ontology fixture', async () => {
     const dkg = new GatewayDkg();
     dkg.bindingResolver = ({ sparql }) => fixtureQuery(sparql);
@@ -269,5 +305,49 @@ describe('semantic query execution', () => {
         ),
       ),
     ).rejects.toMatchObject({ status: 502, code: 'result_bound_exceeded' });
+  });
+
+  it('requires and returns a valid bounded CONSTRUCT graph', async () => {
+    const dkg = new GatewayDkg();
+    dkg.quads = [{ subject: 'urn:s', predicate: 'urn:p', object: 'urn:o' }];
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+    const query = 'CONSTRUCT { ?s <urn:p> ?o } WHERE { GRAPH ?g { ?s <urn:p> ?o } } LIMIT 2';
+    const result = await service.execute(semanticBody(query, 'shared'));
+    expect(result.result).toMatchObject({
+      queryType: 'construct',
+      layers: [{ layer: 'SWM', quads: dkg.quads }],
+    });
+
+    dkg.quads = null;
+    await expect(service.execute(semanticBody(query, 'shared'))).rejects.toThrow(
+      /invalid quads shape/,
+    );
+  });
+
+  it('rejects malformed DKG response shapes for every semantic query form', async () => {
+    const dkg = new GatewayDkg();
+    const service = new QueryGatewayService(() => CONTEXT_GRAPH, dkg.asDkg(), gatewayConfig());
+
+    dkg.rawResponse = { result: { bindings: 'not-an-array' } };
+    await expect(
+      service.execute(
+        semanticBody('SELECT ?o WHERE { GRAPH ?g { <urn:s> <urn:p> ?o } } LIMIT 1', 'shared'),
+      ),
+    ).rejects.toThrow(/invalid bindings shape/);
+
+    dkg.rawResponse = { result: { boolean: 'true' } };
+    await expect(
+      service.execute(semanticBody('ASK { GRAPH ?g { <urn:s> <urn:p> ?o } }', 'shared')),
+    ).rejects.toThrow(/invalid boolean shape/);
+
+    dkg.rawResponse = { result: { quads: [() => undefined] } };
+    await expect(
+      service.execute(
+        semanticBody(
+          'CONSTRUCT { ?s <urn:p> ?o } WHERE { GRAPH ?g { ?s <urn:p> ?o } } LIMIT 1',
+          'shared',
+        ),
+      ),
+    ).rejects.toThrow(/invalid quad/);
   });
 });
