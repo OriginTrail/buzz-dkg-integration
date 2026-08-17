@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Registry } from '../src/registry/store.ts';
-import { hexId } from './helpers.ts';
+import { hexId, makeEvent } from './helpers.ts';
 
 const bindings = [
   { channelId: 'chan-a', contextGraphId: 'cg-a', promoters: [hexId('prom-1')] },
@@ -58,6 +58,48 @@ describe('registry', () => {
     expect(first).toEqual({ proposalEventId: 'proposal-a', duplicate: false });
     expect(retry).toEqual({ proposalEventId: 'proposal-a', duplicate: true });
     expect(otherChannel).toEqual({ proposalEventId: 'proposal-c', duplicate: false });
+  });
+
+  it('atomically hands queued community evidence to a durable proposal and operation', () => {
+    const r = new Registry(':memory:');
+    const source = makeEvent({ kind: 9, tags: [['h', 'chan-a']], content: 'durable decision' });
+    const proposalId = hexId('community-proposal');
+    r.queueCommunityMemoryEvent(source, 'chan-a');
+
+    expect(() =>
+      r.transaction(() => {
+        r.reserveAgentMemoryEnvelope(
+          proposalId,
+          'chan-a',
+          hexId('community-evidence'),
+          { proposal: 'community' },
+          'community',
+        );
+        r.claimTrigger({ ...opFields(proposalId), triggerKind: 40009 });
+        r.acceptCommunityMemoryEvents([source.id], 'chan-a', proposalId);
+        throw new Error('simulated crash before commit');
+      }),
+    ).toThrow(/simulated crash/);
+    expect(r.agentMemoryRecord(proposalId)).toBeNull();
+    expect(r.opByTrigger(proposalId)).toBeNull();
+    expect(r.communityMemoryState(source.id)).toBe('queued');
+
+    r.transaction(() => {
+      r.reserveAgentMemoryEnvelope(
+        proposalId,
+        'chan-a',
+        hexId('community-evidence'),
+        { proposal: 'community' },
+        'community',
+      );
+      r.claimTrigger({ ...opFields(proposalId), triggerKind: 40009 });
+      r.acceptCommunityMemoryEvents([source.id], 'chan-a', proposalId);
+    });
+    expect(r.agentMemoryRecord(proposalId)?.origin).toBe('community');
+    expect(r.opByTrigger(proposalId)).not.toBeNull();
+    expect(r.communityMemoryState(source.id)).toBe('accepted');
+    r.markCommunityMemoryStored(proposalId);
+    expect(r.communityMemoryState(source.id)).toBe('stored');
   });
 
   it('enforces forward-only state transitions', () => {

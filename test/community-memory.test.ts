@@ -36,9 +36,17 @@ class SigningRelay extends MockRelay {
   }
 }
 
-function humanMessage(content: string): NostrEvent {
+function humanMessage(
+  content: string,
+  options: { channelId?: string; kind?: number; tags?: string[][] } = {},
+): NostrEvent {
   return finalizeEvent(
-    { kind: 9, created_at: ++timestamp, tags: [['h', CHANNEL]], content },
+    {
+      kind: options.kind ?? 9,
+      created_at: ++timestamp,
+      tags: options.tags ?? [['h', options.channelId ?? CHANNEL]],
+      content,
+    },
     HUMAN_SECRET,
   ) as NostrEvent;
 }
@@ -94,10 +102,14 @@ function daemonConfig(dbPath: string): DaemonConfig {
   };
 }
 
-function setup(extractor: CommunityMemoryExtractor, dbPath = ':memory:') {
+function setup(
+  extractor: CommunityMemoryExtractor,
+  dbPath = ':memory:',
+  config: DaemonConfig = daemonConfig(dbPath),
+) {
   const relay = new SigningRelay();
   const dkg = new MockDkg();
-  const daemon = new Daemon(daemonConfig(dbPath), {
+  const daemon = new Daemon(config, {
     relay: relay.asRelay(),
     dkg: dkg.asDkg(),
     communityMemoryExtractor: extractor,
@@ -135,6 +147,22 @@ describe('community memory worker', () => {
 
     expect(extract).toHaveBeenCalledTimes(1);
     expect(daemon.registry.communityMemoryState(source.id)).toBe('no_memory');
+    await daemon.stop();
+  });
+
+  it('reports accepted until SWM read-back succeeds, then reports stored', async () => {
+    const extract = vi.fn(async () => ({ type: 'memory' as const, proposal: memoryProposal() }));
+    const { daemon, dkg } = setup({ extract });
+    const source = humanMessage('The team selected PostgreSQL.');
+    dkg.failShareOnce = new Error('temporary share failure');
+
+    await daemon.handleEvent(source);
+    await daemon.flushCommunityMemory(Date.now() + 1_001);
+    await daemon.drain();
+    expect(daemon.registry.communityMemoryState(source.id)).toBe('accepted');
+
+    await daemon.recover();
+    expect(daemon.registry.communityMemoryState(source.id)).toBe('stored');
     await daemon.stop();
   });
 
@@ -194,6 +222,96 @@ describe('community memory worker', () => {
     expect(secondExtractor.extract).toHaveBeenCalledTimes(1);
     expect(second.daemon.registry.communityMemoryState(source.id)).toBe('stored');
     await second.daemon.stop();
+  });
+
+  it('does not enable bot commands in worker-only channels', async () => {
+    const extract = vi.fn(async () => ({ type: 'memory' as const, proposal: memoryProposal() }));
+    const { daemon, relay } = setup({ extract });
+    const ask = humanMessage('@dkg ask what did we decide?', {
+      tags: [
+        ['h', CHANNEL],
+        ['p', relay.pubkey],
+      ],
+    });
+    const pin = humanMessage('', {
+      kind: 40004,
+      tags: [
+        ['h', CHANNEL],
+        ['e', 'a'.repeat(64)],
+      ],
+    });
+
+    await daemon.handleEvent(ask);
+    await daemon.handleEvent(pin);
+    expect(relay.sent).toHaveLength(0);
+    expect(daemon.registry.opByTrigger(pin.id)).toBeNull();
+    expect(daemon.registry.communityMemoryState(ask.id)).toBe('queued');
+    expect(daemon.registry.communityMemoryState(pin.id)).toBeNull();
+
+    await daemon.flushCommunityMemory(Date.now() + 1_001);
+    await daemon.drain();
+    expect(extract).toHaveBeenCalledWith(CHANNEL, [ask]);
+    await daemon.stop();
+  });
+
+  it('rejects private or malformed evidence before it can reach the extractor', async () => {
+    const extract = vi.fn(async () => ({ type: 'memory' as const, proposal: memoryProposal() }));
+    const { daemon, relay } = setup({ extract });
+    const malformed = humanMessage('tampered signature') as NostrEvent;
+    malformed.sig = '0'.repeat(128);
+    const rejected = [
+      humanMessage('wrong channel', { channelId: '3b9b05ab-d2e2-45ca-8532-7998a61caa8c' }),
+      relay.sign({ kind: 9, tags: [['h', CHANNEL]], content: 'service message' }),
+      malformed,
+      humanMessage('   '),
+      humanMessage('x'.repeat(workerConfig().maxInputChars + 1)),
+      humanMessage('missing channel', { tags: [] }),
+      humanMessage('ambiguous channel', {
+        tags: [
+          ['h', CHANNEL],
+          ['h', '3b9b05ab-d2e2-45ca-8532-7998a61caa8c'],
+        ],
+      }),
+    ];
+
+    for (const event of rejected) await daemon.handleEvent(event);
+    await daemon.flushCommunityMemory(Date.now() + 1_001);
+
+    expect(extract).not.toHaveBeenCalled();
+    for (const event of rejected) {
+      expect(daemon.registry.communityMemoryState(event.id)).toBeNull();
+    }
+    await daemon.stop();
+  });
+
+  it('subscribes and catches up worker-only allow-listed channels', async () => {
+    const extract = vi.fn(async () => ({ type: 'no_memory' as const, reason: 'not yet' }));
+    const { daemon, relay } = setup({ extract });
+    const source = humanMessage('We selected the launch date.');
+    relay.ingest(source);
+
+    daemon.subscribe();
+    expect(relay.subscriptions.has('bdi-msgs')).toBe(false);
+    expect(relay.subscriptions.get('bdi-community-memory')).toEqual([
+      expect.objectContaining({ kinds: [9, 40002], '#h': [CHANNEL] }),
+    ]);
+    await daemon.catchUp();
+    expect(daemon.registry.communityMemoryState(source.id)).toBe('queued');
+    await daemon.stop();
+  });
+
+  it('uses a channel-agnostic worker subscription only for explicit wildcard scope', async () => {
+    const extract = vi.fn(async () => ({ type: 'no_memory' as const, reason: 'not yet' }));
+    const config = daemonConfig(':memory:');
+    config.communityMemory = { ...workerConfig(), channels: '*' };
+    const { daemon, relay } = setup({ extract }, ':memory:', config);
+
+    daemon.subscribe();
+    expect(relay.subscriptions.get('bdi-community-memory')).toEqual([
+      expect.objectContaining({ kinds: [9, 40002] }),
+    ]);
+    expect(relay.subscriptions.get('bdi-community-memory')?.[0]).not.toHaveProperty('#h');
+    await daemon.stop();
   });
 });
 

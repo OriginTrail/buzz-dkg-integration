@@ -6,6 +6,7 @@ import {
   compileAgentMemory,
   contextGraphIdForChannel,
   parseAgentMemoryEnvelope,
+  parseCommunityMemoryEnvelope,
 } from '../src/memory/proposal.ts';
 import { QueryGatewayService } from '../src/query-gateway/service.ts';
 import { DKG_MEMORY_PROPOSAL_KIND, type DaemonConfig, type NostrEvent } from '../src/types.ts';
@@ -318,14 +319,10 @@ describe('agent memory proposal contract', () => {
       content: noRequesterSource.proposalEvent.content,
     });
     expect(() => parseAgentMemoryEnvelope(noRequesterSource)).toThrow(/authored by the proposing/);
+    expect(() => parseCommunityMemoryEnvelope(noRequesterSource, PUBKEY)).not.toThrow();
     expect(() =>
-      parseAgentMemoryEnvelope(noRequesterSource, { communityWorkerPubkey: PUBKEY }),
-    ).not.toThrow();
-    expect(() =>
-      parseAgentMemoryEnvelope(noRequesterSource, {
-        communityWorkerPubkey: getPublicKey(OTHER_SECRET),
-      }),
-    ).toThrow(/authored by the proposing/);
+      parseCommunityMemoryEnvelope(noRequesterSource, getPublicKey(OTHER_SECRET)),
+    ).toThrow(/configured worker/);
   });
 
   it('compiles v2 profile entities into the direct edges required by real SPARQL questions', () => {

@@ -48,6 +48,7 @@ export class MockRelay {
   sent: { channelId: string; content: string; replyTo?: string; eventId: string }[] = [];
   onEvent: ((e: NostrEvent) => void) | null = null;
   failNextSend: Error | null = null;
+  subscriptions = new Map<string, Record<string, unknown>[]>();
 
   constructor(servicePubkey: string) {
     this.pubkey = servicePubkey;
@@ -116,7 +117,9 @@ export class MockRelay {
     return { eventId: event.id };
   }
 
-  subscribe(): void {}
+  subscribe(id: string, filters: Record<string, unknown>[]): void {
+    this.subscriptions.set(id, filters);
+  }
   connect(): void {}
   close(): void {}
 
