@@ -8,7 +8,7 @@ import type { DatabaseSync as DatabaseSyncT } from 'node:sqlite';
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
   DatabaseSync: typeof DatabaseSyncT;
 };
-import type { ChannelBinding, OpRecord, OpState } from '../types.ts';
+import type { ChannelBinding, NostrEvent, OpRecord, OpState } from '../types.ts';
 
 /**
  * Durable registry + operation state machine (SQLite).
@@ -85,6 +85,18 @@ export class Registry {
         envelope_json TEXT NOT NULL,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS community_memory_events (
+        event_id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        event_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('queued', 'covered', 'stored', 'no_memory')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER NOT NULL,
+        proposal_event_id TEXT,
+        error TEXT,
+        enqueued_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
       INSERT OR IGNORE INTO cursor (id, last_created_at) VALUES (1, 0);
     `);
     // Additive migrations for DBs created before these columns existed. SQLite
@@ -106,7 +118,114 @@ export class Registry {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_memory_evidence
       ON agent_memory(channel_id, evidence_digest)
       WHERE channel_id IS NOT NULL AND evidence_digest IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_community_memory_ready
+      ON community_memory_events(state, next_attempt_at, channel_id, enqueued_at);
     `);
+  }
+
+  /** Queue raw signed evidence before any model call; replay is idempotent. */
+  queueCommunityMemoryEvent(event: NostrEvent, channelId: string, now = Date.now()): boolean {
+    const result = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO community_memory_events
+         (event_id, channel_id, event_json, state, attempts, next_attempt_at, enqueued_at, updated_at)
+         VALUES (?, ?, ?, 'queued', 0, ?, ?, ?)`,
+      )
+      .run(event.id, channelId, JSON.stringify(event), now, now, now);
+    return result.changes === 1;
+  }
+
+  communityMemoryReadyChannels(now: number, debounceMs: number): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT channel_id
+         FROM community_memory_events
+         WHERE state = 'queued' AND next_attempt_at <= ?
+         GROUP BY channel_id
+         HAVING MAX(enqueued_at) <= ?
+         ORDER BY MIN(enqueued_at), channel_id`,
+      )
+      .all(now, now - debounceMs) as { channel_id: string }[];
+    return rows.map((row) => row.channel_id);
+  }
+
+  communityMemoryBatch(
+    channelId: string,
+    maxEvents: number,
+    maxInputChars: number,
+    now = Date.now(),
+  ): NostrEvent[] {
+    const rows = this.db
+      .prepare(
+        `SELECT event_json
+         FROM community_memory_events
+         WHERE channel_id = ? AND state = 'queued' AND next_attempt_at <= ?
+         ORDER BY enqueued_at, event_id
+         LIMIT ?`,
+      )
+      .all(channelId, now, maxEvents) as { event_json: string }[];
+    const events: NostrEvent[] = [];
+    let chars = 0;
+    for (const row of rows) {
+      const event = JSON.parse(row.event_json) as NostrEvent;
+      const added = event.content.length;
+      if (events.length > 0 && chars + added > maxInputChars) break;
+      if (added > maxInputChars) continue;
+      events.push(event);
+      chars += added;
+    }
+    return events;
+  }
+
+  /** Agent-authored proposals win over the fallback community worker. */
+  coverCommunityMemoryEvents(eventIds: readonly string[], proposalEventId: string): void {
+    this.resolveCommunityMemoryEvents(eventIds, 'covered', proposalEventId);
+  }
+
+  resolveCommunityMemoryEvents(
+    eventIds: readonly string[],
+    state: 'covered' | 'stored' | 'no_memory',
+    proposalEventId?: string,
+  ): void {
+    if (eventIds.length === 0) return;
+    const placeholders = eventIds.map(() => '?').join(',');
+    this.db
+      .prepare(
+        `UPDATE community_memory_events
+         SET state = ?, proposal_event_id = ?, error = NULL, updated_at = ?
+         WHERE event_id IN (${placeholders}) AND state = 'queued'`,
+      )
+      .run(state, proposalEventId ?? null, Date.now(), ...eventIds);
+  }
+
+  retryCommunityMemoryEvents(
+    eventIds: readonly string[],
+    error: string,
+    nextAttemptAt: number,
+  ): void {
+    if (eventIds.length === 0) return;
+    const placeholders = eventIds.map(() => '?').join(',');
+    this.db
+      .prepare(
+        `UPDATE community_memory_events
+         SET attempts = attempts + 1, next_attempt_at = ?, error = ?, updated_at = ?
+         WHERE event_id IN (${placeholders}) AND state = 'queued'`,
+      )
+      .run(nextAttemptAt, error.slice(0, 1_000), Date.now(), ...eventIds);
+  }
+
+  communityMemoryAttempt(eventId: string): number {
+    const row = this.db
+      .prepare('SELECT attempts FROM community_memory_events WHERE event_id = ?')
+      .get(eventId) as { attempts: number } | undefined;
+    return row?.attempts ?? 0;
+  }
+
+  communityMemoryState(eventId: string): string | null {
+    const row = this.db
+      .prepare('SELECT state FROM community_memory_events WHERE event_id = ?')
+      .get(eventId) as { state: string } | undefined;
+    return row?.state ?? null;
   }
 
   loadBindings(bindings: ChannelBinding[]): void {

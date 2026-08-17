@@ -511,7 +511,10 @@ function tagValues(event: NostrEvent, name: string): string[] {
   return event.tags.filter((tag) => tag[0] === name && tag[1]).map((tag) => tag[1]!);
 }
 
-export function parseAgentMemoryEnvelope(raw: unknown): {
+export function parseAgentMemoryEnvelope(
+  raw: unknown,
+  options: { communityWorkerPubkey?: string } = {},
+): {
   envelope: AgentMemoryEnvelope;
   proposal: AgentMemoryProposal;
 } {
@@ -564,7 +567,8 @@ export function parseAgentMemoryEnvelope(raw: unknown): {
       invalid(`sourceEvents[${index}] does not belong to the requested channel`);
     }
   }
-  if (!sourceEvents.some((event) => event.pubkey === requesterPubkey)) {
+  const isCommunityWorker = options.communityWorkerPubkey?.toLowerCase() === requesterPubkey;
+  if (!isCommunityWorker && !sourceEvents.some((event) => event.pubkey === requesterPubkey)) {
     invalid('at least one source event must be authored by the proposing agent');
   }
   // The signed proposal tag order is authoritative. Relay/database row order

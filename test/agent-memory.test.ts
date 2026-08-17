@@ -318,6 +318,14 @@ describe('agent memory proposal contract', () => {
       content: noRequesterSource.proposalEvent.content,
     });
     expect(() => parseAgentMemoryEnvelope(noRequesterSource)).toThrow(/authored by the proposing/);
+    expect(() =>
+      parseAgentMemoryEnvelope(noRequesterSource, { communityWorkerPubkey: PUBKEY }),
+    ).not.toThrow();
+    expect(() =>
+      parseAgentMemoryEnvelope(noRequesterSource, {
+        communityWorkerPubkey: getPublicKey(OTHER_SECRET),
+      }),
+    ).toThrow(/authored by the proposing/);
   });
 
   it('compiles v2 profile entities into the direct edges required by real SPARQL questions', () => {
