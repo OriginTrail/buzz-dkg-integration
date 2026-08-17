@@ -511,7 +511,7 @@ function tagValues(event: NostrEvent, name: string): string[] {
   return event.tags.filter((tag) => tag[0] === name && tag[1]).map((tag) => tag[1]!);
 }
 
-export function parseAgentMemoryEnvelope(raw: unknown): {
+function parseMemoryEnvelope(raw: unknown): {
   envelope: AgentMemoryEnvelope;
   proposal: AgentMemoryProposal;
 } {
@@ -564,9 +564,6 @@ export function parseAgentMemoryEnvelope(raw: unknown): {
       invalid(`sourceEvents[${index}] does not belong to the requested channel`);
     }
   }
-  if (!sourceEvents.some((event) => event.pubkey === requesterPubkey)) {
-    invalid('at least one source event must be authored by the proposing agent');
-  }
   // The signed proposal tag order is authoritative. Relay/database row order
   // is a transport detail and must not turn a legitimate retry into a conflict.
   const sourcesById = new Map(sourceEvents.map((event) => [event.id, event]));
@@ -575,6 +572,32 @@ export function parseAgentMemoryEnvelope(raw: unknown): {
     envelope: { channelId, requesterPubkey, proposalEvent, sourceEvents: orderedSourceEvents },
     proposal: parseAgentMemoryProposal(proposalEvent.content),
   };
+}
+
+/** Parse the public agent-submission contract. An agent may only propose memory
+ * from an evidence set that contains at least one event it authored. */
+export function parseAgentMemoryEnvelope(raw: unknown): ReturnType<typeof parseMemoryEnvelope> {
+  const parsed = parseMemoryEnvelope(raw);
+  if (
+    !parsed.envelope.sourceEvents.some((event) => event.pubkey === parsed.envelope.requesterPubkey)
+  ) {
+    invalid('at least one source event must be authored by the proposing agent');
+  }
+  return parsed;
+}
+
+/** Parse the relay-owned community worker contract. This policy is deliberately
+ * separate from the public agent parser so callers cannot opt themselves into
+ * the service-identity exception. */
+export function parseCommunityMemoryEnvelope(
+  raw: unknown,
+  communityWorkerPubkey: string,
+): ReturnType<typeof parseMemoryEnvelope> {
+  const parsed = parseMemoryEnvelope(raw);
+  if (parsed.envelope.requesterPubkey !== communityWorkerPubkey.toLowerCase()) {
+    invalid('community memory proposal must be authored by the configured worker');
+  }
+  return parsed;
 }
 
 const literal = (value: unknown): string => JSON.stringify(String(value));

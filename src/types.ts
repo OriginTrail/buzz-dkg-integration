@@ -215,6 +215,27 @@ export type QueryGatewayConfig =
 /** Normalized, non-empty labels Buzz may render for a service mention. */
 export type MentionLabels = readonly [string, ...string[]];
 
+/**
+ * Optional relay-side extractor for conversations that do not invoke a Buzz
+ * agent. It is deliberately opt-in and channel-scoped: enabling the worker
+ * sends selected chat content to the configured model endpoint.
+ */
+export type CommunityMemoryConfig =
+  | { enabled: false }
+  | {
+      enabled: true;
+      endpoint: string;
+      apiKey: string;
+      model: string;
+      /** Explicit UUID allow-list, or `'*'` for every bound channel. */
+      channels: '*' | string[];
+      debounceMs: number;
+      maxEvents: number;
+      maxInputChars: number;
+      requestTimeoutMs: number;
+      retryBaseMs: number;
+    };
+
 export interface DaemonConfig {
   relayHttpUrl: string;
   relayWsUrl: string;
@@ -243,4 +264,6 @@ export interface DaemonConfig {
   contextGraphAccessPolicy?: number;
   /** Optional loopback-only read API for a trusted Buzz authorization front. */
   queryGateway?: QueryGatewayConfig;
+  /** Optional, default-off automatic extraction for human-only conversations. */
+  communityMemory?: CommunityMemoryConfig;
 }

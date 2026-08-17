@@ -168,6 +168,18 @@ signed semantic memory proposal after each normal channel turn; the relay
 authorizes and binds it to the exact source events before the sidecar writes it
 to that channel's Shared Working Memory.
 
+The sidecar can also capture **human-only conversations** after a quiet-period
+debounce. This is default-off because it sends the selected channel messages to
+an operator-configured OpenAI-compatible model. Set
+`BDI_COMMUNITY_MEMORY_ENABLED=true`, provide the endpoint/key/model, and set
+`BDI_COMMUNITY_MEMORY_CHANNELS` to an explicit comma-separated channel UUID
+allow-list (or deliberately use `*`). Signed source events enter the SQLite
+queue before extraction, survive restarts, and retry with bounded exponential
+backoff. The model may return `no_memory` for transient chat. If a Buzz agent
+has already proposed memory for the same evidence, its proposal takes priority
+and the fallback worker does not duplicate it. Community-generated proposals
+remain private SWM writes; they do not grant VM publication authority.
+
 For automation or a relay that cannot be inferred from its container metadata:
 
 ```bash

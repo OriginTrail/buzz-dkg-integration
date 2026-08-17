@@ -6,11 +6,14 @@ import {
 } from '../scripts/bootstrap/core.mjs';
 import type {
   ChannelBinding,
+  CommunityMemoryConfig,
   DaemonConfig,
   MentionLabels,
   PublishMode,
   QueryGatewayConfig,
 } from './types.ts';
+
+const CHANNEL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 function required(name: string, env: NodeJS.ProcessEnv = process.env): string {
   const v = env[name];
@@ -171,6 +174,81 @@ export function loadQueryGatewayConfig(env: NodeJS.ProcessEnv): QueryGatewayConf
   };
 }
 
+export function loadCommunityMemoryConfig(env: NodeJS.ProcessEnv): CommunityMemoryConfig {
+  if (!envBoolean('BDI_COMMUNITY_MEMORY_ENABLED', env.BDI_COMMUNITY_MEMORY_ENABLED, false)) {
+    return { enabled: false };
+  }
+  const endpoint = required('BDI_COMMUNITY_MEMORY_ENDPOINT', env);
+  let parsedEndpoint: URL;
+  try {
+    parsedEndpoint = new URL(endpoint);
+  } catch {
+    throw new Error('BDI_COMMUNITY_MEMORY_ENDPOINT must be an absolute URL');
+  }
+  if (!['http:', 'https:'].includes(parsedEndpoint.protocol)) {
+    throw new Error('BDI_COMMUNITY_MEMORY_ENDPOINT must use HTTP or HTTPS');
+  }
+  const rawChannels = required('BDI_COMMUNITY_MEMORY_CHANNELS', env).trim();
+  let channels: '*' | string[];
+  if (rawChannels === '*') {
+    channels = '*';
+  } else {
+    channels = [
+      ...new Set(
+        rawChannels
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (channels.length === 0 || channels.some((channel) => !CHANNEL_ID.test(channel))) {
+      throw new Error('BDI_COMMUNITY_MEMORY_CHANNELS must be * or comma-separated channel UUIDs');
+    }
+  }
+  return {
+    enabled: true,
+    endpoint: parsedEndpoint.toString(),
+    apiKey: required('BDI_COMMUNITY_MEMORY_API_KEY', env),
+    model: required('BDI_COMMUNITY_MEMORY_MODEL', env),
+    channels,
+    debounceMs: envInteger(
+      'BDI_COMMUNITY_MEMORY_DEBOUNCE_MS',
+      env.BDI_COMMUNITY_MEMORY_DEBOUNCE_MS,
+      30_000,
+      1_000,
+      15 * 60_000,
+    ),
+    maxEvents: envInteger(
+      'BDI_COMMUNITY_MEMORY_MAX_EVENTS',
+      env.BDI_COMMUNITY_MEMORY_MAX_EVENTS,
+      12,
+      1,
+      16,
+    ),
+    maxInputChars: envInteger(
+      'BDI_COMMUNITY_MEMORY_MAX_INPUT_CHARS',
+      env.BDI_COMMUNITY_MEMORY_MAX_INPUT_CHARS,
+      32_768,
+      1_024,
+      131_072,
+    ),
+    requestTimeoutMs: envInteger(
+      'BDI_COMMUNITY_MEMORY_TIMEOUT_MS',
+      env.BDI_COMMUNITY_MEMORY_TIMEOUT_MS,
+      60_000,
+      1_000,
+      180_000,
+    ),
+    retryBaseMs: envInteger(
+      'BDI_COMMUNITY_MEMORY_RETRY_BASE_MS',
+      env.BDI_COMMUNITY_MEMORY_RETRY_BASE_MS,
+      30_000,
+      1_000,
+      15 * 60_000,
+    ),
+  };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
   const publishMode = (env.BDI_PUBLISH_MODE ?? 'disabled') as PublishMode;
   if (!['disabled', 'devnet', 'mainnet'].includes(publishMode)) {
@@ -218,5 +296,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
       2,
     ),
     queryGateway: loadQueryGatewayConfig(env),
+    communityMemory: loadCommunityMemoryConfig(env),
   };
 }

@@ -1,6 +1,6 @@
 import { RelayClient } from './relay/client.ts';
 import { DkgClient } from './dkg/client.ts';
-import { Registry } from './registry/store.ts';
+import { Registry, type AgentMemoryOrigin } from './registry/store.ts';
 import { classify, type Trigger } from './triggers/detect.ts';
 import {
   deterministicDistiller,
@@ -33,7 +33,13 @@ import {
   compileAgentMemory,
   contextGraphIdForChannel,
   parseAgentMemoryEnvelope,
+  parseCommunityMemoryEnvelope,
 } from './memory/proposal.ts';
+import {
+  OpenAiCommunityMemoryExtractor,
+  type CommunityMemoryExtractor,
+} from './memory/community-worker.ts';
+import { CommunityMemoryService } from './memory/community-service.ts';
 
 const CATCHUP_OVERLAP_S = 60;
 const CURSOR_SKEW_S = 300;
@@ -93,10 +99,16 @@ export class Daemon {
   readonly #graphProvisioning = new Map<string, Promise<string>>();
   readonly #scheduledAgentMemory = new Set<string>();
   readonly #agentMemoryStoredListeners = new Set<(channelId: string) => void>();
+  readonly #communityMemory: CommunityMemoryService | null;
 
   constructor(
     config: DaemonConfig,
-    deps?: { relay?: RelayClient; dkg?: DkgClient; distiller?: Distiller },
+    deps?: {
+      relay?: RelayClient;
+      dkg?: DkgClient;
+      distiller?: Distiller;
+      communityMemoryExtractor?: CommunityMemoryExtractor;
+    },
   ) {
     this.config = config;
     this.registry = new Registry(config.dbPath);
@@ -113,6 +125,20 @@ export class Daemon {
       });
     this.dkg = deps?.dkg ?? new DkgClient({ baseUrl: config.dkgApiUrl, token: config.dkgToken });
     this.distiller = deps?.distiller ?? deterministicDistiller;
+    if (config.communityMemory?.enabled) {
+      const extractor =
+        deps?.communityMemoryExtractor ??
+        new OpenAiCommunityMemoryExtractor(config.communityMemory);
+      this.#communityMemory = new CommunityMemoryService({
+        config: config.communityMemory,
+        registry: this.registry,
+        relay: this.relay,
+        extractor,
+        submit: (raw, sourceEventIds) => this.submitCommunityMemory(raw, sourceEventIds),
+      });
+    } else {
+      this.#communityMemory = null;
+    }
   }
 
   /** Serialize event handling — ordering and dedup stay deterministic. */
@@ -144,7 +170,18 @@ export class Daemon {
     // Validation, deterministic binding, envelope persistence and op claim are
     // all local and synchronous. A caller can never receive a timeout while an
     // uncancellable acceptance continues mutating durable state.
-    const accepted = this.acceptAgentMemory(raw);
+    const accepted = this.acceptAgentMemory(raw, 'agent');
+    if (!['receipted', 'failed'].includes(accepted.op.state)) {
+      this.scheduleAgentMemory(accepted.op.triggerEventId);
+    }
+    return accepted.result;
+  }
+
+  private submitCommunityMemory(
+    raw: unknown,
+    sourceEventIds: readonly string[],
+  ): AgentMemoryIngestResult {
+    const accepted = this.acceptAgentMemory(raw, 'community', sourceEventIds);
     if (!['receipted', 'failed'].includes(accepted.op.state)) {
       this.scheduleAgentMemory(accepted.op.triggerEventId);
     }
@@ -273,6 +310,11 @@ export class Daemon {
     }
     this.subscribe();
     this.relay.connect();
+    this.#communityMemory?.start(() => {
+      this.#queue = this.#queue
+        .then(() => this.flushCommunityMemory())
+        .catch((err) => logger.error('community memory worker failed', { err: String(err) }));
+    });
     logger.info('daemon started', {
       servicePubkey: this.relay.pubkey,
       channels: this.config.bindings.length,
@@ -280,15 +322,26 @@ export class Daemon {
   }
 
   subscribe(): void {
-    const channels = this.config.bindings.map((b) => b.channelId);
     const since = Math.max(0, this.registry.cursor - CATCHUP_OVERLAP_S);
-    this.relay.subscribe('bdi-msgs', [{ kinds: [9, 40002, 40004], '#h': channels, since }]);
+    const commandFilters = this.commandMessageFilters(since);
+    if (commandFilters.length > 0) this.relay.subscribe('bdi-msgs', commandFilters);
+    if (this.#communityMemory) {
+      this.relay.subscribe('bdi-community-memory', this.#communityMemory.messageFilters(since));
+    }
+    const channels = this.config.bindings.map((b) => b.channelId);
     // Reactions carry no h tag as signed, but the relay derives their channel
     // from the target and its #h filter matching falls back to that stored
     // channel (buzz-core filter.rs) — AND live fan-out only consults
     // channel-scoped subscription indexes, so a kinds-only sub never sees
     // reactions (observed live in the Gate C acceptance run). #h is required.
-    this.relay.subscribe('bdi-reactions', [{ kinds: [7], '#h': channels, since }]);
+    if (channels.length > 0) {
+      this.relay.subscribe('bdi-reactions', [{ kinds: [7], '#h': channels, since }]);
+    }
+  }
+
+  private commandMessageFilters(since: number): Record<string, unknown>[] {
+    const channels = this.config.bindings.map((binding) => binding.channelId);
+    return channels.length > 0 ? [{ kinds: [9, 40002, 40004], '#h': channels, since }] : [];
   }
 
   /**
@@ -319,10 +372,10 @@ export class Daemon {
   async catchUp(): Promise<void> {
     const since = Math.max(0, this.registry.cursor - CATCHUP_OVERLAP_S);
     const channels = this.config.bindings.map((b) => b.channelId);
-    const stored = await this.relay.query([
-      { kinds: [9, 40002, 40004], '#h': channels, since },
-      { kinds: [7], '#h': channels, since },
-    ]);
+    const filters: Record<string, unknown>[] = [...this.commandMessageFilters(since)];
+    if (this.#communityMemory) filters.push(...this.#communityMemory.messageFilters(since));
+    if (channels.length > 0) filters.push({ kinds: [7], '#h': channels, since });
+    const stored = filters.length > 0 ? await this.relay.query(filters) : [];
     stored.sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
     logger.info('catch-up', { since, events: stored.length });
     for (const e of stored) this.enqueue(e);
@@ -369,7 +422,12 @@ export class Daemon {
     // in the future and silently matches nothing. Clamp to a small skew window.
     const nowS = Math.floor(Date.now() / 1000);
     this.registry.advanceCursor(Math.min(event.created_at, nowS + CURSOR_SKEW_S));
-    if (!trigger) return;
+    const commandScoped =
+      !!trigger &&
+      (trigger.type === 'approval' ||
+        this.config.bindings.some((binding) => binding.channelId === trigger.channelId));
+    if (!trigger || !commandScoped) this.#communityMemory?.queue(event);
+    if (!trigger || !commandScoped) return;
     switch (trigger.type) {
       case 'pin':
       case 'distill':
@@ -379,6 +437,11 @@ export class Daemon {
       case 'ask':
         return this.executeAsk(trigger.event, trigger.channelId, trigger.question, false);
     }
+  }
+
+  /** Process debounced human-only chat batches; exposed for deterministic tests. */
+  async flushCommunityMemory(now = Date.now()): Promise<void> {
+    await this.#communityMemory?.flush(now);
   }
 
   // ── capture: trigger → snapshot → distill → WM → SWM → receipt ─────────────
@@ -426,11 +489,18 @@ export class Daemon {
     await this.executeOp(op, events);
   }
 
-  private acceptAgentMemory(raw: unknown): {
+  private acceptAgentMemory(
+    raw: unknown,
+    origin: AgentMemoryOrigin,
+    communityEventIds: readonly string[] = [],
+  ): {
     result: AgentMemoryIngestResult;
     op: OpRecord;
   } {
-    const parsed = parseAgentMemoryEnvelope(raw);
+    const parsed =
+      origin === 'agent'
+        ? parseAgentMemoryEnvelope(raw)
+        : parseCommunityMemoryEnvelope(raw, this.relay.pubkey);
     const { envelope, proposal } = parsed;
     // Compile before reserving durable channel state. Canonical identifier
     // collisions and every other semantic rejection must leave an unknown
@@ -449,72 +519,96 @@ export class Daemon {
       );
     }
     const evidenceDigest = sourceSetDigest(envelope.sourceEvents);
-    const reservation = this.registry.reserveAgentMemoryEnvelope(
-      envelope.proposalEvent.id,
-      envelope.channelId,
-      evidenceDigest,
-      envelope,
-    );
-    const acceptedProposalEventId = reservation.proposalEventId;
-    const accepted =
-      acceptedProposalEventId === envelope.proposalEvent.id
-        ? { envelope, compiled }
-        : (() => {
-            const stored = this.registry.agentMemoryEnvelope(acceptedProposalEventId);
-            if (!stored)
-              throw new Error(`agent memory envelope ${acceptedProposalEventId} is missing`);
-            const original = parseAgentMemoryEnvelope(stored);
-            return {
-              envelope: original.envelope,
-              compiled: compileAgentMemory(original.envelope, original.proposal),
-            };
-          })();
-    this.registry.bindChannel(envelope.channelId, contextGraphId);
-    let op = this.registry.opByTrigger(acceptedProposalEventId);
-    const duplicate = reservation.duplicate || !!op;
-    if (!op) {
-      op = this.registry.claimTrigger({
-        triggerEventId: acceptedProposalEventId,
-        triggerKind: DKG_MEMORY_PROPOSAL_KIND,
-        channelId: envelope.channelId,
-        contextGraphId,
-        rootEventId: accepted.envelope.sourceEvents[0]!.id,
-        digest: accepted.compiled.digest,
-        kaName: kaNameForDigest(accepted.compiled.digest),
-        rootUri: accepted.compiled.rootUri,
-        title: accepted.compiled.title,
-      });
-      if (!op) op = this.registry.opByTrigger(acceptedProposalEventId);
-    }
-    if (!op) throw new Error('could not claim agent memory proposal');
-    if (
-      op.channelId !== envelope.channelId ||
-      op.contextGraphId !== contextGraphId ||
-      op.digest !== accepted.compiled.digest
-    ) {
-      throw new IntegrationApiError(
-        409,
-        'proposal_conflict',
-        'proposal event was already recorded with different content',
-      );
-    }
-    if (op.state === 'failed') {
-      throw new IntegrationApiError(
-        409,
-        'proposal_failed',
-        op.error ?? 'proposal ingestion failed',
-      );
-    }
-    return {
-      op,
-      result: toAgentMemoryIngestResult(
-        op,
+    return this.registry.transaction(() => {
+      const reservation = this.registry.reserveAgentMemoryEnvelope(
+        envelope.proposalEvent.id,
+        envelope.channelId,
+        evidenceDigest,
         envelope,
-        contextGraphId,
-        duplicate,
-        acceptedProposalEventId,
-      ),
-    };
+        origin,
+      );
+      const acceptedProposalEventId = reservation.proposalEventId;
+      const accepted =
+        acceptedProposalEventId === envelope.proposalEvent.id
+          ? { envelope, compiled }
+          : (() => {
+              const stored = this.registry.agentMemoryRecord(acceptedProposalEventId);
+              if (!stored)
+                throw new Error(`agent memory envelope ${acceptedProposalEventId} is missing`);
+              const original =
+                stored.origin === 'agent'
+                  ? parseAgentMemoryEnvelope(stored.envelope)
+                  : parseCommunityMemoryEnvelope(stored.envelope, this.relay.pubkey);
+              return {
+                envelope: original.envelope,
+                compiled: compileAgentMemory(original.envelope, original.proposal),
+              };
+            })();
+      this.registry.bindChannel(envelope.channelId, contextGraphId);
+      let op = this.registry.opByTrigger(acceptedProposalEventId);
+      const duplicate = reservation.duplicate || !!op;
+      if (!op) {
+        op = this.registry.claimTrigger({
+          triggerEventId: acceptedProposalEventId,
+          triggerKind: DKG_MEMORY_PROPOSAL_KIND,
+          channelId: envelope.channelId,
+          contextGraphId,
+          rootEventId: accepted.envelope.sourceEvents[0]!.id,
+          digest: accepted.compiled.digest,
+          kaName: kaNameForDigest(accepted.compiled.digest),
+          rootUri: accepted.compiled.rootUri,
+          title: accepted.compiled.title,
+        });
+        if (!op) op = this.registry.opByTrigger(acceptedProposalEventId);
+      }
+      if (!op) throw new Error('could not claim agent memory proposal');
+      if (
+        op.channelId !== envelope.channelId ||
+        op.contextGraphId !== contextGraphId ||
+        op.digest !== accepted.compiled.digest
+      ) {
+        throw new IntegrationApiError(
+          409,
+          'proposal_conflict',
+          'proposal event was already recorded with different content',
+        );
+      }
+      if (op.state === 'failed') {
+        throw new IntegrationApiError(
+          409,
+          'proposal_failed',
+          op.error ?? 'proposal ingestion failed',
+        );
+      }
+      if (origin === 'community') {
+        this.registry.acceptCommunityMemoryEvents(
+          communityEventIds,
+          envelope.channelId,
+          acceptedProposalEventId,
+        );
+        // An agent may already have stored the same evidence before the raw
+        // relay event reached this queue. Reusing that terminal proposal must
+        // not leave the later queue row stranded in the intermediate state.
+        if (op.state === 'receipted') {
+          this.registry.markCommunityMemoryStored(acceptedProposalEventId);
+        }
+      } else {
+        this.registry.coverCommunityMemoryEvents(
+          envelope.sourceEvents.map((event) => event.id),
+          acceptedProposalEventId,
+        );
+      }
+      return {
+        op,
+        result: toAgentMemoryIngestResult(
+          op,
+          accepted.envelope,
+          contextGraphId,
+          duplicate,
+          acceptedProposalEventId,
+        ),
+      };
+    });
   }
 
   /** Automatic agent memory follows WM→SWM but stays silent and never enters VM. */
@@ -525,9 +619,11 @@ export class Daemon {
     const stored =
       parsed ??
       (() => {
-        const envelope = this.registry.agentMemoryEnvelope(op.triggerEventId);
-        if (!envelope) throw new Error(`agent memory envelope ${op.triggerEventId} is missing`);
-        return parseAgentMemoryEnvelope(envelope);
+        const stored = this.registry.agentMemoryRecord(op.triggerEventId);
+        if (!stored) throw new Error(`agent memory envelope ${op.triggerEventId} is missing`);
+        return stored.origin === 'agent'
+          ? parseAgentMemoryEnvelope(stored.envelope)
+          : parseCommunityMemoryEnvelope(stored.envelope, this.relay.pubkey);
       })();
     const compiled = compileAgentMemory(stored.envelope, stored.proposal);
     if (compiled.digest !== op.digest || compiled.rootUri !== op.rootUri) {
@@ -574,6 +670,7 @@ export class Daemon {
         );
         if (!confirmed) throw new Error('SWM read-back did not confirm the agent memory digest');
         this.registry.transition(op.id, 'receipted', { receipt_event_id: null });
+        this.registry.markCommunityMemoryStored(op.triggerEventId);
         for (const listener of this.#agentMemoryStoredListeners) listener(op.channelId);
         logger.info('agent memory stored', {
           opId: op.id,
@@ -1035,6 +1132,7 @@ export class Daemon {
   }
 
   async stop(): Promise<void> {
+    this.#communityMemory?.stop();
     this.relay.close();
     await this.drain();
     this.registry.close();

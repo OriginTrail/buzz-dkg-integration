@@ -8,7 +8,9 @@ import type { DatabaseSync as DatabaseSyncT } from 'node:sqlite';
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
   DatabaseSync: typeof DatabaseSyncT;
 };
-import type { ChannelBinding, OpRecord, OpState } from '../types.ts';
+import type { ChannelBinding, NostrEvent, OpRecord, OpState } from '../types.ts';
+
+export type AgentMemoryOrigin = 'agent' | 'community';
 
 /**
  * Durable registry + operation state machine (SQLite).
@@ -82,8 +84,21 @@ export class Registry {
         proposal_event_id TEXT PRIMARY KEY,
         channel_id TEXT,
         evidence_digest TEXT,
+        origin TEXT NOT NULL DEFAULT 'agent' CHECK (origin IN ('agent', 'community')),
         envelope_json TEXT NOT NULL,
         created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS community_memory_events (
+        event_id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        event_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('queued', 'accepted', 'covered', 'stored', 'no_memory')),
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at INTEGER NOT NULL,
+        proposal_event_id TEXT,
+        error TEXT,
+        enqueued_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
       );
       INSERT OR IGNORE INTO cursor (id, last_created_at) VALUES (1, 0);
     `);
@@ -95,6 +110,7 @@ export class Registry {
       'ALTER TABLE asks ADD COLUMN author_pubkey TEXT',
       'ALTER TABLE agent_memory ADD COLUMN channel_id TEXT',
       'ALTER TABLE agent_memory ADD COLUMN evidence_digest TEXT',
+      "ALTER TABLE agent_memory ADD COLUMN origin TEXT NOT NULL DEFAULT 'agent'",
     ]) {
       try {
         this.db.exec(alter);
@@ -102,11 +118,199 @@ export class Registry {
         if (!String(e.message).includes('duplicate column')) throw e;
       }
     }
+    // SQLite cannot extend a CHECK constraint in place. Upgrade databases made
+    // by the first community-worker beta without discarding queued evidence.
+    const communitySchema = this.db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'community_memory_events'",
+      )
+      .get() as { sql: string } | undefined;
+    if (communitySchema && !communitySchema.sql.includes("'accepted'")) {
+      this.db.exec(`
+        BEGIN IMMEDIATE;
+        ALTER TABLE community_memory_events RENAME TO community_memory_events_legacy;
+        CREATE TABLE community_memory_events (
+          event_id TEXT PRIMARY KEY,
+          channel_id TEXT NOT NULL,
+          event_json TEXT NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('queued', 'accepted', 'covered', 'stored', 'no_memory')),
+          attempts INTEGER NOT NULL DEFAULT 0,
+          next_attempt_at INTEGER NOT NULL,
+          proposal_event_id TEXT,
+          error TEXT,
+          enqueued_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO community_memory_events
+        SELECT * FROM community_memory_events_legacy;
+        DROP TABLE community_memory_events_legacy;
+        COMMIT;
+      `);
+    }
     this.db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_memory_evidence
       ON agent_memory(channel_id, evidence_digest)
       WHERE channel_id IS NOT NULL AND evidence_digest IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_community_memory_ready
+      ON community_memory_events(state, next_attempt_at, channel_id, enqueued_at);
     `);
+  }
+
+  /** Queue raw signed evidence before any model call; replay is idempotent. */
+  queueCommunityMemoryEvent(event: NostrEvent, channelId: string, now = Date.now()): boolean {
+    const result = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO community_memory_events
+         (event_id, channel_id, event_json, state, attempts, next_attempt_at, enqueued_at, updated_at)
+         VALUES (?, ?, ?, 'queued', 0, ?, ?, ?)`,
+      )
+      .run(event.id, channelId, JSON.stringify(event), now, now, now);
+    return result.changes === 1;
+  }
+
+  communityMemoryReadyChannels(now: number, debounceMs: number): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT channel_id
+         FROM community_memory_events
+         WHERE state = 'queued' AND next_attempt_at <= ?
+         GROUP BY channel_id
+         HAVING MAX(enqueued_at) <= ?
+         ORDER BY MIN(enqueued_at), channel_id`,
+      )
+      .all(now, now - debounceMs) as { channel_id: string }[];
+    return rows.map((row) => row.channel_id);
+  }
+
+  communityMemoryBatch(
+    channelId: string,
+    maxEvents: number,
+    maxInputChars: number,
+    now = Date.now(),
+  ): NostrEvent[] {
+    const rows = this.db
+      .prepare(
+        `SELECT event_json
+         FROM community_memory_events
+         WHERE channel_id = ? AND state = 'queued' AND next_attempt_at <= ?
+         ORDER BY enqueued_at, event_id
+         LIMIT ?`,
+      )
+      .all(channelId, now, maxEvents) as { event_json: string }[];
+    const events: NostrEvent[] = [];
+    let chars = 0;
+    for (const row of rows) {
+      const event = JSON.parse(row.event_json) as NostrEvent;
+      const added = event.content.length;
+      if (events.length > 0 && chars + added > maxInputChars) break;
+      if (added > maxInputChars) continue;
+      events.push(event);
+      chars += added;
+    }
+    return events;
+  }
+
+  /** Agent-authored proposals win over the fallback community worker. */
+  coverCommunityMemoryEvents(eventIds: readonly string[], proposalEventId: string): void {
+    this.resolveCommunityMemoryEvents(eventIds, 'covered', proposalEventId);
+  }
+
+  resolveCommunityMemoryEvents(
+    eventIds: readonly string[],
+    state: 'covered' | 'stored' | 'no_memory',
+    proposalEventId?: string,
+  ): void {
+    if (eventIds.length === 0) return;
+    const placeholders = eventIds.map(() => '?').join(',');
+    this.db
+      .prepare(
+        `UPDATE community_memory_events
+         SET state = ?, proposal_event_id = ?, error = NULL, updated_at = ?
+         WHERE event_id IN (${placeholders}) AND state = 'queued'`,
+      )
+      .run(state, proposalEventId ?? null, Date.now(), ...eventIds);
+  }
+
+  retryCommunityMemoryEvents(
+    eventIds: readonly string[],
+    error: string,
+    nextAttemptAt: number,
+  ): void {
+    if (eventIds.length === 0) return;
+    const placeholders = eventIds.map(() => '?').join(',');
+    this.db
+      .prepare(
+        `UPDATE community_memory_events
+         SET attempts = attempts + 1, next_attempt_at = ?, error = ?, updated_at = ?
+         WHERE event_id IN (${placeholders}) AND state = 'queued'`,
+      )
+      .run(nextAttemptAt, error.slice(0, 1_000), Date.now(), ...eventIds);
+  }
+
+  communityMemoryAttempt(eventId: string): number {
+    const row = this.db
+      .prepare('SELECT attempts FROM community_memory_events WHERE event_id = ?')
+      .get(eventId) as { attempts: number } | undefined;
+    return row?.attempts ?? 0;
+  }
+
+  communityMemoryState(eventId: string): string | null {
+    const row = this.db
+      .prepare('SELECT state FROM community_memory_events WHERE event_id = ?')
+      .get(eventId) as { state: string } | undefined;
+    return row?.state ?? null;
+  }
+
+  /** Run a synchronous registry mutation as one crash-safe SQLite commit. */
+  transaction<T>(mutate: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = mutate();
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  /** Move an exact queued evidence batch behind its durable proposal. Call this
+   * in the same transaction that reserves the proposal and claims its op. */
+  acceptCommunityMemoryEvents(
+    eventIds: readonly string[],
+    channelId: string,
+    proposalEventId: string,
+  ): void {
+    if (eventIds.length === 0) throw new Error('community memory requires queued evidence');
+    const uniqueIds = [...new Set(eventIds)];
+    if (uniqueIds.length !== eventIds.length)
+      throw new Error('community memory evidence is duplicated');
+    const placeholders = uniqueIds.map(() => '?').join(',');
+    const eligible = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM community_memory_events
+         WHERE event_id IN (${placeholders}) AND channel_id = ? AND state = 'queued'`,
+      )
+      .get(...uniqueIds, channelId) as { count: number };
+    if (eligible.count !== uniqueIds.length) {
+      throw new Error('community memory evidence is no longer queued in this channel');
+    }
+    this.db
+      .prepare(
+        `UPDATE community_memory_events
+         SET state = 'accepted', proposal_event_id = ?, error = NULL, updated_at = ?
+         WHERE event_id IN (${placeholders}) AND channel_id = ? AND state = 'queued'`,
+      )
+      .run(proposalEventId, Date.now(), ...uniqueIds, channelId);
+  }
+
+  markCommunityMemoryStored(proposalEventId: string): void {
+    this.db
+      .prepare(
+        `UPDATE community_memory_events SET state = 'stored', error = NULL, updated_at = ?
+         WHERE proposal_event_id = ? AND state = 'accepted'`,
+      )
+      .run(Date.now(), proposalEventId);
   }
 
   loadBindings(bindings: ChannelBinding[]): void {
@@ -182,14 +386,20 @@ export class Registry {
     channelId: string,
     evidenceDigest: string,
     envelope: unknown,
+    origin: AgentMemoryOrigin = 'agent',
   ): { proposalEventId: string; duplicate: boolean } {
     const json = JSON.stringify(envelope);
     const existing = this.db
       .prepare(
-        'SELECT envelope_json, channel_id, evidence_digest FROM agent_memory WHERE proposal_event_id = ?',
+        'SELECT envelope_json, channel_id, evidence_digest, origin FROM agent_memory WHERE proposal_event_id = ?',
       )
       .get(proposalEventId) as
-      | { envelope_json: string; channel_id: string | null; evidence_digest: string | null }
+      | {
+          envelope_json: string;
+          channel_id: string | null;
+          evidence_digest: string | null;
+          origin: AgentMemoryOrigin;
+        }
       | undefined;
     if (existing && existing.envelope_json !== json) {
       throw new Error(`proposal event '${proposalEventId}' was replayed with different evidence`);
@@ -197,7 +407,8 @@ export class Registry {
     if (existing) {
       if (
         (existing.channel_id !== null && existing.channel_id !== channelId) ||
-        (existing.evidence_digest !== null && existing.evidence_digest !== evidenceDigest)
+        (existing.evidence_digest !== null && existing.evidence_digest !== evidenceDigest) ||
+        existing.origin !== origin
       ) {
         throw new Error(`proposal event '${proposalEventId}' was replayed with different evidence`);
       }
@@ -214,10 +425,10 @@ export class Registry {
     this.db
       .prepare(
         'INSERT OR IGNORE INTO agent_memory ' +
-          '(proposal_event_id, channel_id, evidence_digest, envelope_json, created_at) ' +
-          'VALUES (?, ?, ?, ?, ?)',
+          '(proposal_event_id, channel_id, evidence_digest, origin, envelope_json, created_at) ' +
+          'VALUES (?, ?, ?, ?, ?, ?)',
       )
-      .run(proposalEventId, channelId, evidenceDigest, json, Date.now());
+      .run(proposalEventId, channelId, evidenceDigest, origin, json, Date.now());
     const owner = this.db
       .prepare(
         'SELECT proposal_event_id FROM agent_memory WHERE channel_id = ? AND evidence_digest = ?',
@@ -231,10 +442,16 @@ export class Registry {
   }
 
   agentMemoryEnvelope(proposalEventId: string): unknown | null {
+    return this.agentMemoryRecord(proposalEventId)?.envelope ?? null;
+  }
+
+  agentMemoryRecord(
+    proposalEventId: string,
+  ): { envelope: unknown; origin: AgentMemoryOrigin } | null {
     const row = this.db
-      .prepare('SELECT envelope_json FROM agent_memory WHERE proposal_event_id = ?')
-      .get(proposalEventId) as { envelope_json: string } | undefined;
-    return row ? (JSON.parse(row.envelope_json) as unknown) : null;
+      .prepare('SELECT envelope_json, origin FROM agent_memory WHERE proposal_event_id = ?')
+      .get(proposalEventId) as { envelope_json: string; origin: AgentMemoryOrigin } | undefined;
+    return row ? { envelope: JSON.parse(row.envelope_json) as unknown, origin: row.origin } : null;
   }
 
   promotersFor(channelId: string): string[] {
